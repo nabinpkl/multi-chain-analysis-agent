@@ -1,4 +1,28 @@
 services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: multichain-clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - ./data/clickhouse:/var/lib/clickhouse
+    environment:
+      - CLICKHOUSE_DB=multichain
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   api:
     container_name: multichain-api
     build:
@@ -8,23 +32,14 @@ services:
       - "${PORT:-8002}:${PORT:-8002}"
     env_file:
       - ./.env
-    volumes:
-      - ./backend/data:/app/data
-    restart: unless-stopped
-
-  web:
-    container_name: justgetdomain-web
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-      args:
-        API_URL: http://api:${PORT:-8002}
-    ports:
-      - "3000:3000"
     environment:
-      - API_URL=http://api:${PORT:-8001}
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - CLICKHOUSE_DB=multichain
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
     depends_on:
-      - api
+      clickhouse:
+        condition: service_healthy
     restart: unless-stopped
 
   tunnel:

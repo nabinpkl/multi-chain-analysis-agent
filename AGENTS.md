@@ -189,3 +189,9 @@ You said graph viz. Browsers fall over at ~10k nodes with naive SVG/D3.
 Each of those is a real tool, but adding them now is anti-portfolio: it signals you've over-engineered a small project rather than executed cleanly on a focused one.
 
 **The mental frame:** every architectural choice should answer "what breaks first when this grows or restarts." If the answer is "data integrity, ingestion lag, or silent failure," fix it now. If the answer is "we'd need more capacity," defer it.
+
+# Known Limitations
+
+## SOL transfer parser (v0)
+
+The ingester only captures SOL transfers via `SystemProgram::transfer` and `transferWithSeed` (top-level + inner instructions). It does **not** capture SOL movements that bypass `SystemProgram` entirely, such as program-owned PDAs that mutate lamports directly on accounts they own. This is good enough for daily-graph viz but understates true SOL flow involving complex DeFi programs. Revisit when fraud heuristics need stricter accounting (likely via `meta.preBalances`/`postBalances` diff as a complementary signal). See `Tickets.md` backlog.
