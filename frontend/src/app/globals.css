@@ -39,16 +39,16 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
-  --color-jgd-bg: var(--jgd-bg);
-  --color-jgd-surface: var(--jgd-surface);
-  --color-jgd-text: var(--jgd-text);
-  --color-jgd-dim: var(--jgd-dim);
-  --color-jgd-accent: var(--jgd-accent);
-  --color-jgd-accent-dim: var(--jgd-accent-dim);
-  --color-jgd-border: var(--jgd-border);
-  --color-jgd-nav: var(--jgd-nav);
-  --color-jgd-muted: var(--jgd-muted);
-  /* JustGetDomain visual language: minimal corner radius across the board.
+  --color-mca-bg: var(--mca-bg);
+  --color-mca-surface: var(--mca-surface);
+  --color-mca-text: var(--mca-text);
+  --color-mca-dim: var(--mca-dim);
+  --color-mca-accent: var(--mca-accent);
+  --color-mca-accent-dim: var(--mca-accent-dim);
+  --color-mca-border: var(--mca-border);
+  --color-mca-nav: var(--mca-nav);
+  --color-mca-muted: var(--mca-muted);
+  /* MultiChain Analysis visual language: minimal corner radius across the board.
      Tailwind token map is flattened to 4px (`sm` and up) so any remaining
      radius-scale utility in third-party shadcn components also stays crisp. */
   --radius-sm: 4px;
@@ -94,19 +94,19 @@
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
 
-  /* JustGetDomain brand tokens — light mode (default).
+  /* MultiChain Analysis brand tokens — light mode (default).
      Surfaces: L 0.99 / L 0.965. Text: L 0.18. Dim: L 0.46.
      Accent darkened to L 0.52 for AA contrast on white. */
-  --jgd-bg: oklch(0.99 0 0);
-  --jgd-surface: oklch(0.965 0 0);
-  --jgd-text: oklch(0.18 0 0);
-  --jgd-dim: oklch(0.46 0 0);
-  --jgd-muted: oklch(0.62 0 0);
-  --jgd-accent: oklch(0.52 0.17 142);
-  --jgd-accent-dim: oklch(0.52 0.17 142 / 0.10);
-  --jgd-accent-mid: oklch(0.52 0.17 142 / 0.22);
-  --jgd-border: oklch(0.90 0 0);
-  --jgd-nav: oklch(0.99 0 0 / 0.88);
+  --mca-bg: oklch(0.99 0 0);
+  --mca-surface: oklch(0.965 0 0);
+  --mca-text: oklch(0.18 0 0);
+  --mca-dim: oklch(0.46 0 0);
+  --mca-muted: oklch(0.62 0 0);
+  --mca-accent: oklch(0.52 0.17 142);
+  --mca-accent-dim: oklch(0.52 0.17 142 / 0.10);
+  --mca-accent-mid: oklch(0.52 0.17 142 / 0.22);
+  --mca-border: oklch(0.90 0 0);
+  --mca-nav: oklch(0.99 0 0 / 0.88);
 }
 
 .dark {
@@ -142,19 +142,19 @@
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
 
-  /* JustGetDomain brand tokens — dark mode overrides.
+  /* MultiChain Analysis brand tokens — dark mode overrides.
      Floor: L 0.16 (Material). Text: L 0.93 (no glare).
      Secondary text: L 0.72 (7:1+ contrast). Borders: L 0.27. */
-  --jgd-bg: oklch(0.16 0 0);
-  --jgd-surface: oklch(0.20 0 0);
-  --jgd-text: oklch(0.93 0 0);
-  --jgd-dim: oklch(0.72 0 0);
-  --jgd-muted: oklch(0.45 0 0);
-  --jgd-accent: oklch(0.75 0.18 142);
-  --jgd-accent-dim: oklch(0.75 0.18 142 / 0.12);
-  --jgd-accent-mid: oklch(0.75 0.18 142 / 0.25);
-  --jgd-border: oklch(0.27 0 0);
-  --jgd-nav: oklch(0.16 0 0 / 0.92);
+  --mca-bg: oklch(0.16 0 0);
+  --mca-surface: oklch(0.20 0 0);
+  --mca-text: oklch(0.93 0 0);
+  --mca-dim: oklch(0.72 0 0);
+  --mca-muted: oklch(0.45 0 0);
+  --mca-accent: oklch(0.75 0.18 142);
+  --mca-accent-dim: oklch(0.75 0.18 142 / 0.12);
+  --mca-accent-mid: oklch(0.75 0.18 142 / 0.25);
+  --mca-border: oklch(0.27 0 0);
+  --mca-nav: oklch(0.16 0 0 / 0.92);
 }
 
 @layer base {
@@ -162,7 +162,7 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-jgd-bg text-jgd-text;
+    @apply bg-mca-bg text-mca-text;
   }
   html {
     @apply font-sans;
@@ -177,36 +177,36 @@
   }
 }
 
-@keyframes jgd-blink {
+@keyframes mca-blink {
   50% { opacity: 0; }
 }
 
-@keyframes jgd-fade-up {
+@keyframes mca-fade-up {
   from { opacity: 0; transform: translateY(24px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes jgd-pulse-dot {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--jgd-accent-mid); }
+@keyframes mca-pulse-dot {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--mca-accent-mid); }
   50%       { opacity: 0.6; box-shadow: 0 0 0 6px transparent; }
 }
 
-@utility jgd-blink {
-  animation: jgd-blink 1s step-end infinite;
+@utility mca-blink {
+  animation: mca-blink 1s step-end infinite;
 }
 
-@utility jgd-fade-up {
+@utility mca-fade-up {
   opacity: 0;
-  animation: jgd-fade-up 0.8s ease forwards;
+  animation: mca-fade-up 0.8s ease forwards;
 }
 
-@utility jgd-pulse {
-  animation: jgd-pulse-dot 2s infinite;
+@utility mca-pulse {
+  animation: mca-pulse-dot 2s infinite;
 }
 
 /* ── Search page animations ── */
 
-@keyframes jgd-tile-in {
+@keyframes mca-tile-in {
   from {
     opacity: 0;
     transform: translateY(8px);
@@ -217,46 +217,46 @@
   }
 }
 
-@utility jgd-tile-in {
+@utility mca-tile-in {
   opacity: 0;
-  animation: jgd-tile-in 0.35s ease-out forwards;
+  animation: mca-tile-in 0.35s ease-out forwards;
 }
 
-@utility jgd-ease-out {
+@utility mca-ease-out {
   transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* ── Marquee animations ── */
 
-@keyframes jgd-marquee-left {
+@keyframes mca-marquee-left {
   from { transform: translateX(0); }
   to   { transform: translateX(-50%); }
 }
 
-@keyframes jgd-marquee-right {
+@keyframes mca-marquee-right {
   from { transform: translateX(-50%); }
   to   { transform: translateX(0); }
 }
 
-@utility jgd-marquee-left {
-  animation: jgd-marquee-left 35s linear infinite;
+@utility mca-marquee-left {
+  animation: mca-marquee-left 35s linear infinite;
 }
 
-@utility jgd-marquee-left-slow {
-  animation: jgd-marquee-left 50s linear infinite;
+@utility mca-marquee-left-slow {
+  animation: mca-marquee-left 50s linear infinite;
 }
 
-@utility jgd-marquee-right {
-  animation: jgd-marquee-right 35s linear infinite;
+@utility mca-marquee-right {
+  animation: mca-marquee-right 35s linear infinite;
 }
 
-@utility jgd-marquee-right-fast {
-  animation: jgd-marquee-right 25s linear infinite;
+@utility mca-marquee-right-fast {
+  animation: mca-marquee-right 25s linear infinite;
 }
 
 /* ── 3D dice roll ── */
 
-@keyframes jgd-dice-roll {
+@keyframes mca-dice-roll {
   0%   { transform: rotateX(0deg)    rotateY(0deg)    rotateZ(0deg); }
   20%  { transform: rotateX(360deg)  rotateY(180deg)  rotateZ(90deg); }
   40%  { transform: rotateX(720deg)  rotateY(540deg)  rotateZ(180deg); }
@@ -265,7 +265,7 @@
   100% { transform: rotateX(1800deg) rotateY(1620deg) rotateZ(450deg); }
 }
 
-@utility jgd-dice-scene {
+@utility mca-dice-scene {
   perspective: 800px;
   width: 120px;
   height: 120px;
@@ -273,21 +273,21 @@
   place-items: center;
 }
 
-@utility jgd-dice {
+@utility mca-dice {
   position: relative;
   width: 100px;
   height: 100px;
   transform-style: preserve-3d;
-  animation: jgd-dice-roll 1.6s cubic-bezier(0.45, 0, 0.3, 1) infinite;
+  animation: mca-dice-roll 1.6s cubic-bezier(0.45, 0, 0.3, 1) infinite;
 }
 
-@utility jgd-dice-face {
+@utility mca-dice-face {
   position: absolute;
   inset: 0;
   width: 100px;
   height: 100px;
-  border: 1px solid var(--jgd-accent);
-  background: var(--jgd-accent-dim);
+  border: 1px solid var(--mca-accent);
+  background: var(--mca-accent-dim);
   border-radius: 12px;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -297,29 +297,29 @@
   backface-visibility: hidden;
 }
 
-@utility jgd-dice-pip {
+@utility mca-dice-pip {
   width: 14px;
   height: 14px;
-  background: var(--jgd-accent);
+  background: var(--mca-accent);
   border-radius: 50%;
   align-self: center;
   justify-self: center;
-  box-shadow: 0 0 6px var(--jgd-accent-mid);
+  box-shadow: 0 0 6px var(--mca-accent-mid);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .jgd-tile-in,
-  .jgd-fade-up {
+  .mca-tile-in,
+  .mca-fade-up {
     opacity: 1;
     animation: none;
   }
-  .jgd-pulse,
-  .jgd-blink,
-  .jgd-marquee-left,
-  .jgd-marquee-left-slow,
-  .jgd-marquee-right,
-  .jgd-marquee-right-fast,
-  .jgd-dice {
+  .mca-pulse,
+  .mca-blink,
+  .mca-marquee-left,
+  .mca-marquee-left-slow,
+  .mca-marquee-right,
+  .mca-marquee-right-fast,
+  .mca-dice {
     animation: none;
   }
 }

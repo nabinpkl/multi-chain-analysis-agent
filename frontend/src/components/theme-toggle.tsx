@@ -23,7 +23,7 @@ export function ThemeToggle() {
       onClick={() => mounted && setTheme(isDark ? "light" : "dark")}
       aria-label={label}
       title={label}
-      className="relative size-7 rounded-sm flex items-center justify-center text-jgd-dim border border-jgd-border bg-jgd-surface/60 transition-colors cursor-pointer hover:text-jgd-accent hover:border-jgd-accent-mid"
+      className="relative size-7 rounded-sm flex items-center justify-center text-mca-dim border border-mca-border bg-mca-surface/60 transition-colors cursor-pointer hover:text-mca-accent hover:border-mca-accent-mid"
       suppressHydrationWarning
     >
       {mounted ? (

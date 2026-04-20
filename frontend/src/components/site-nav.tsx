@@ -10,11 +10,11 @@ export function SiteNav() {
     <nav
       role="navigation"
       aria-label="Main"
-      className="sticky top-0 z-50 h-14 flex justify-between items-center px-6 sm:px-8 text-[0.75rem] tracking-[1.5px] uppercase backdrop-blur-[16px] bg-jgd-nav border-b border-jgd-border relative"
+      className="sticky top-0 z-50 h-14 flex justify-between items-center px-6 sm:px-8 text-[0.75rem] tracking-[1.5px] uppercase backdrop-blur-[16px] bg-mca-nav border-b border-mca-border relative"
     >
       <Link
         href="/"
-        className="flex items-center gap-1.5 text-jgd-accent font-bold transition-opacity hover:opacity-80"
+        className="flex items-center gap-1.5 text-mca-accent font-bold transition-opacity hover:opacity-80"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -36,22 +36,22 @@ export function SiteNav() {
           <circle cx="385" cy="375" r="20" fill="currentColor" />
         </svg>
         <span>
-          JustGetDomain<span className="text-jgd-accent">.</span>
+          MultiChain Analysis<span className="text-mca-accent">.</span>
         </span>
       </Link>
 
       <p
-        className="hidden md:block absolute left-1/2 -translate-x-1/2 text-[0.68rem] normal-case tracking-[0.5px] text-jgd-muted max-w-[440px] text-center leading-tight"
+        className="hidden md:block absolute left-1/2 -translate-x-1/2 text-[0.68rem] normal-case tracking-[0.5px] text-mca-muted max-w-[440px] text-center leading-tight"
         role="note"
       >
         Proof of concept - real data, but{" "}
-        <span className="text-jgd-dim">availability is not guaranteed</span>.
+        <span className="text-mca-dim">availability is not guaranteed</span>.
       </p>
 
       <div className="flex items-center gap-4">
         <Link
           href="/explore"
-          className={`text-[0.75rem] tracking-[1.5px] uppercase transition-opacity hover:opacity-100 ${pathname === "/explore" ? "text-jgd-accent" : "text-jgd-dim opacity-80"}`}
+          className={`text-[0.75rem] tracking-[1.5px] uppercase transition-opacity hover:opacity-100 ${pathname === "/explore" ? "text-mca-accent" : "text-mca-dim opacity-80"}`}
         >
           Explore Domains
         </Link>

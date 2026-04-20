@@ -1,73 +1,73 @@
 import { ExternalLink } from "lucide-react";
 
-const REPO_URL = "https://github.com/nabinpkl/justgetdomain.com";
+const REPO_URL = "https://github.com/nabinpkl/multi-chain-analysis-engine";
 const ISSUES_URL = `${REPO_URL}/issues`;
 
 export function SiteFooter() {
   return (
-    <footer className="border-t border-jgd-border bg-jgd-bg text-jgd-dim text-[0.85rem] leading-[1.7]">
+    <footer className="border-t border-mca-border bg-mca-bg text-mca-dim text-[0.85rem] leading-[1.7]">
       <div className="max-w-[1200px] mx-auto px-6 py-10 grid gap-8 sm:grid-cols-[2fr_1fr_1fr]">
         <div className="space-y-3">
-          <p className="text-[0.78rem] uppercase tracking-[2.5px] text-jgd-text">
+          <p className="text-[0.78rem] uppercase tracking-[2.5px] text-mca-text">
             About this site
           </p>
           <p>
-            JustGetDomain is a{" "}
-            <span className="text-jgd-text">portfolio / proof-of-concept</span>{" "}
-            project. We are not a registrar, not affiliated with ICANN, and run
-            no transactions. The site exists to solve one specific frustration:
-            you cannot browse what short domains are still available without a
-            registrar lying to you.
+            MultiChain Analysis Engine is a{" "}
+            <span className="text-mca-text">portfolio / proof-of-concept</span>{" "}
+            project. It ingests transactions from multiple public blockchains,
+            normalizes them into a common shape, links each transaction to the
+            entities and contracts it touches, and serves the result as an
+            explorable graph.
           </p>
           <p>
-            Provided <span className="text-jgd-text">as-is</span>, with no
-            warranty of any kind. Snapshot data is updated periodically and
-            registrations can change at any time.
+            Provided <span className="text-mca-text">as-is</span>, with no
+            warranty of any kind. On-chain data is indexed continuously but may
+            lag finality, reorg, or miss events during backfill windows.
           </p>
         </div>
 
         <div className="space-y-3">
-          <p className="text-[0.78rem] uppercase tracking-[2.5px] text-jgd-text">
-            How candidates are chosen
+          <p className="text-[0.78rem] uppercase tracking-[2.5px] text-mca-text">
+            How the pipeline works
           </p>
           <p>
-            A pre-scanned subset of the English dictionary, hand-curated to
-            exclude brand collisions, auth/finance/security terms, regulated
-            (gov / health / legal) namespaces, and adult or illegal content.
+            A single Rust service subscribes to chain RPCs, decodes logs and
+            calldata, resolves addresses to known labels, and writes normalized
+            edges into the graph store.
           </p>
           <p>
-            No compound generation, no AI-suggested names, no purchase flow.
-            <em className="not-italic text-jgd-text"> Best effort, not exhaustive.</em>
+            Runs on one Oracle free-tier VM behind Cloudflare.
+            <em className="not-italic text-mca-text"> Best effort, not a block explorer.</em>
           </p>
         </div>
 
         <div className="space-y-3">
-          <p className="text-[0.78rem] uppercase tracking-[2.5px] text-jgd-text">
+          <p className="text-[0.78rem] uppercase tracking-[2.5px] text-mca-text">
             Your responsibility
           </p>
           <p>
-            Availability does not grant the right to use a name. You are
-            solely responsible for trademark clearance.
+            Graph data is for analysis and research. Do not treat it as legal,
+            financial, or compliance evidence without verifying on-chain.
           </p>
           <ul className="space-y-1.5">
             <li>
               <a
-                href="https://tmsearch.uspto.gov/"
+                href="https://etherscan.io/"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="underline underline-offset-[3px] decoration-jgd-dim/40 hover:text-jgd-accent hover:decoration-jgd-accent transition-colors"
+                className="underline underline-offset-[3px] decoration-mca-dim/40 hover:text-mca-accent hover:decoration-mca-accent transition-colors"
               >
-                USPTO trademark search →
+                Verify on Etherscan →
               </a>
             </li>
             <li>
               <a
-                href="https://branddb.wipo.int/"
+                href="https://solscan.io/"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="underline underline-offset-[3px] decoration-jgd-dim/40 hover:text-jgd-accent hover:decoration-jgd-accent transition-colors"
+                className="underline underline-offset-[3px] decoration-mca-dim/40 hover:text-mca-accent hover:decoration-mca-accent transition-colors"
               >
-                WIPO Global Brand Database →
+                Verify on Solscan →
               </a>
             </li>
             <li>
@@ -75,33 +75,23 @@ export function SiteFooter() {
                 href={ISSUES_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="underline underline-offset-[3px] decoration-jgd-dim/40 hover:text-jgd-accent hover:decoration-jgd-accent transition-colors"
+                className="underline underline-offset-[3px] decoration-mca-dim/40 hover:text-mca-accent hover:decoration-mca-accent transition-colors"
               >
-                Takedown / curation requests →
-              </a>
-            </li>
-            <li>
-              <a
-                href="https://docs.google.com/forms/d/e/1FAIpQLScVOEVfQqP1EOf2cES6-LjWBXxc30bBahL5xc85uAUHpgS7Jw/viewform?usp=dialog"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline underline-offset-[3px] decoration-jgd-dim/40 hover:text-jgd-accent hover:decoration-jgd-accent transition-colors"
-              >
-                Request removal →
+                Report bad data / label errors →
               </a>
             </li>
           </ul>
         </div>
       </div>
 
-      <div className="border-t border-jgd-border">
+      <div className="border-t border-mca-border">
         <div className="max-w-[1200px] mx-auto px-6 py-4 flex flex-wrap items-center justify-between gap-3 text-[0.78rem] uppercase tracking-[2px]">
-          <span>© JustGetDomain, portfolio piece, not a registrar.</span>
+          <span>© MultiChain Analysis Engine, portfolio piece, not financial advice.</span>
           <a
             href={REPO_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1.5 hover:text-jgd-accent transition-colors"
+            className="flex items-center gap-1.5 hover:text-mca-accent transition-colors"
           >
             Source on GitHub
             <ExternalLink size={11} />

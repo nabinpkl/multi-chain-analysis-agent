@@ -18,18 +18,17 @@ const jsonLd = {
 };
 
 export default function Home() {
-  return (<div />)
-  // (
-  //   <div>
-  //     <script
-  //       type="application/ld+json"
-  //       dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-  //     />
-  //     <div className="overflow-x-clip bg-jgd-bg text-jgd-text font-sans font-medium leading-[1.7]">
+  return (
+    <div>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
+      <div className="overflow-x-clip bg-mca-bg text-mca-text font-sans font-medium leading-[1.7]">
 
-  //       {/* LinkedIn / built by */}
-  //       <LinkedInBlock />
-  //     </div>
-  //   <div/>
-  // );
+        {/* LinkedIn / built by */}
+        <LinkedInBlock />
+      </div>
+    </div>
+  );
 }
