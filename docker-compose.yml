@@ -1,0 +1,36 @@
+services:
+  api:
+    container_name: multichain-api
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "${PORT:-8002}:${PORT:-8002}"
+    env_file:
+      - ./.env
+    volumes:
+      - ./backend/data:/app/data
+    restart: unless-stopped
+
+  web:
+    container_name: justgetdomain-web
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        API_URL: http://api:${PORT:-8002}
+    ports:
+      - "3000:3000"
+    environment:
+      - API_URL=http://api:${PORT:-8001}
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    profiles: ["prod"]
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate run
