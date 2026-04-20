@@ -1,0 +1,4 @@
+target/
+data/domains.txt
+data/snapshot.bin
+batch_progress.log

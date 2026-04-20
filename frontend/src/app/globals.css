@@ -1,0 +1,325 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-serif: var(--font-serif), Georgia, serif;
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-jgd-bg: var(--jgd-bg);
+  --color-jgd-surface: var(--jgd-surface);
+  --color-jgd-text: var(--jgd-text);
+  --color-jgd-dim: var(--jgd-dim);
+  --color-jgd-accent: var(--jgd-accent);
+  --color-jgd-accent-dim: var(--jgd-accent-dim);
+  --color-jgd-border: var(--jgd-border);
+  --color-jgd-nav: var(--jgd-nav);
+  --color-jgd-muted: var(--jgd-muted);
+  /* JustGetDomain visual language: minimal corner radius across the board.
+     Tailwind token map is flattened to 4px (`sm` and up) so any remaining
+     radius-scale utility in third-party shadcn components also stays crisp. */
+  --radius-sm: 4px;
+  --radius-md: 4px;
+  --radius-lg: 4px;
+  --radius-xl: 4px;
+  --radius-2xl: 4px;
+  --radius-3xl: 4px;
+  --radius-4xl: 4px;
+}
+
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+
+  /* JustGetDomain brand tokens — light mode (default).
+     Surfaces: L 0.99 / L 0.965. Text: L 0.18. Dim: L 0.46.
+     Accent darkened to L 0.52 for AA contrast on white. */
+  --jgd-bg: oklch(0.99 0 0);
+  --jgd-surface: oklch(0.965 0 0);
+  --jgd-text: oklch(0.18 0 0);
+  --jgd-dim: oklch(0.46 0 0);
+  --jgd-muted: oklch(0.62 0 0);
+  --jgd-accent: oklch(0.52 0.17 142);
+  --jgd-accent-dim: oklch(0.52 0.17 142 / 0.10);
+  --jgd-accent-mid: oklch(0.52 0.17 142 / 0.22);
+  --jgd-border: oklch(0.90 0 0);
+  --jgd-nav: oklch(0.99 0 0 / 0.88);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+
+  /* JustGetDomain brand tokens — dark mode overrides.
+     Floor: L 0.16 (Material). Text: L 0.93 (no glare).
+     Secondary text: L 0.72 (7:1+ contrast). Borders: L 0.27. */
+  --jgd-bg: oklch(0.16 0 0);
+  --jgd-surface: oklch(0.20 0 0);
+  --jgd-text: oklch(0.93 0 0);
+  --jgd-dim: oklch(0.72 0 0);
+  --jgd-muted: oklch(0.45 0 0);
+  --jgd-accent: oklch(0.75 0.18 142);
+  --jgd-accent-dim: oklch(0.75 0.18 142 / 0.12);
+  --jgd-accent-mid: oklch(0.75 0.18 142 / 0.25);
+  --jgd-border: oklch(0.27 0 0);
+  --jgd-nav: oklch(0.16 0 0 / 0.92);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-jgd-bg text-jgd-text;
+  }
+  html {
+    @apply font-sans;
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  html,
+  body {
+    transition: background-color 200ms ease, color 200ms ease;
+  }
+}
+
+@keyframes jgd-blink {
+  50% { opacity: 0; }
+}
+
+@keyframes jgd-fade-up {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes jgd-pulse-dot {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--jgd-accent-mid); }
+  50%       { opacity: 0.6; box-shadow: 0 0 0 6px transparent; }
+}
+
+@utility jgd-blink {
+  animation: jgd-blink 1s step-end infinite;
+}
+
+@utility jgd-fade-up {
+  opacity: 0;
+  animation: jgd-fade-up 0.8s ease forwards;
+}
+
+@utility jgd-pulse {
+  animation: jgd-pulse-dot 2s infinite;
+}
+
+/* ── Search page animations ── */
+
+@keyframes jgd-tile-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@utility jgd-tile-in {
+  opacity: 0;
+  animation: jgd-tile-in 0.35s ease-out forwards;
+}
+
+@utility jgd-ease-out {
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ── Marquee animations ── */
+
+@keyframes jgd-marquee-left {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+@keyframes jgd-marquee-right {
+  from { transform: translateX(-50%); }
+  to   { transform: translateX(0); }
+}
+
+@utility jgd-marquee-left {
+  animation: jgd-marquee-left 35s linear infinite;
+}
+
+@utility jgd-marquee-left-slow {
+  animation: jgd-marquee-left 50s linear infinite;
+}
+
+@utility jgd-marquee-right {
+  animation: jgd-marquee-right 35s linear infinite;
+}
+
+@utility jgd-marquee-right-fast {
+  animation: jgd-marquee-right 25s linear infinite;
+}
+
+/* ── 3D dice roll ── */
+
+@keyframes jgd-dice-roll {
+  0%   { transform: rotateX(0deg)    rotateY(0deg)    rotateZ(0deg); }
+  20%  { transform: rotateX(360deg)  rotateY(180deg)  rotateZ(90deg); }
+  40%  { transform: rotateX(720deg)  rotateY(540deg)  rotateZ(180deg); }
+  60%  { transform: rotateX(1080deg) rotateY(900deg)  rotateZ(270deg); }
+  80%  { transform: rotateX(1440deg) rotateY(1260deg) rotateZ(360deg); }
+  100% { transform: rotateX(1800deg) rotateY(1620deg) rotateZ(450deg); }
+}
+
+@utility jgd-dice-scene {
+  perspective: 800px;
+  width: 120px;
+  height: 120px;
+  display: grid;
+  place-items: center;
+}
+
+@utility jgd-dice {
+  position: relative;
+  width: 100px;
+  height: 100px;
+  transform-style: preserve-3d;
+  animation: jgd-dice-roll 1.6s cubic-bezier(0.45, 0, 0.3, 1) infinite;
+}
+
+@utility jgd-dice-face {
+  position: absolute;
+  inset: 0;
+  width: 100px;
+  height: 100px;
+  border: 1px solid var(--jgd-accent);
+  background: var(--jgd-accent-dim);
+  border-radius: 12px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  padding: 14px;
+  gap: 4px;
+  backface-visibility: hidden;
+}
+
+@utility jgd-dice-pip {
+  width: 14px;
+  height: 14px;
+  background: var(--jgd-accent);
+  border-radius: 50%;
+  align-self: center;
+  justify-self: center;
+  box-shadow: 0 0 6px var(--jgd-accent-mid);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jgd-tile-in,
+  .jgd-fade-up {
+    opacity: 1;
+    animation: none;
+  }
+  .jgd-pulse,
+  .jgd-blink,
+  .jgd-marquee-left,
+  .jgd-marquee-left-slow,
+  .jgd-marquee-right,
+  .jgd-marquee-right-fast,
+  .jgd-dice {
+    animation: none;
+  }
+}
