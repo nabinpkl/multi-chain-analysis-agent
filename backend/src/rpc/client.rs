@@ -58,7 +58,7 @@ impl RpcClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| RpcError::Transient(e.to_string()))?;
+            .map_err(|e| RpcError::Transient(e.without_url().to_string()))?;
 
         let status = resp.status();
         if status.as_u16() == 429 {
@@ -74,7 +74,7 @@ impl RpcClient {
         let parsed: JsonRpcResponse<T> = resp
             .json()
             .await
-            .map_err(|e| RpcError::Fatal(format!("decode: {}", e)))?;
+            .map_err(|e| RpcError::Fatal(format!("decode: {}", e.without_url())))?;
 
         if let Some(err) = parsed.error {
             return Err(map_jsonrpc_error(err.code, err.message));

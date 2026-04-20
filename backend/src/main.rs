@@ -9,6 +9,7 @@ mod api;
 mod config;
 mod domain;
 mod ingest;
+mod overview_cache;
 mod rpc;
 mod state;
 mod store;

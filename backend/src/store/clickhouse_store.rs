@@ -3,8 +3,8 @@ use clickhouse::Client;
 use clickhouse::Row;
 use serde::Serialize;
 
-use super::EdgeStore;
-use crate::domain::Edge;
+use super::{EdgeStore, GraphStore};
+use crate::domain::{Edge, EdgeAggregate, WalletAggregate, WindowStats};
 
 pub struct ClickHouseEdgeStore {
     client: Client,
@@ -65,5 +65,86 @@ impl EdgeStore for ClickHouseEdgeStore {
             .await?;
         insert.end().await?;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl GraphStore for ClickHouseEdgeStore {
+    async fn top_edges(
+        &self,
+        from_ts: u32,
+        to_ts: u32,
+        limit: u32,
+    ) -> anyhow::Result<Vec<EdgeAggregate>> {
+        let rows = self
+            .client
+            .query(
+                "SELECT from_wallet, to_wallet, sum(amount) AS volume_lamports, \
+                 count() AS tx_count \
+                 FROM multichain.edges \
+                 WHERE block_time >= ? AND block_time < ? \
+                 GROUP BY from_wallet, to_wallet \
+                 ORDER BY volume_lamports DESC \
+                 LIMIT ?",
+            )
+            .bind(from_ts)
+            .bind(to_ts)
+            .bind(limit)
+            .fetch_all::<EdgeAggregate>()
+            .await?;
+        Ok(rows)
+    }
+
+    async fn top_wallets(
+        &self,
+        from_ts: u32,
+        to_ts: u32,
+        limit: u32,
+    ) -> anyhow::Result<Vec<WalletAggregate>> {
+        let rows = self
+            .client
+            .query(
+                "SELECT wallet, sum(amount) AS volume_lamports FROM ( \
+                     SELECT from_wallet AS wallet, amount FROM multichain.edges \
+                     WHERE block_time >= ? AND block_time < ? \
+                     UNION ALL \
+                     SELECT to_wallet AS wallet, amount FROM multichain.edges \
+                     WHERE block_time >= ? AND block_time < ? \
+                 ) \
+                 GROUP BY wallet \
+                 ORDER BY volume_lamports DESC \
+                 LIMIT ?",
+            )
+            .bind(from_ts)
+            .bind(to_ts)
+            .bind(from_ts)
+            .bind(to_ts)
+            .bind(limit)
+            .fetch_all::<WalletAggregate>()
+            .await?;
+        Ok(rows)
+    }
+
+    async fn window_stats(&self, from_ts: u32, to_ts: u32) -> anyhow::Result<WindowStats> {
+        let row = self
+            .client
+            .query(
+                "SELECT \
+                     sum(amount) AS total_volume_lamports, \
+                     count() AS total_txs, \
+                     uniqExact(arrayJoin([from_wallet, to_wallet])) AS unique_wallets \
+                 FROM multichain.edges \
+                 WHERE block_time >= ? AND block_time < ?",
+            )
+            .bind(from_ts)
+            .bind(to_ts)
+            .fetch_optional::<WindowStats>()
+            .await?
+            .unwrap_or(WindowStats {
+                total_volume_lamports: 0,
+                total_txs: 0,
+                unique_wallets: 0,
+            });
+        Ok(row)
     }
 }

@@ -1,3 +1,4 @@
+pub mod graph;
 pub mod health;
 
 use axum::Router;
@@ -9,5 +10,6 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health::health))
         .route("/ready", get(health::ready))
+        .route("/graph/overview", get(graph::overview))
         .with_state(state)
 }

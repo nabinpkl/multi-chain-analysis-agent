@@ -41,13 +41,26 @@
   --color-card: var(--card);
   --color-mca-bg: var(--mca-bg);
   --color-mca-surface: var(--mca-surface);
+  --color-mca-surface-raised: var(--mca-surface-raised);
   --color-mca-text: var(--mca-text);
   --color-mca-dim: var(--mca-dim);
+  --color-mca-muted: var(--mca-muted);
   --color-mca-accent: var(--mca-accent);
   --color-mca-accent-dim: var(--mca-accent-dim);
+  --color-mca-accent-mid: var(--mca-accent-mid);
   --color-mca-border: var(--mca-border);
   --color-mca-nav: var(--mca-nav);
-  --color-mca-muted: var(--mca-muted);
+  --color-mca-edge: var(--mca-edge);
+  --color-mca-edge-hover: var(--mca-edge-hover);
+  --color-mca-lonely: var(--mca-lonely);
+  --color-mca-cluster-0: var(--mca-cluster-0);
+  --color-mca-cluster-1: var(--mca-cluster-1);
+  --color-mca-cluster-2: var(--mca-cluster-2);
+  --color-mca-cluster-3: var(--mca-cluster-3);
+  --color-mca-cluster-4: var(--mca-cluster-4);
+  --color-mca-cluster-5: var(--mca-cluster-5);
+  --color-mca-cluster-6: var(--mca-cluster-6);
+  --color-mca-cluster-7: var(--mca-cluster-7);
   /* MultiChain Analysis visual language: minimal corner radius across the board.
      Tailwind token map is flattened to 4px (`sm` and up) so any remaining
      radius-scale utility in third-party shadcn components also stays crisp. */
@@ -94,11 +107,11 @@
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
 
-  /* MultiChain Analysis brand tokens — light mode (default).
-     Surfaces: L 0.99 / L 0.965. Text: L 0.18. Dim: L 0.46.
-     Accent darkened to L 0.52 for AA contrast on white. */
+  /* MultiChain Analysis brand tokens — light mode (fallback only; app ships dark).
+     See docs/design.md for rationale. Light values kept AA-safe for occasional use. */
   --mca-bg: oklch(0.99 0 0);
   --mca-surface: oklch(0.965 0 0);
+  --mca-surface-raised: oklch(0.945 0 0);
   --mca-text: oklch(0.18 0 0);
   --mca-dim: oklch(0.46 0 0);
   --mca-muted: oklch(0.62 0 0);
@@ -107,6 +120,17 @@
   --mca-accent-mid: oklch(0.52 0.17 142 / 0.22);
   --mca-border: oklch(0.90 0 0);
   --mca-nav: oklch(0.99 0 0 / 0.88);
+  --mca-edge: oklch(0.55 0.02 260 / 0.35);
+  --mca-edge-hover: oklch(0.52 0.17 142 / 0.90);
+  --mca-lonely: oklch(0.72 0.01 260);
+  --mca-cluster-0: oklch(0.58 0.18 20);
+  --mca-cluster-1: oklch(0.62 0.17 65);
+  --mca-cluster-2: oklch(0.60 0.18 110);
+  --mca-cluster-3: oklch(0.58 0.18 160);
+  --mca-cluster-4: oklch(0.58 0.16 200);
+  --mca-cluster-5: oklch(0.55 0.18 245);
+  --mca-cluster-6: oklch(0.55 0.20 290);
+  --mca-cluster-7: oklch(0.58 0.20 330);
 }
 
 .dark {
@@ -142,19 +166,32 @@
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
 
-  /* MultiChain Analysis brand tokens — dark mode overrides.
-     Floor: L 0.16 (Material). Text: L 0.93 (no glare).
-     Secondary text: L 0.72 (7:1+ contrast). Borders: L 0.27. */
-  --mca-bg: oklch(0.16 0 0);
-  --mca-surface: oklch(0.20 0 0);
-  --mca-text: oklch(0.93 0 0);
-  --mca-dim: oklch(0.72 0 0);
-  --mca-muted: oklch(0.45 0 0);
+  /* MultiChain Analysis brand tokens — dark mode (primary).
+     Cool-tilted neutrals (hue 260, chroma 0.01) for the shell.
+     Cluster palette at L 0.72, C 0.18 — perceptually balanced hues.
+     See docs/design.md for rationale. */
+  --mca-bg: oklch(0.12 0.01 260);
+  --mca-surface: oklch(0.16 0.01 260);
+  --mca-surface-raised: oklch(0.20 0.01 260);
+  --mca-text: oklch(0.95 0.01 260);
+  --mca-dim: oklch(0.70 0.01 260);
+  --mca-muted: oklch(0.50 0.01 260);
   --mca-accent: oklch(0.75 0.18 142);
   --mca-accent-dim: oklch(0.75 0.18 142 / 0.12);
   --mca-accent-mid: oklch(0.75 0.18 142 / 0.25);
-  --mca-border: oklch(0.27 0 0);
-  --mca-nav: oklch(0.16 0 0 / 0.92);
+  --mca-border: oklch(0.24 0.01 260);
+  --mca-nav: oklch(0.12 0.01 260 / 0.92);
+  --mca-edge: oklch(0.55 0.02 260 / 0.35);
+  --mca-edge-hover: oklch(0.75 0.18 142 / 0.90);
+  --mca-lonely: oklch(0.42 0.01 260);
+  --mca-cluster-0: oklch(0.72 0.18 20);
+  --mca-cluster-1: oklch(0.74 0.17 65);
+  --mca-cluster-2: oklch(0.74 0.18 110);
+  --mca-cluster-3: oklch(0.72 0.18 160);
+  --mca-cluster-4: oklch(0.72 0.16 200);
+  --mca-cluster-5: oklch(0.70 0.18 245);
+  --mca-cluster-6: oklch(0.68 0.20 290);
+  --mca-cluster-7: oklch(0.70 0.20 330);
 }
 
 @layer base {
