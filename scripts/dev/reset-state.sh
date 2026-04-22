@@ -42,8 +42,39 @@ rpk -X brokers="${REDPANDA_BROKERS}" topic create solana.raw-edges \
   --config cleanup.policy=delete \
   2>/dev/null || true
 
-echo "[reset] seeking consumer groups to end (noop if groups don't exist yet)..."
-rpk -X brokers="${REDPANDA_BROKERS}" group seek live-state --topics solana.raw-edges --to end 2>/dev/null || true
-rpk -X brokers="${REDPANDA_BROKERS}" group seek ch-sink    --topics solana.raw-edges --to end 2>/dev/null || true
+# Seek both groups to the topic's end so the new api doesn't replay a
+# committed-offset backlog from a previous uptime. rpk rejects seek on a
+# non-empty group (active members), which happens when the old api
+# container hasn't fully unregistered yet — wait it out. We stop caring
+# once the group is empty OR we've retried enough; any failure here just
+# means the next run will replay its backlog (ugly but not fatal).
+seek_group_to_end() {
+    group=$1
+    i=0
+    while [ "$i" -lt 30 ]; do
+        state=$(rpk -X brokers="${REDPANDA_BROKERS}" group describe "$group" 2>/dev/null \
+            | awk '/^STATE/ {print $2}')
+        # Group doesn't exist yet — first boot or deleted. Nothing to seek.
+        if [ -z "$state" ]; then
+            echo "[reset] $group: not yet created, skipping"
+            return 0
+        fi
+        if [ "$state" = "Empty" ] || [ "$state" = "Dead" ]; then
+            rpk -X brokers="${REDPANDA_BROKERS}" group seek "$group" \
+                --topics solana.raw-edges --to end >/dev/null 2>&1 \
+                && { echo "[reset] $group: seeked to end"; return 0; }
+            echo "[reset] $group: seek failed unexpectedly"
+            return 1
+        fi
+        i=$((i + 1))
+        sleep 1
+    done
+    echo "[reset] $group: still non-empty after 30s, giving up (will replay backlog)"
+    return 1
+}
+
+echo "[reset] seeking consumer groups to end..."
+seek_group_to_end live-state || true
+seek_group_to_end ch-sink    || true
 
 echo "[reset] done"

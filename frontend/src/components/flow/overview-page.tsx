@@ -74,7 +74,7 @@ export function OverviewPage() {
       <footer className="px-6 py-2 border-t border-mca-border bg-mca-bg text-[0.7rem] uppercase tracking-[1.5px] text-mca-muted flex items-center justify-between gap-4">
         <span className="tabular-nums">
           {data
-            ? `${formatInt(data.nodes.length)} nodes · ${formatInt(data.edges.length)} edges`
+            ? `${formatInt(data.nodes.length)} wallets · ${formatInt(data.edges.length)} connections`
             : "—"}
         </span>
         <span>

@@ -19,8 +19,6 @@ pub struct Config {
     pub ch_sink_batch_size: usize,
     pub ch_sink_flush: Duration,
     pub state_window_secs: u32,
-    pub state_top_edges: usize,
-    pub state_whale_pad: usize,
     pub state_tick_interval: Duration,
 }
 
@@ -65,14 +63,6 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(86400),
-            state_top_edges: env::var("STATE_TOP_EDGES")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(500),
-            state_whale_pad: env::var("STATE_WHALE_PAD")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(50),
             state_tick_interval: Duration::from_millis(
                 env::var("STATE_TICK_INTERVAL_MS")
                     .ok()

@@ -61,6 +61,10 @@ pub struct NodeView {
     pub id: String,
     pub volume_sol: f64,
     pub component: Option<u32>,
+    /// Distinct counterparties this wallet has across the full window
+    /// (not just the rendered subset). Sent so the frontend can size
+    /// and order nodes without recomputing degree from the edge list.
+    pub degree: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]

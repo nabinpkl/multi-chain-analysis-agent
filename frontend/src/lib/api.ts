@@ -19,6 +19,7 @@ export interface NodeView {
   id: string;
   volume_sol: number;
   component: number | null;
+  degree: number;
 }
 
 export interface EdgeView {

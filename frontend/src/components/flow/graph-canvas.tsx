@@ -17,15 +17,50 @@ interface GraphCanvasProps {
 // Canvas colors are hex/rgba — Sigma's WebGL parser doesn't accept oklch().
 // CSS tokens in globals.css remain canonical for HTML surfaces.
 const BG = "#0c0d12";
-const EDGE_COLOR = "rgba(200, 210, 235, 0.72)";
 const LABEL_COLOR = "#e9ebf1";
+const EDGE_ALPHA_MIN = 0.08;
+const EDGE_ALPHA_MAX = 0.85;
 
-function sizeFromVolume(volumeSol: number): number {
-  return 2 + Math.log1p(volumeSol) * 1.3;
+function sizeForNode(degree: number, volumeSol: number): number {
+  // Degree dominates — a hub's significance is how many wallets touch
+  // it, not how much volume flowed. Volume is a soft tiebreaker among
+  // equal-degree nodes so whales visually outrank random lonely wallets.
+  return 2 + Math.sqrt(degree) * 1.6 + Math.log1p(volumeSol) * 0.15;
 }
 
 function widthFromVolume(volumeSol: number): number {
   return 0.8 + Math.log1p(volumeSol) * 0.7;
+}
+
+function edgeWeight(fromDeg: number, toDeg: number): number {
+  // Weaken edges touching high-degree hubs so spokes have room to spread
+  // instead of piling against the hub. With edgeWeightInfluence=1, FA2
+  // scales attraction linearly with this value.
+  const hub = Math.max(fromDeg, toDeg, 1);
+  return 1 / Math.log2(hub + 1);
+}
+
+function nodeDegreeMap(nodes: NodeView[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const n of nodes) m.set(n.id, n.degree);
+  return m;
+}
+
+function maxEdgeVolume(edges: EdgeView[]): number {
+  let max = 0;
+  for (const e of edges) if (e.volume_sol > max) max = e.volume_sol;
+  return Math.max(max, 1);
+}
+
+/**
+ * Edge alpha scales with log-normalized volume so the structural backbone
+ * (heavy corridors) reads prominently while single-transfer drive-bys recede
+ * to background mesh. Replaces the old flat-alpha EDGE_COLOR.
+ */
+function edgeColor(volumeSol: number, maxVol: number): string {
+  const t = Math.log1p(volumeSol) / Math.log1p(maxVol);
+  const alpha = EDGE_ALPHA_MIN + t * (EDGE_ALPHA_MAX - EDGE_ALPHA_MIN);
+  return `rgba(200, 210, 235, ${alpha.toFixed(3)})`;
 }
 
 function seedPosition(i: number, total: number): { x: number; y: number } {
@@ -50,29 +85,18 @@ function edgeKey(from: string, to: string): string {
 
 function initialGraph(nodes: NodeView[], edges: EdgeView[]): Graph {
   const graph = new Graph({ multi: false, type: "undirected" });
-  const neighbors = neighborsByNode(edges);
-  const edgeConnected = nodes.filter((n) => neighbors.has(n.id));
-  const lonely = nodes.filter((n) => !neighbors.has(n.id));
+  const degrees = nodeDegreeMap(nodes);
+  const maxVol = maxEdgeVolume(edges);
 
-  edgeConnected.forEach((n, i) => {
-    const { x, y } = seedPosition(i, edgeConnected.length);
+  // Backend sends nodes pre-sorted by degree desc, so iterating in
+  // received order places hubs first and spokes find their hub already
+  // in the graph by the time they seed.
+  nodes.forEach((n, i) => {
+    const { x, y } = seedPosition(i, nodes.length);
     graph.addNode(n.id, {
       x,
       y,
-      size: sizeFromVolume(n.volume_sol),
-      color: colorForComponent(n.component),
-      label: nodeLabel(n.id),
-    });
-  });
-
-  const outerRadius = graphRadius(graph);
-  lonely.forEach((n) => {
-    const { x, y } = perimeterSeed(outerRadius);
-    graph.addNode(n.id, {
-      x,
-      y,
-      fixed: true,
-      size: sizeFromVolume(n.volume_sol),
+      size: sizeForNode(n.degree, n.volume_sol),
       color: colorForComponent(n.component),
       label: nodeLabel(n.id),
     });
@@ -83,7 +107,8 @@ function initialGraph(nodes: NodeView[], edges: EdgeView[]): Graph {
     if (graph.hasEdge(e.from, e.to) || graph.hasEdge(e.to, e.from)) return;
     graph.addEdge(e.from, e.to, {
       size: widthFromVolume(e.volume_sol),
-      color: EDGE_COLOR,
+      color: edgeColor(e.volume_sol, maxVol),
+      weight: edgeWeight(degrees.get(e.from) ?? 0, degrees.get(e.to) ?? 0),
     });
   });
   return graph;
@@ -150,15 +175,16 @@ function applyDiff(graph: Graph, nodes: NodeView[], edges: EdgeView[]) {
   });
 
   const neighbors = neighborsByNode(edges);
+  const degrees = nodeDegreeMap(nodes);
+  const maxVol = maxEdgeVolume(edges);
   const outerRadius = graphRadius(graph);
 
+  // Nodes arrive pre-sorted hubs-first from the backend.
   for (const n of nodes) {
-    const hasEdges = neighbors.has(n.id);
     const attrs = {
-      size: sizeFromVolume(n.volume_sol),
+      size: sizeForNode(n.degree, n.volume_sol),
       color: colorForComponent(n.component),
       label: nodeLabel(n.id),
-      fixed: !hasEdges,
     };
     if (graph.hasNode(n.id)) {
       graph.mergeNodeAttributes(n.id, attrs);
@@ -174,7 +200,11 @@ function applyDiff(graph: Graph, nodes: NodeView[], edges: EdgeView[]) {
       graph.hasEdge(e.from, e.to) ? graph.edge(e.from, e.to)
       : graph.hasEdge(e.to, e.from) ? graph.edge(e.to, e.from)
       : null;
-    const attrs = { size: widthFromVolume(e.volume_sol), color: EDGE_COLOR };
+    const attrs = {
+      size: widthFromVolume(e.volume_sol),
+      color: edgeColor(e.volume_sol, maxVol),
+      weight: edgeWeight(degrees.get(e.from) ?? 0, degrees.get(e.to) ?? 0),
+    };
     if (existing) {
       graph.mergeEdgeAttributes(existing, attrs);
     } else {
@@ -189,12 +219,20 @@ function GraphLoader({ nodes, edges }: GraphCanvasProps) {
   const loaded = useRef(false);
   const { start, stop } = useWorkerLayoutForceAtlas2({
     settings: {
-      gravity: 0.4,
-      scalingRatio: 30,
-      slowDown: 3,
-      barnesHutOptimize: true,
+      // Light gravity, non-strong: just enough pull to resist drift, not
+      // enough to flatten local hub-spoke clusters into the center.
+      // StrongGravityMode scales force with distance which smooshes the
+      // whole graph toward center — off.
+      gravity: 0.3,
       strongGravityMode: false,
+      // Higher repulsion keeps spokes from crowding their hub.
+      scalingRatio: 60,
+      slowDown: 4,
+      barnesHutOptimize: true,
       linLogMode: true,
+      // Honor per-edge weight (see edgeWeight()): edges touching
+      // high-degree hubs pull less, giving spokes breathing room.
+      edgeWeightInfluence: 1,
     },
   });
 
@@ -223,7 +261,7 @@ export function GraphCanvas({ nodes, edges }: GraphCanvasProps) {
   const settings = useMemo(
     () => ({
       allowInvalidContainer: true,
-      defaultEdgeColor: EDGE_COLOR,
+      defaultEdgeColor: `rgba(200, 210, 235, ${EDGE_ALPHA_MAX})`,
       labelColor: { color: LABEL_COLOR },
       labelSize: 11,
       labelWeight: "500",

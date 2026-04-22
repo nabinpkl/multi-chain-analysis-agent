@@ -37,8 +37,6 @@ impl AppState {
 
         let state_machine = Arc::new(RwLock::new(StateMachine::new(
             config.state_window_secs,
-            config.state_top_edges,
-            config.state_whale_pad,
         )));
 
         let (tick_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
