@@ -5,14 +5,13 @@ import { formatInt, formatSol } from "@/lib/format";
 
 interface StatsPanelProps {
   stats: StatsView;
-  windowLabel: string;
 }
 
-export function StatsPanel({ stats, windowLabel }: StatsPanelProps) {
+export function StatsPanel({ stats }: StatsPanelProps) {
   return (
     <section className="space-y-5">
       <StatRow
-        label={`Volume · ${windowLabel}`}
+        label="Volume"
         value={`${formatSol(stats.total_volume_sol)} SOL`}
       />
       <StatRow label="Transactions" value={formatInt(stats.total_txs)} />

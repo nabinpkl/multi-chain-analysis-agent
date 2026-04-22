@@ -23,3 +23,8 @@ Items deferred from prior iterations. Pick from here when starting new work.
 
 # Ask AI to compute read only query in the graph so we have to be careful to not query delete.
 # AI usages
+
+# SOC2 Dashboard for solona
+
+Alternative (bigger change, not now): replace the header with something the panel can't do — a SOC-style event callout ("new whale entered top-500", "cluster X gained 12 edges in 30s"). But that's real work, not a tighten pass. Park it.
+

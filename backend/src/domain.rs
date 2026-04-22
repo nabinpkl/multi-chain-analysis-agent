@@ -50,6 +50,10 @@ pub struct StatsView {
     pub unique_wallets: u64,
     pub top_wallet: Option<String>,
     pub top_wallet_volume_sol: Option<f64>,
+    /// Instantaneous tx rate over the last ~30s of data, not the full
+    /// displayed window. Reported separately so the liveness pill breathes
+    /// instead of smoothing to a ~3600s average.
+    pub tx_per_sec_recent: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]

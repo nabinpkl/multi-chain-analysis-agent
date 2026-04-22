@@ -1,14 +1,12 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
 import { useOverview } from "@/hooks/use-overview";
-import type { OverviewWindow } from "@/lib/api";
-import { formatInt, formatSol, relativeTime, truncateAddress } from "@/lib/format";
+import { formatInt, relativeTime } from "@/lib/format";
 import { Legend } from "@/components/flow/legend";
+import { LiveIndicator } from "@/components/flow/live-indicator";
 import { StatsPanel } from "@/components/flow/stats-panel";
 import { TopWalletCard } from "@/components/flow/top-wallet-card";
-import { WindowSelect } from "@/components/flow/window-select";
 
 const GraphCanvas = dynamic(
   () => import("@/components/flow/graph-canvas").then((m) => m.GraphCanvas),
@@ -22,108 +20,20 @@ const GraphCanvas = dynamic(
   },
 );
 
-const WINDOW_LABELS: Record<OverviewWindow, string> = {
-  "15m": "last 15 minutes",
-  "1h": "last hour",
-  "6h": "last 6 hours",
-  "24h": "last 24 hours",
-};
-
-const WINDOW_SECS: Record<OverviewWindow, number> = {
-  "15m": 15 * 60,
-  "1h": 60 * 60,
-  "6h": 6 * 60 * 60,
-  "24h": 24 * 60 * 60,
-};
-
-function largestAvailable(elapsedSecs: number): OverviewWindow {
-  const order: OverviewWindow[] = ["24h", "6h", "1h", "15m"];
-  for (const w of order) {
-    if (elapsedSecs >= WINDOW_SECS[w]) return w;
-  }
-  return "15m";
-}
-
 export function OverviewPage() {
-  const [window, setWindow] = useState<OverviewWindow>("24h");
-  const query = useOverview(window);
+  const query = useOverview("1h");
   const data = query.data;
 
-  const elapsedSecs = data ? Math.max(0, data.window.to - data.window.from) : 0;
-
-  // If the selected window isn't yet available, fall back to the largest
-  // one that is. Runs once data arrives and only when state needs to change.
-  useEffect(() => {
-    if (!data) return;
-    if (elapsedSecs < WINDOW_SECS[window]) {
-      setWindow(largestAvailable(elapsedSecs));
-    }
-  }, [data, elapsedSecs, window]);
-
-  const headline = useMemo(() => {
-    if (!data) return null;
-    const { stats } = data;
-    const clusterCount = new Set(
-      data.nodes.filter((n) => n.component !== null).map((n) => n.component),
-    ).size;
-    return {
-      volume: formatSol(stats.total_volume_sol),
-      txs: formatInt(stats.total_txs),
-      wallets: formatInt(stats.unique_wallets),
-      clusters: clusterCount,
-      topWallet: stats.top_wallet,
-      topVolume:
-        stats.top_wallet_volume_sol !== null
-          ? formatSol(stats.top_wallet_volume_sol)
-          : null,
-    };
-  }, [data]);
+  const txPerSec = data?.stats.tx_per_sec_recent ?? 0;
+  const windowLabel = data?.window.label ?? "1h";
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)] min-h-[640px]">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-mca-border bg-mca-bg">
-        <div className="min-w-0 flex-1 pr-6">
-          <h1 className="text-[0.65rem] uppercase tracking-[2px] text-mca-muted mb-1">
-            Solana SOL flow ·{" "}
-            {data?.window.label ? `last ${data.window.label}` : WINDOW_LABELS[window]}
-          </h1>
-          <p className="text-mca-text text-sm sm:text-base leading-snug">
-            {headline ? (
-              <>
-                <span className="text-mca-accent font-medium tabular-nums">
-                  {headline.volume} SOL
-                </span>{" "}
-                moved across{" "}
-                <span className="text-mca-text tabular-nums">
-                  {headline.txs}
-                </span>{" "}
-                transactions.{" "}
-                {headline.topWallet && headline.topVolume && (
-                  <>
-                    Top wallet{" "}
-                    <span className="font-mono text-mca-dim">
-                      {truncateAddress(headline.topWallet)}
-                    </span>{" "}
-                    moved{" "}
-                    <span className="tabular-nums">{headline.topVolume} SOL</span>.
-                  </>
-                )}
-              </>
-            ) : query.isLoading ? (
-              <span className="text-mca-dim">loading…</span>
-            ) : query.isError ? (
-              <span className="text-mca-dim">
-                backend unreachable. is the api running at{" "}
-                {process.env.NEXT_PUBLIC_API_URL || "http://localhost:8002"}?
-              </span>
-            ) : null}
-          </p>
-        </div>
-        <WindowSelect
-          value={window}
-          onChange={setWindow}
-          elapsedSecs={elapsedSecs}
-        />
+      <header className="flex items-center justify-between px-6 py-3 border-b border-mca-border bg-mca-bg">
+        <h1 className="text-[0.7rem] uppercase tracking-[2px] text-mca-muted">
+          Solana SOL flow · last {windowLabel}
+        </h1>
+        <LiveIndicator txPerSec={txPerSec} active={!!data} />
       </header>
 
       <div className="flex-1 flex min-h-0">
@@ -143,12 +53,19 @@ export function OverviewPage() {
 
         <aside className="w-[320px] shrink-0 border-l border-mca-border bg-mca-surface/40 overflow-y-auto">
           <div className="p-6 space-y-8">
-            {data && (
+            {data ? (
               <>
-                <StatsPanel stats={data.stats} windowLabel={window} />
+                <StatsPanel stats={data.stats} />
                 <TopWalletCard stats={data.stats} />
                 <Legend />
               </>
+            ) : query.isError ? (
+              <p className="text-mca-dim text-sm">
+                backend unreachable. is the api running at{" "}
+                {process.env.NEXT_PUBLIC_API_URL || "http://localhost:8002"}?
+              </p>
+            ) : (
+              <p className="text-mca-dim text-sm">loading…</p>
             )}
           </div>
         </aside>

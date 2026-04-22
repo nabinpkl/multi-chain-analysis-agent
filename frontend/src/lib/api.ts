@@ -12,6 +12,7 @@ export interface StatsView {
   unique_wallets: number;
   top_wallet: string | null;
   top_wallet_volume_sol: number | null;
+  tx_per_sec_recent: number;
 }
 
 export interface NodeView {

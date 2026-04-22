@@ -43,6 +43,8 @@ use topk::TopK;
 pub type WalletId = Arc<str>;
 pub type EdgeKey = (WalletId, WalletId);
 
+const RECENT_RATE_WINDOW_SECS: u32 = 30;
+
 pub enum Transition {
     Increment(Edge),
     AdvanceWindow(u32),
@@ -329,6 +331,7 @@ impl StateMachine {
             unique_wallets: unique_wallets.len() as u64,
             top_wallet,
             top_wallet_volume_sol,
+            tx_per_sec_recent: self.recent_tx_rate(RECENT_RATE_WINDOW_SECS),
         };
 
         let effective_from = if total_txs > 0 {
@@ -442,6 +445,7 @@ impl StateMachine {
             unique_wallets: self.stats.unique_wallets.len() as u64,
             top_wallet,
             top_wallet_volume_sol,
+            tx_per_sec_recent: self.recent_tx_rate(RECENT_RATE_WINDOW_SECS),
         };
 
         let elapsed = reference.saturating_sub(effective_from);
@@ -460,6 +464,36 @@ impl StateMachine {
             generated_at: reference,
             is_partial,
         }
+    }
+
+    /// Tx rate over the trailing `window_secs` of ring data, anchored to
+     /// the newest ring entry's block_time (not wall-clock `now`). This
+     /// is what keeps the pill meaningful during catch-up, when the
+     /// ingester lags tip and host_now is far ahead of the newest data.
+     /// At tip, newest_block_time ≈ host_now, so the two agree.
+    fn recent_tx_rate(&self, window_secs: u32) -> f64 {
+        if window_secs == 0 {
+            return 0.0;
+        }
+        let newest = match self.ring.buf.back() {
+            Some(e) => e.block_time,
+            None => return 0.0,
+        };
+        let cutoff = newest.saturating_sub(window_secs);
+        let mut count: u64 = 0;
+        let mut oldest: Option<u32> = None;
+        for entry in self.ring.buf.iter().rev() {
+            if entry.block_time < cutoff {
+                break;
+            }
+            count += 1;
+            oldest = Some(entry.block_time);
+        }
+        let span = match oldest {
+            Some(t) => newest.saturating_sub(t).max(1) as f64,
+            None => return 0.0,
+        };
+        count as f64 / span
     }
 
     pub fn seq(&self) -> u64 {
