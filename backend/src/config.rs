@@ -11,8 +11,17 @@ pub struct Config {
     pub clickhouse_password: String,
     pub solana_rpc_url: String,
     pub rpc_min_interval: Duration,
-    pub ingest_batch_size: usize,
-    pub ingest_flush: Duration,
+    pub kafka_brokers: String,
+    pub kafka_topic_raw_edges: String,
+    pub kafka_group_live_state: String,
+    pub kafka_group_ch_sink: String,
+    pub kafka_auto_offset_reset: String,
+    pub ch_sink_batch_size: usize,
+    pub ch_sink_flush: Duration,
+    pub state_window_secs: u32,
+    pub state_top_edges: usize,
+    pub state_whale_pad: usize,
+    pub state_tick_interval: Duration,
 }
 
 impl Config {
@@ -32,15 +41,43 @@ impl Config {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(2000),
             ),
-            ingest_batch_size: env::var("INGEST_BATCH_SIZE")
+            kafka_brokers: env::var("KAFKA_BROKERS")
+                .unwrap_or_else(|_| "redpanda:9092".into()),
+            kafka_topic_raw_edges: env::var("KAFKA_TOPIC_RAW_EDGES")
+                .unwrap_or_else(|_| "solana.raw-edges".into()),
+            kafka_group_live_state: env::var("KAFKA_GROUP_LIVE_STATE")
+                .unwrap_or_else(|_| "live-state".into()),
+            kafka_group_ch_sink: env::var("KAFKA_GROUP_CH_SINK")
+                .unwrap_or_else(|_| "ch-sink".into()),
+            kafka_auto_offset_reset: env::var("KAFKA_AUTO_OFFSET_RESET")
+                .unwrap_or_else(|_| "latest".into()),
+            ch_sink_batch_size: env::var("CH_SINK_BATCH_SIZE")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(10_000),
-            ingest_flush: Duration::from_secs(
-                env::var("INGEST_FLUSH_SECS")
+                .unwrap_or(1000),
+            ch_sink_flush: Duration::from_secs(
+                env::var("CH_SINK_FLUSH_SECS")
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(5),
+            ),
+            state_window_secs: env::var("STATE_WINDOW_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(86400),
+            state_top_edges: env::var("STATE_TOP_EDGES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(500),
+            state_whale_pad: env::var("STATE_WHALE_PAD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(50),
+            state_tick_interval: Duration::from_millis(
+                env::var("STATE_TICK_INTERVAL_MS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1000),
             ),
         }
     }

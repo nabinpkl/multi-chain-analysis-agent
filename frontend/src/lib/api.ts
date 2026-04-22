@@ -33,7 +33,7 @@ export interface OverviewResponse {
   nodes: NodeView[];
   edges: EdgeView[];
   generated_at: number;
-  cache_ttl_secs: number;
+  is_partial: boolean;
 }
 
 const DEFAULT_API_URL = "http://localhost:8002";
@@ -48,10 +48,47 @@ export async function fetchOverview(
 ): Promise<OverviewResponse> {
   const url = new URL("/graph/overview", apiUrl());
   url.searchParams.set("window", window);
-
   const res = await fetch(url.toString(), { signal });
   if (!res.ok) {
     throw new Error(`overview request failed: ${res.status}`);
   }
   return res.json();
+}
+
+/**
+ * Opens an SSE connection to the overview stream for a specific window.
+ * `onSnapshot` fires on every `snapshot` event (initial + each tick where
+ * state changed). The returned cleanup function closes the connection.
+ */
+export function subscribeOverviewStream(
+  window: OverviewWindow,
+  onSnapshot: (snap: OverviewResponse) => void,
+  onError: (err: Event) => void,
+): () => void {
+  const url = new URL("/graph/overview/stream", apiUrl());
+  url.searchParams.set("window", window);
+  const es = new EventSource(url.toString());
+
+  es.addEventListener("snapshot", (ev) => {
+    try {
+      const data = JSON.parse((ev as MessageEvent).data) as OverviewResponse;
+      onSnapshot(data);
+    } catch {
+      // ignore malformed events
+    }
+  });
+
+  es.addEventListener("resync", () => {
+    // Trigger a REST-path refetch via caller's error handler path — the
+    // caller can react by calling fetchOverview once to re-sync state.
+    onError(new Event("resync"));
+  });
+
+  es.onerror = (ev) => {
+    onError(ev);
+  };
+
+  return () => {
+    es.close();
+  };
 }

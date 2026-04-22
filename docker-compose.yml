@@ -1,4 +1,31 @@
 services:
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    container_name: multichain-redpanda
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=1G
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+      - --rpc-addr=0.0.0.0:33145
+      - --advertise-rpc-addr=redpanda:33145
+    ports:
+      - "9092:9092"
+      - "9644:9644"
+    volumes:
+      - ./data/redpanda:/var/lib/redpanda/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health", "--exit-when-healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   clickhouse:
     image: clickhouse/clickhouse-server:latest
     container_name: multichain-clickhouse
@@ -23,6 +50,23 @@ services:
       timeout: 5s
       retries: 5
 
+  state-reset:
+    container_name: multichain-state-reset
+    build:
+      context: .
+      dockerfile: docker/state-reset/Dockerfile
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    environment:
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
+      - REDPANDA_BROKERS=redpanda:9092
+    restart: "no"
+
   api:
     container_name: multichain-api
     build:
@@ -37,9 +81,15 @@ services:
       - CLICKHOUSE_DB=multichain
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
+      - KAFKA_BROKERS=redpanda:9092
+      - KAFKA_TOPIC_RAW_EDGES=solana.raw-edges
     depends_on:
       clickhouse:
         condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      state-reset:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   tunnel:

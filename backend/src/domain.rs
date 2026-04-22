@@ -74,5 +74,8 @@ pub struct OverviewResponse {
     pub nodes: Vec<NodeView>,
     pub edges: Vec<EdgeView>,
     pub generated_at: u32,
-    pub cache_ttl_secs: u32,
+    /// True when the state machine doesn't yet hold a full `window_secs`
+    /// of data — e.g. freshly booted and still warming up. Frontend should
+    /// show the actual elapsed time in `window.label` and indicate partial.
+    pub is_partial: bool,
 }

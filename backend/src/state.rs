@@ -1,21 +1,28 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use clickhouse::Client;
+use parking_lot::RwLock;
+use tokio::sync::broadcast;
 
 use crate::config::Config;
-use crate::overview_cache::OverviewCache;
+use crate::state_machine::StateMachine;
+use crate::store::EdgeStore;
 use crate::store::clickhouse_store::ClickHouseEdgeStore;
-use crate::store::{EdgeStore, GraphStore};
 use crate::tip::TipTracker;
+
+const BROADCAST_CAPACITY: usize = 256;
 
 #[derive(Clone)]
 pub struct AppState {
     pub clickhouse: Client,
     pub store: Arc<dyn EdgeStore>,
-    pub graph: Arc<dyn GraphStore>,
     pub tip: TipTracker,
-    pub overview_cache: Arc<OverviewCache>,
+    pub state_machine: Arc<RwLock<StateMachine>>,
+    pub window_secs: u32,
+    /// Signal-only broadcast. Tick loop sends `()` whenever the state
+    /// machine advanced; SSE handlers react by re-snapshotting for the
+    /// window their connection is subscribed to.
+    pub tick_tx: broadcast::Sender<()>,
 }
 
 impl AppState {
@@ -28,12 +35,21 @@ impl AppState {
 
         let ch_store = Arc::new(ClickHouseEdgeStore::new(clickhouse.clone()));
 
+        let state_machine = Arc::new(RwLock::new(StateMachine::new(
+            config.state_window_secs,
+            config.state_top_edges,
+            config.state_whale_pad,
+        )));
+
+        let (tick_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
+
         Self {
             clickhouse,
-            store: ch_store.clone(),
-            graph: ch_store,
+            store: ch_store,
             tip: TipTracker::default(),
-            overview_cache: Arc::new(OverviewCache::new(Duration::from_secs(10))),
+            state_machine,
+            window_secs: config.state_window_secs,
+            tick_tx,
         }
     }
 }

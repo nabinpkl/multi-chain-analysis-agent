@@ -39,15 +39,5 @@ pub async fn bootstrap(client: &Client) -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    client
-        .query("TRUNCATE TABLE multichain.edges")
-        .execute()
-        .await?;
-
-    client
-        .query("TRUNCATE TABLE multichain.ingestion_state")
-        .execute()
-        .await?;
-
     Ok(())
 }

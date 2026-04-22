@@ -37,6 +37,17 @@ pub async fn ready(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     };
     let lag_seconds = lag_slots.map(|l| (l as f64 * SLOT_SECONDS).round() as u64);
 
+    let (sm_stream_start, sm_latest_block, sm_edge_pairs, sm_wallets, sm_ring) = {
+        let sm = state.state_machine.read();
+        (
+            sm.stream_start_ts(),
+            sm.latest_block_time(),
+            sm.edge_agg_len(),
+            sm.wallet_agg_len(),
+            sm.ring_len(),
+        )
+    };
+
     (
         StatusCode::OK,
         Json(json!({
@@ -47,6 +58,13 @@ pub async fn ready(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
                 "tip_slot": tip_slot,
                 "lag_slots": lag_slots,
                 "lag_seconds_approx": lag_seconds
+            },
+            "state_machine": {
+                "stream_start_ts": sm_stream_start,
+                "latest_block_time": sm_latest_block,
+                "edge_pairs": sm_edge_pairs,
+                "wallets": sm_wallets,
+                "ring_entries": sm_ring,
             }
         })),
     )

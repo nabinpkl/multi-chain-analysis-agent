@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useOverview } from "@/hooks/use-overview";
 import type { OverviewWindow } from "@/lib/api";
 import { formatInt, formatSol, relativeTime, truncateAddress } from "@/lib/format";
@@ -29,10 +29,36 @@ const WINDOW_LABELS: Record<OverviewWindow, string> = {
   "24h": "last 24 hours",
 };
 
+const WINDOW_SECS: Record<OverviewWindow, number> = {
+  "15m": 15 * 60,
+  "1h": 60 * 60,
+  "6h": 6 * 60 * 60,
+  "24h": 24 * 60 * 60,
+};
+
+function largestAvailable(elapsedSecs: number): OverviewWindow {
+  const order: OverviewWindow[] = ["24h", "6h", "1h", "15m"];
+  for (const w of order) {
+    if (elapsedSecs >= WINDOW_SECS[w]) return w;
+  }
+  return "15m";
+}
+
 export function OverviewPage() {
   const [window, setWindow] = useState<OverviewWindow>("24h");
   const query = useOverview(window);
   const data = query.data;
+
+  const elapsedSecs = data ? Math.max(0, data.window.to - data.window.from) : 0;
+
+  // If the selected window isn't yet available, fall back to the largest
+  // one that is. Runs once data arrives and only when state needs to change.
+  useEffect(() => {
+    if (!data) return;
+    if (elapsedSecs < WINDOW_SECS[window]) {
+      setWindow(largestAvailable(elapsedSecs));
+    }
+  }, [data, elapsedSecs, window]);
 
   const headline = useMemo(() => {
     if (!data) return null;
@@ -58,7 +84,8 @@ export function OverviewPage() {
       <header className="flex items-center justify-between px-6 py-4 border-b border-mca-border bg-mca-bg">
         <div className="min-w-0 flex-1 pr-6">
           <h1 className="text-[0.65rem] uppercase tracking-[2px] text-mca-muted mb-1">
-            Solana SOL flow · {WINDOW_LABELS[window]}
+            Solana SOL flow ·{" "}
+            {data?.window.label ? `last ${data.window.label}` : WINDOW_LABELS[window]}
           </h1>
           <p className="text-mca-text text-sm sm:text-base leading-snug">
             {headline ? (
@@ -92,7 +119,11 @@ export function OverviewPage() {
             ) : null}
           </p>
         </div>
-        <WindowSelect value={window} onChange={setWindow} />
+        <WindowSelect
+          value={window}
+          onChange={setWindow}
+          elapsedSecs={elapsedSecs}
+        />
       </header>
 
       <div className="flex-1 flex min-h-0">

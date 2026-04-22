@@ -9,16 +9,20 @@ mod api;
 mod config;
 mod domain;
 mod ingest;
-mod overview_cache;
 mod rpc;
+mod sinks;
 mod state;
+mod state_machine;
 mod store;
+mod stream;
 mod tip;
 
 use config::Config;
-use ingest::IngestConfig;
 use rpc::RpcClient;
+use sinks::ch_sink::{self, ChSinkConfig};
+use sinks::state_sink;
 use state::AppState;
+use stream::{EdgeProducer, consumer::build_consumer};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -47,35 +51,88 @@ async fn main() -> anyhow::Result<()> {
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    let bg_handles = if config.solana_rpc_url.is_empty() {
+    let mut bg_handles = Vec::new();
+
+    // state-sink consumer — drives the in-memory projection from Kafka.
+    let state_sink_handle = {
+        let consumer = build_consumer(
+            &config.kafka_brokers,
+            &config.kafka_group_live_state,
+            &config.kafka_topic_raw_edges,
+            &config.kafka_auto_offset_reset,
+        )?;
+        info!(group = %config.kafka_group_live_state, topic = %config.kafka_topic_raw_edges, "state-sink consumer ready");
+        let sm = state.state_machine.clone();
+        let rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = state_sink::run(consumer, sm, rx).await {
+                error!(error = %e, "state-sink exited with error");
+            }
+        })
+    };
+    bg_handles.push(state_sink_handle);
+
+    // 1Hz tick driving AdvanceWindow transitions + SSE signal.
+    let tick_handle = {
+        let sm = state.state_machine.clone();
+        let tx = state.tick_tx.clone();
+        let interval = config.state_tick_interval;
+        let rx = shutdown_rx.clone();
+        tokio::spawn(state_sink::tick_loop(sm, tx, interval, rx))
+    };
+    bg_handles.push(tick_handle);
+
+    // ch-sink consumer — accumulates cold projection.
+    let ch_sink_handle = {
+        let consumer = build_consumer(
+            &config.kafka_brokers,
+            &config.kafka_group_ch_sink,
+            &config.kafka_topic_raw_edges,
+            &config.kafka_auto_offset_reset,
+        )?;
+        info!(group = %config.kafka_group_ch_sink, topic = %config.kafka_topic_raw_edges, "ch-sink consumer ready");
+        let store = state.store.clone();
+        let cfg = ChSinkConfig {
+            batch_size: config.ch_sink_batch_size,
+            flush_interval: config.ch_sink_flush,
+        };
+        let rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = ch_sink::run(consumer, store, cfg, rx).await {
+                error!(error = %e, "ch-sink exited with error");
+            }
+        })
+    };
+    bg_handles.push(ch_sink_handle);
+
+    if config.solana_rpc_url.is_empty() {
         warn!("SOLANA_RPC_URL not set — ingester and tip tracker disabled");
-        Vec::new()
     } else {
         let rpc = RpcClient::new(config.solana_rpc_url.clone(), config.rpc_min_interval);
+
+        let producer = EdgeProducer::new(&config.kafka_brokers, &config.kafka_topic_raw_edges)?;
+        info!(brokers = %config.kafka_brokers, topic = %config.kafka_topic_raw_edges, "kafka producer ready");
 
         let ingest_handle = {
             let store = state.store.clone();
             let rpc = rpc.clone();
-            let cfg = IngestConfig {
-                batch_size: config.ingest_batch_size,
-                flush_interval: config.ingest_flush,
-            };
+            let tip = state.tip.clone();
             let rx = shutdown_rx.clone();
             tokio::spawn(async move {
-                if let Err(e) = ingest::run(rpc, store, cfg, rx).await {
+                if let Err(e) = ingest::run(rpc, store, producer, tip, rx).await {
                     error!(error = %e, "ingester exited with error");
                 }
             })
         };
+        bg_handles.push(ingest_handle);
 
         let tip_handle = {
             let tracker = state.tip.clone();
             let rx = shutdown_rx.clone();
             tokio::spawn(tracker.run(rpc, rx))
         };
-
-        vec![ingest_handle, tip_handle]
-    };
+        bg_handles.push(tip_handle);
+    }
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
