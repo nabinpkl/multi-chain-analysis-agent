@@ -19,3 +19,7 @@ Items deferred from prior iterations. Pick from here when starting new work.
   2. Any aggregate query on `edges` crosses ~300ms in practice (user-perceptible paint lag).
   3. We want to prune raw `edges` retention (90d) while keeping longer history on rollups.
   Schema sketch: `MATERIALIZED VIEW edges_hourly ENGINE = SummingMergeTree ORDER BY (hour, from_wallet, to_wallet) AS SELECT toStartOfHour(toDateTime(block_time)) AS hour, from_wallet, to_wallet, sum(amount) volume, count() tx_count FROM edges GROUP BY ...`. Refreshable-MV variant (`REFRESH EVERY 10 SECOND`) is the alternative to Axum in-memory cache *only* once we run multiple API replicas — single-binary wins with in-memory.
+
+
+# Ask AI to compute read only query in the graph so we have to be careful to not query delete.
+# AI usages
