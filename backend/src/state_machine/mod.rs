@@ -103,6 +103,15 @@ impl StateMachine {
     }
 
     fn increment(&mut self, edge: Edge) {
+        // Overview aggregates are SOL-denominated. SPL transfers
+        // arrive on the same stream but their `amount` is in unknown
+        // token base units; mixing them into `total_volume` would
+        // produce nonsense. Skip non-SOL edges entirely  the raw
+        // graph still sees them, only the windowed overview view
+        // ignores them.
+        if !edge.mint.is_empty() {
+            return;
+        }
         let from = self.ring.intern(&edge.from_wallet);
         let to = self.ring.intern(&edge.to_wallet);
         let key = (from.clone(), to.clone());

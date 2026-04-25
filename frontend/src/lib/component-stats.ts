@@ -29,6 +29,7 @@ export interface ComponentStats {
 }
 
 const EMPTY_ROLE_COUNTS = (): Record<NodeRole, number> => ({
+  "token-mint": 0,
   "tip-account": 0,
   "mev-searcher": 0,
   "flow-hub": 0,

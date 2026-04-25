@@ -43,16 +43,35 @@ struct EdgeWire<'a> {
     block_time: u32,
     from: &'a str,
     to: &'a str,
+    /// SOL volume only. For SPL transfers (mint != ""), this is 0
+    /// because the amount is in unknown token base units; the frontend
+    /// uses edge presence + degree only for SPL.
     volume_sol: f64,
+    /// Empty / absent for native SOL, otherwise the SPL mint pubkey.
+    /// Skipped on the wire when empty so SOL-dominant streams stay
+    /// compact.
+    #[serde(skip_serializing_if = "str::is_empty")]
+    mint: &'a str,
+    /// One of "mint" / "burn" when the edge represents token issuance
+    /// or destruction. Absent for regular transfers.
+    #[serde(skip_serializing_if = "str::is_empty")]
+    kind: &'a str,
 }
 
 fn edge_event(edge: &Arc<Edge>) -> Event {
+    let is_sol = edge.mint.is_empty();
     let wire = EdgeWire {
         signature: &edge.signature,
         block_time: edge.block_time,
         from: &edge.from_wallet,
         to: &edge.to_wallet,
-        volume_sol: edge.amount as f64 / LAMPORTS_PER_SOL,
+        volume_sol: if is_sol {
+            edge.amount as f64 / LAMPORTS_PER_SOL
+        } else {
+            0.0
+        },
+        mint: &edge.mint,
+        kind: &edge.kind,
     };
     match Event::default().event("edge").json_data(&wire) {
         Ok(ev) => ev,

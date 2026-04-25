@@ -76,7 +76,18 @@ const MIN_COMPONENT_SIZE_FOR_PUSH = 2;
 // attraction still holds them connected; it just stretches longer,
 // which is the desired visual ("you can see the bridge, but the
 // communities don't sit on top of each other").
-const CROSS_COMMUNITY_REPULSION_FACTOR = 6;
+const CROSS_COMMUNITY_REPULSION_FACTOR = 20;
+// Tip-account nodes (Jito tips co-anchoring the megacore) get pulled
+// toward angular target positions on a ring around the component
+// centroid. Forces them apart from each other deterministically; their
+// attached searcher fans follow via standard edge attraction. Result:
+// the megacore stops being one beige blob and resolves into N visible
+// petals, one per tip, with multi-tip searchers settling into the
+// center between petals. Spring-like force toward the target; decays
+// as the tip approaches its target.
+const TIP_TARGET_RING_K = 0.025;
+const TIP_RING_RADIUS_MIN = 220;
+const TIP_RING_RADIUS_MAX = 850;
 // A node with this many visible edges is a megahub: probably a
 // Jito tip account, DEX fee receiver, or other routing/aggregator
 // wallet. We don't filter it (we want to see it exists), but its
@@ -90,7 +101,14 @@ const MEGAHUB_VISIBLE_DEGREE = 50;
 // Tuned against the existing leaf-vs-hub equilibrium (~30 world
 // units in normal star clusters) to give megahubs a roughly 8x
 // wider footprint.
-const MEGAHUB_EDGE_REST_LENGTH = 250;
+const MEGAHUB_EDGE_REST_LENGTH = 420;
+// Components above this size are treated as "large": every edge in
+// them gets a non-zero rest length so the searcher-to-searcher mesh
+// stops packing tightly. Without this, leaves attached to multiple
+// hubs or to other leaves collapse onto each other and the inner
+// space between tips reads as a uniform jam.
+const LARGE_COMPONENT_SIZE = 100;
+const LARGE_COMPONENT_EDGE_REST_LENGTH = 90;
 // Per-node velocity, keyed by node id. Survives across ticks so
 // damping actually damps.
 const velocities = new Map<string, { vx: number; vy: number }>();
@@ -145,10 +163,16 @@ export function stepPerComponentLayout(
     // the same community" which means no cross-community boost, which
     // is the right fallback.
     const communities = new Int32Array(n);
-    // Per-node visible-degree count, used to flag megahubs so their
-    // edges get a long rest length and their leaves spread out.
-    const visibleDegrees = new Int32Array(n);
+    // Per-node degree, used to flag megahubs so their edges get a
+    // long rest length and their leaves spread out.
+    const degrees = new Int32Array(n);
     const idIndex = new Map<string, number>();
+    // Indices of nodes in this component whose role is "tip-account".
+    // Drives the ring-spread force below; sorted by id so each tip
+    // always lands on the same angular position frame to frame.
+    const tipIndices: number[] = [];
+    let cx = 0;
+    let cy = 0;
 
     for (let i = 0; i < n; i++) {
       const id = ids[i];
@@ -157,9 +181,18 @@ export function stepPerComponentLayout(
       ys[i] = graph.getNodeAttribute(id, "y") as number;
       sizes[i] = Math.max(1, (graph.getNodeAttribute(id, "size") as number) ?? 1);
       communities[i] = nodeToCommunity?.get(id) ?? -1;
-      visibleDegrees[i] =
-        (graph.getNodeAttribute(id, "visibleDegree") as number) ?? 0;
+      degrees[i] = (graph.getNodeAttribute(id, "degree") as number) ?? 0;
+      cx += xs[i];
+      cy += ys[i];
+      if (graph.getNodeAttribute(id, "role") === "tip-account") {
+        tipIndices.push(i);
+      }
     }
+    cx /= n;
+    cy /= n;
+    // Stable angular assignment: sort tips by id so the same tip lands
+    // on the same petal across frames even as new tips appear.
+    tipIndices.sort((a, b) => (ids[a] < ids[b] ? -1 : ids[a] > ids[b] ? 1 : 0));
 
     // Pairwise repulsion, size-weighted so hubs claim their own space
     // and leaves orbit at an equilibrium proportional to the hub.
@@ -195,15 +228,10 @@ export function stepPerComponentLayout(
 
     // Attraction over edges inside this component. We only iterate
     // edges incident on the first endpoint we encounter in each pair
-    // (index ordering) to avoid double-counting. Hidden edges (those
-    // that haven't crossed MIN_EDGE_TX_COUNT yet) don't contribute  if
-    // there's no visible line on screen, there shouldn't be a force
-    // either, otherwise nodes drift toward each other for no reason
-    // the user can see.
+    // (index ordering) to avoid double-counting.
     for (let i = 0; i < n; i++) {
       const srcId = ids[i];
       graph.forEachEdge(srcId, (_eid, attrs, source, target) => {
-        if (attrs.hidden) return;
         const other = source === srcId ? target : source;
         const j = idIndex.get(other);
         if (j === undefined || j <= i) return;
@@ -211,17 +239,21 @@ export function stepPerComponentLayout(
         const dy = ys[j] - ys[i];
         const d = Math.sqrt(dx * dx + dy * dy) + 0.01;
         const weight = ((attrs.weight as number) ?? 1);
-        // Megahub edges (either endpoint has 50+ visible counterparties)
-        // get a non-zero rest length: they want distance d == REST, not
+        // Megahub edges (either endpoint has 50+ counterparties) get
+        // a non-zero rest length: they want distance d == REST, not
         // d == 0. If they're already inside the rest length, attraction
         // is zero and pairwise repulsion alone pushes them outward. If
         // they're stretched past it, normal attraction pulls them back.
         // Net effect: megahubs sit at the center of a wide leaf ring
         // instead of compressing all leaves into a tight knot.
         const isMegahubEdge =
-          visibleDegrees[i] >= MEGAHUB_VISIBLE_DEGREE ||
-          visibleDegrees[j] >= MEGAHUB_VISIBLE_DEGREE;
-        const restLength = isMegahubEdge ? MEGAHUB_EDGE_REST_LENGTH : 0;
+          degrees[i] >= MEGAHUB_VISIBLE_DEGREE ||
+          degrees[j] >= MEGAHUB_VISIBLE_DEGREE;
+        const restLength = isMegahubEdge
+          ? MEGAHUB_EDGE_REST_LENGTH
+          : n >= LARGE_COMPONENT_SIZE
+            ? LARGE_COMPONENT_EDGE_REST_LENGTH
+            : 0;
         const stretch = d - restLength;
         if (stretch <= 0) return;
         const f = ATTRACTION * weight * stretch;
@@ -232,6 +264,26 @@ export function stepPerComponentLayout(
         fx[j] -= f * ux;
         fy[j] -= f * uy;
       });
+    }
+
+    // Ring-spread force on tip-accounts. With >=2 tips in the
+    // component, distribute them evenly around a ring at the
+    // component centroid; spring force pulls each toward its target
+    // angle. Searcher fans follow via existing edge attraction.
+    if (tipIndices.length >= 2) {
+      const ringRadius = Math.min(
+        TIP_RING_RADIUS_MAX,
+        Math.max(TIP_RING_RADIUS_MIN, Math.sqrt(n) * 50),
+      );
+      const numTips = tipIndices.length;
+      for (let k = 0; k < numTips; k++) {
+        const i = tipIndices[k];
+        const theta = (2 * Math.PI * k) / numTips;
+        const targetX = cx + ringRadius * Math.cos(theta);
+        const targetY = cy + ringRadius * Math.sin(theta);
+        fx[i] += (targetX - xs[i]) * TIP_TARGET_RING_K;
+        fy[i] += (targetY - ys[i]) * TIP_TARGET_RING_K;
+      }
     }
 
     // Integrate with velocity + damping. Each node keeps a velocity

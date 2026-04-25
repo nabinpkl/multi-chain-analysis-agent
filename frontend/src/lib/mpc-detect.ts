@@ -104,25 +104,3 @@ export function detectMpcClusters(graph: Graph): MpcDetection {
 
   return { nodeToCommunity, mpcCommunities, communityStats };
 }
-
-// Golden-angle palette so adjacent community IDs don't collide on hue.
-// Returned as rgb() because Sigma's WebGL parser doesn't accept oklch;
-// we pick perceptually-balanced HSL values in the mid-saturation band
-// so no single community visually screams louder than another.
-export function colorForMpcCommunity(c: number): string {
-  const hue = (c * 137.508) % 360;
-  return hslToRgbString(hue, 62, 62);
-}
-
-function hslToRgbString(h: number, sPct: number, lPct: number): string {
-  const s = sPct / 100;
-  const l = lPct / 100;
-  const k = (n: number) => (n + h / 30) % 12;
-  const a = s * Math.min(l, 1 - l);
-  const f = (n: number) =>
-    l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-  const r = Math.round(f(0) * 255);
-  const g = Math.round(f(8) * 255);
-  const b = Math.round(f(4) * 255);
-  return `rgb(${r}, ${g}, ${b})`;
-}

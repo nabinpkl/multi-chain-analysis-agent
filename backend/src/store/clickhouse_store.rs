@@ -76,13 +76,16 @@ impl GraphStore for ClickHouseEdgeStore {
         to_ts: u32,
         limit: u32,
     ) -> anyhow::Result<Vec<EdgeAggregate>> {
+        // SOL only: `mint = ''`. Mixing SPL `amount` (per-mint base
+        // units) into a sum-of-lamports aggregate would produce
+        // meaningless numbers.
         let rows = self
             .client
             .query(
                 "SELECT from_wallet, to_wallet, sum(amount) AS volume_lamports, \
                  count() AS tx_count \
                  FROM multichain.edges \
-                 WHERE block_time >= ? AND block_time < ? \
+                 WHERE block_time >= ? AND block_time < ? AND mint = '' \
                  GROUP BY from_wallet, to_wallet \
                  ORDER BY volume_lamports DESC \
                  LIMIT ?",
@@ -106,10 +109,10 @@ impl GraphStore for ClickHouseEdgeStore {
             .query(
                 "SELECT wallet, sum(amount) AS volume_lamports FROM ( \
                      SELECT from_wallet AS wallet, amount FROM multichain.edges \
-                     WHERE block_time >= ? AND block_time < ? \
+                     WHERE block_time >= ? AND block_time < ? AND mint = '' \
                      UNION ALL \
                      SELECT to_wallet AS wallet, amount FROM multichain.edges \
-                     WHERE block_time >= ? AND block_time < ? \
+                     WHERE block_time >= ? AND block_time < ? AND mint = '' \
                  ) \
                  GROUP BY wallet \
                  ORDER BY volume_lamports DESC \
@@ -134,7 +137,7 @@ impl GraphStore for ClickHouseEdgeStore {
                      count() AS total_txs, \
                      uniqExact(arrayJoin([from_wallet, to_wallet])) AS unique_wallets \
                  FROM multichain.edges \
-                 WHERE block_time >= ? AND block_time < ?",
+                 WHERE block_time >= ? AND block_time < ? AND mint = ''",
             )
             .bind(from_ts)
             .bind(to_ts)

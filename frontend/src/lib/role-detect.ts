@@ -7,6 +7,7 @@ import type Graph from "graphology";
  * without recomputing. The raw graph stays raw  we just tag it.
  */
 export type NodeRole =
+  | "token-mint" // Mint pubkey: an SPL/Token-2022 mint account, not a wallet.
   | "tip-account" // Jito-style fee/tip receiver: high degree, dust avg/edge.
   | "mev-searcher" // Touches >=7 tip accounts, near-zero non-tip SOL footprint.
   | "flow-hub" // High-degree real economic actor (DEX vault, exchange hot wallet).
@@ -20,6 +21,16 @@ export interface ClassifyInput {
   tipAddrs: Set<string>;
   /** Union of all flagged MPC community member ids. */
   mpcMembers: Set<string>;
+  /**
+   * Set of addresses observed as SPL mint pubkeys (i.e. they appeared
+   * as `from` on a `kind="mint"` edge or `to` on a `kind="burn"` edge).
+   * Mint pubkeys are token contracts, not user wallets, and must not
+   * be classified by the tip/whale/flow-hub heuristics  the high-fanout
+   * pattern from a meme-coin launch would otherwise look exactly like
+   * a tip account. Override with `token-mint` first, regardless of
+   * other signals.
+   */
+  mintAddrs: Set<string>;
   /**
    * Optional precomputed map of "how many tip accounts does this node
    * touch?" If provided, we skip a second neighbor walk for the
@@ -55,13 +66,22 @@ const WHALE_DEGREE_MAX = 10;
  *
  * Resolution order is "first match wins" so a wallet that's both an
  * MPC member and a whale gets the more specific tag (whale). Order:
- *   tip-account -> mev-searcher -> flow-hub -> whale -> mpc-member -> normal
+ *   token-mint -> tip-account -> mev-searcher -> flow-hub -> whale -> mpc-member -> normal
+ *
+ * `token-mint` runs first because mint pubkeys are token contracts and
+ * a popular meme-coin mint can rack up thousands of recipient edges
+ * with tiny per-edge volume  exactly the tip-account signature.
+ * Without the override the classifier would mislabel them.
  */
 export function classifyNodes(input: ClassifyInput): Map<string, NodeRole> {
-  const { graph, tipAddrs, mpcMembers, tipsTouchedByNode } = input;
+  const { graph, tipAddrs, mpcMembers, mintAddrs, tipsTouchedByNode } = input;
   const roles = new Map<string, NodeRole>();
 
   graph.forEachNode((id) => {
+    if (mintAddrs.has(id)) {
+      roles.set(id, "token-mint");
+      return;
+    }
     if (tipAddrs.has(id)) {
       roles.set(id, "tip-account");
       return;

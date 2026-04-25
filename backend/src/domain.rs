@@ -6,12 +6,27 @@ pub const LAMPORTS_PER_SOL: f64 = 1_000_000_000.0;
 #[derive(Debug, Clone, Row, Serialize, Deserialize)]
 pub struct Edge {
     pub signature: String,
+    /// Sequence number for transfers within a single transaction.
+    /// Multiple transfers (across mints or amounts) get distinct values
+    /// so the (signature, instruction_idx) primary key is unique.
     pub instruction_idx: u16,
     pub slot: u64,
     pub block_time: u32,
     pub from_wallet: String,
     pub to_wallet: String,
+    /// Raw base units. Lamports if `mint` is empty (native SOL),
+    /// otherwise per-mint base units. Decimals are not tracked.
     pub amount: u64,
+    /// Empty string for native SOL, otherwise the SPL mint pubkey.
+    /// ClickHouse Strings are NOT NULL so we use empty-string-as-SOL
+    /// rather than `Nullable(String)` to keep the order key tight.
+    pub mint: String,
+    /// One of `""` (regular transfer), `"mint"` (token issuance),
+    /// `"burn"` (token destruction). Mint and burn edges use the mint
+    /// pubkey as the synthetic source or destination so the supply
+    /// hub becomes visible in the graph. Empty string is the default
+    /// for backward consistency with `mint`-empty SOL edges.
+    pub kind: String,
     pub version: u64,
 }
 

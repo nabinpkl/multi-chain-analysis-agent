@@ -14,12 +14,14 @@ import {
   computeComponentStats,
   type ComponentStats,
 } from "@/lib/component-stats";
-import { colorForMpcCommunity, detectMpcClusters } from "@/lib/mpc-detect";
+import { detectMpcClusters } from "@/lib/mpc-detect";
 import { stepPerComponentLayout } from "@/lib/per-component-layout";
 import { classifyNodes, type NodeRole } from "@/lib/role-detect";
+import { colorForEdgeKind, colorForRole, ROLE_PALETTE } from "@/lib/role-colors";
 
 const MPC_DETECT_INTERVAL_MS = 3000;
-const NEUTRAL_NODE_COLOR = "#d9c8a9";
+
+export type RoleSummary = Record<NodeRole, number>;
 
 /**
  * Owns a live graphology graph fed by the /graph/raw/stream SSE endpoint.
@@ -40,7 +42,6 @@ export function useRawStream() {
 
   const pendingRef = useRef<RawEdge[]>([]);
   const rafRef = useRef<number | null>(null);
-  const filteredRef = useRef(0);
   // Union-Find over connected components. Drives teleport-on-merge
   // so two components bridged by a new edge snap together immediately
   // instead of relying on FA2 to pull them across the canvas.
@@ -55,6 +56,11 @@ export function useRawStream() {
   // UIs can subscribe without recomputing. The same role is also
   // written onto each node as a `role` attribute for direct readers.
   const rolesRef = useRef<Map<string, NodeRole>>(new Map());
+  // Set of pubkeys we've observed as the synthetic peer on a mint or
+  // burn edge. They're SPL/Token-2022 mint accounts (token contracts),
+  // not user wallets. The role classifier checks this set first so a
+  // popular meme-coin mint doesn't get mislabeled as a tip-account.
+  const mintAddrsRef = useRef<Set<string>>(new Set());
   // Latest per-component aggregates (size, totalVolume, top members,
   // role counts), keyed by Union-Find root id. Recomputed each detect
   // tick. Connected components are the most informative grouping in
@@ -65,13 +71,20 @@ export function useRawStream() {
     edgeCount: number;
     nodeCount: number;
     lagged: number;
-    filtered: number;
   }>({
     connected: false,
     edgeCount: 0,
     nodeCount: 0,
     lagged: 0,
-    filtered: 0,
+  });
+  const [roleSummary, setRoleSummary] = useState<RoleSummary>({
+    "token-mint": 0,
+    "tip-account": 0,
+    "mev-searcher": 0,
+    "flow-hub": 0,
+    whale: 0,
+    "mpc-member": 0,
+    normal: 0,
   });
 
   useEffect(() => {
@@ -83,14 +96,12 @@ export function useRawStream() {
       if (batch.length === 0) return;
       pendingRef.current = [];
       for (const e of batch) {
-        const acted = applyEdge(graph, e, componentsRef.current);
-        if (!acted) filteredRef.current += 1;
+        applyEdge(graph, e, componentsRef.current, mintAddrsRef.current);
       }
       setStatus((s) => ({
         ...s,
         edgeCount: graph.size,
         nodeCount: graph.order,
-        filtered: filteredRef.current,
       }));
     };
 
@@ -139,14 +150,6 @@ export function useRawStream() {
       const { nodeToCommunity, mpcCommunities, communityStats } =
         detectMpcClusters(graph);
       nodeToCommunityRef.current = nodeToCommunity;
-      graph.forEachNode((id) => {
-        const c = nodeToCommunity.get(id);
-        const color =
-          c !== undefined && mpcCommunities.has(c)
-            ? colorForMpcCommunity(c)
-            : NEUTRAL_NODE_COLOR;
-        graph.setNodeAttribute(id, "color", color);
-      });
       if (mpcCommunities.size > 0) {
         // Sort by totalVolume rather than size: a 30-wallet cluster
         // moving 2,800 SOL is the interesting story, not a 200-wallet
@@ -194,13 +197,13 @@ export function useRawStream() {
 
       // Per-cluster centrality diagnostic. For each connected
       // component above a minimum size, find the node with the
-      // highest visibleDegree (the "biggest party") and the
-      // runner-up. The ratio tells us whether the cluster has a
-      // clear center (ratio >> 1 = star shape, biggest is
-      // unambiguous) or no clear center (ratio ~= 1 = multi-hub or
-      // mesh, biggest is a tie). We also report the biggest node's
-      // distance from the cluster centroid so we can see whether
-      // force balance is already placing it there or not.
+      // highest degree (the "biggest party") and the runner-up. The
+      // ratio tells us whether the cluster has a clear center
+      // (ratio >> 1 = star shape, biggest is unambiguous) or no
+      // clear center (ratio ~= 1 = multi-hub or mesh, biggest is a
+      // tie). We also report the biggest node's distance from the
+      // cluster centroid so we can see whether force balance is
+      // already placing it there or not.
       const clusters: Array<{
         size: number;
         top: string;
@@ -220,7 +223,7 @@ export function useRawStream() {
           cx += graph.getNodeAttribute(id, "x") as number;
           cy += graph.getNodeAttribute(id, "y") as number;
           const d =
-            (graph.getNodeAttribute(id, "visibleDegree") as number) ?? 0;
+            (graph.getNodeAttribute(id, "degree") as number) ?? 0;
           if (d > topDeg) {
             secondDeg = topDeg;
             topDeg = d;
@@ -358,12 +361,26 @@ export function useRawStream() {
         graph,
         tipAddrs: tipSet,
         mpcMembers,
+        mintAddrs: mintAddrsRef.current,
         tipsTouchedByNode,
       });
+      const summary: RoleSummary = {
+        "token-mint": 0,
+        "tip-account": 0,
+        "mev-searcher": 0,
+        "flow-hub": 0,
+        whale: 0,
+        "mpc-member": 0,
+        normal: 0,
+      };
       graph.forEachNode((id) => {
-        graph.setNodeAttribute(id, "role", roles.get(id) ?? "normal");
+        const role = roles.get(id) ?? "normal";
+        graph.setNodeAttribute(id, "role", role);
+        graph.setNodeAttribute(id, "color", colorForRole(role));
+        summary[role] += 1;
       });
       rolesRef.current = roles;
+      setRoleSummary(summary);
 
       const componentStats = computeComponentStats(
         graph,
@@ -372,19 +389,8 @@ export function useRawStream() {
       );
       componentStatsRef.current = componentStats;
 
-      const roleSummary: Record<NodeRole, number> = {
-        "tip-account": 0,
-        "mev-searcher": 0,
-        "flow-hub": 0,
-        whale: 0,
-        "mpc-member": 0,
-        normal: 0,
-      };
-      for (const role of roles.values()) {
-        roleSummary[role] += 1;
-      }
       // eslint-disable-next-line no-console
-      console.log("[roles] " + JSON.stringify(roleSummary));
+      console.log("[roles] " + JSON.stringify(summary));
     }, MPC_DETECT_INTERVAL_MS);
 
     return () => {
@@ -406,6 +412,7 @@ export function useRawStream() {
     // eslint-disable-next-line react-hooks/refs
     graph: graphRef.current,
     status,
+    roleSummary,
     rolesRef,
     componentStatsRef,
   };
@@ -482,13 +489,9 @@ function ensureNode(
     x,
     y,
     size: 0.8,
-    color: "#d9c8a9",
+    color: ROLE_PALETTE.normal.rgb,
     label: nodeLabel(id),
     degree: 0,
-    // Only edges that have actually become visible (txCount >=
-    // MIN_EDGE_TX_COUNT) count toward size. A wallet with 50 hidden
-    // one-off dust pairs shouldn't render as a hub.
-    visibleDegree: 0,
     volume: 0,
     selfLoops: 0,
     // MPC signal inputs. inVol/outVol feed the balanced-flow ratio;
@@ -505,66 +508,46 @@ function ensureNode(
   });
 }
 
-/// Below this SOL volume, a brand-new pair (both endpoints unseen)
-/// is treated as dust and skipped. If either endpoint is already in
-/// the graph, we always include it  that's a fan-out signal and not
-/// noise. 0.001 SOL = 1M lamports; the Solana median transfer in our
-/// stream is ~0.0001 SOL, so this threshold filters the long tail of
-/// dust-only pairs without hiding real flow involving an active wallet.
-const MIN_LONELY_VOLUME = 0.001;
-
-/// Returns true if the edge was applied (rendered), false if filtered
-/// out as noise. Self-loops on a known wallet always count.
+// SPL/Token-2022 edges arrive with `volume_sol == 0` and `mint`
+// set. Every volume increment below uses `e.volume_sol` directly,
+// so SPL edges contribute zero to all SOL-denominated signals
+// (`volume`, `inVol`, `outVol`, `volAB/volBA`, `bidirVol`) while
+// still bumping `degree`, `txCount`, and `txAB/txBA`. This keeps
+// tip/whale/MPC/flow-hub detection accurate for the SOL slice and
+// lets SPL transfers add only to graph topology.
 function applyEdge(
   graph: Graph,
   e: RawEdge,
   components: ComponentState,
-): boolean {
+  mintAddrs: Set<string>,
+): void {
+  // Mint pubkey discovery. For "mint" edges the synthetic source is
+  // the mint account; for "burn" edges it's the destination. Recording
+  // it here means the next detect tick can override the classifier.
+  if (e.kind === "mint") {
+    mintAddrs.add(e.from);
+  } else if (e.kind === "burn") {
+    mintAddrs.add(e.to);
+  }
   // Self-loops: no geometric meaning, but surface them on the node so
-  // bot/spam wallets still show up. Filter dust self-loops on brand-new
-  // wallets for the same reason as regular edges.
+  // bot/spam wallets still show up.
   if (e.from === e.to) {
-    if (!graph.hasNode(e.from) && e.volume_sol < MIN_LONELY_VOLUME) {
-      return false;
-    }
     ensureNode(graph, e.from, null, components);
     const cur = (graph.getNodeAttribute(e.from, "selfLoops") as number) + 1;
     graph.setNodeAttribute(e.from, "selfLoops", cur);
     graph.setNodeAttribute(e.from, "size", nodeSize(graph, e.from));
-    return true;
+    return;
   }
 
-  // Dust filter: if BOTH endpoints are brand-new AND volume is tiny,
-  // skip entirely. This kills one-off wallet-pair dust without hiding
-  // any transaction that touches an already-known (busy) wallet.
   const fromExists = graph.hasNode(e.from);
   const toExists = graph.hasNode(e.to);
-  if (!fromExists && !toExists && e.volume_sol < MIN_LONELY_VOLUME) {
-    return false;
-  }
-
-  // Edges start hidden until txCount crosses MIN_EDGE_TX_COUNT. We
-  // defer every visual side-effect of the edge until that crossing
-  // spawn placement, union-find merge, attraction force, layout
-  // teleport. Otherwise a brand-new orphan would land on top of its
-  // future partner before there's any visible line connecting them,
-  // and the layout would silently pull components together for edges
-  // the user can't see. "Edge appears, then node moves," not the
-  // other way around.
-  const edgeStartsHidden = MIN_EDGE_TX_COUNT > 1;
   if (!fromExists && !toExists) {
-    // Brand-new pair: spawn together regardless. They form their own
-    // tiny component at an orphan-spread position; no other component
-    // is involved.
     ensureNode(graph, e.from, null, components);
     ensureNode(graph, e.to, e.from, components);
   } else if (!fromExists) {
-    // Only e.to exists. If the edge starts hidden, spawn the new node
-    // at orphan-spread (far from everything) so it doesn't visually
-    // teleport to the cluster before the edge is real.
-    ensureNode(graph, e.from, edgeStartsHidden ? null : e.to, components);
+    ensureNode(graph, e.from, e.to, components);
   } else if (!toExists) {
-    ensureNode(graph, e.to, edgeStartsHidden ? null : e.from, components);
+    ensureNode(graph, e.to, e.from, components);
   }
 
   // Node volume accounting, split by direction so we can compute a
@@ -579,7 +562,6 @@ function applyEdge(
   // hasEdge handles both directions.
   if (graph.hasEdge(e.from, e.to)) {
     const eid = graph.edge(e.from, e.to)!;
-    const wasHidden = graph.getEdgeAttribute(eid, "hidden") as boolean;
     incAttr(graph, eid, "volume", e.volume_sol, "edge");
     incAttr(graph, eid, "txCount", 1, "edge");
     bumpDirection(graph, eid, e);
@@ -589,22 +571,9 @@ function applyEdge(
       edgeWidth(graph.getEdgeAttribute(eid, "volume") as number, graph, e.from, e.to),
     );
     graph.setEdgeAttribute(eid, "weight", graph.getEdgeAttribute(eid, "txCount") as number);
-    const txCount = graph.getEdgeAttribute(eid, "txCount") as number;
-    if (wasHidden && txCount >= MIN_EDGE_TX_COUNT) {
-      // Edge just crossed the visibility threshold. This is where all
-      // the deferred work happens: union the components, migrate the
-      // loser's members to the winner's anchor, freeze the edge color
-      // against the post-migration positions, and unhide. The order
-      // matters  migrate first so the color is computed against the
-      // final node positions, otherwise it'd be picked from the old
-      // distant orphan-spread location and read as a long faint edge
-      // even though the cluster is now compact.
-      commitVisibility(graph, components, e.from, e.to, eid);
-    }
   } else {
     // Canonical direction = the "from" of the very first observation.
     // Later txs are classified as AB (matches canonical) or BA (reverse).
-    const startsHidden = MIN_EDGE_TX_COUNT > 1;
     graph.addEdge(e.from, e.to, {
       volume: e.volume_sol,
       txCount: 1,
@@ -615,30 +584,13 @@ function applyEdge(
       txAB: 1,
       txBA: 0,
       size: edgeWidth(e.volume_sol, graph, e.from, e.to),
-      color: computeEdgeColor(graph, e.from, e.to),
-      hidden: startsHidden,
+      color: e.kind ? colorForEdgeKind(e.kind) : EDGE_COLOR,
+      kind: e.kind ?? "transfer",
     });
-    // First edge for either endpoint bumps total degree. visibleDegree
-    // only bumps if the edge is visible from the start (which it isn't
-    // when MIN_EDGE_TX_COUNT > 1).
     incAttr(graph, e.from, "degree", 1);
     incAttr(graph, e.to, "degree", 1);
-    if (!startsHidden) {
-      // Edge is visible from creation (MIN_EDGE_TX_COUNT == 1). Run
-      // the same union+migrate+visibleDegree work that the visibility
-      // crossing branch does, since there's nothing to defer.
-      const eid = graph.edge(e.from, e.to)!;
-      commitVisibility(graph, components, e.from, e.to, eid);
-    } else {
-      graph.setNodeAttribute(e.from, "size", nodeSize(graph, e.from));
-      graph.setNodeAttribute(e.to, "size", nodeSize(graph, e.to));
-      refreshEdgeSizes(graph, e.from);
-      refreshEdgeSizes(graph, e.to);
-      refreshNodeHidden(graph, e.from);
-      refreshNodeHidden(graph, e.to);
-    }
+    commitEdge(graph, components, e.from, e.to);
   }
-  return true;
 }
 
 // Record the tx against the canonical direction of the edge and promote
@@ -675,68 +627,22 @@ function bumpDirection(graph: Graph, eid: string, e: RawEdge): void {
   }
 }
 
-// Long edges are almost always the visually-noisy cross-canvas
-// crossings. Blend their color toward the canvas background so they
-// disappear into the backdrop; short intra-cluster edges keep their
-// full color.
-//
-const EDGE_ALPHA_FULL = 0.55;
-// Long edges dim but stay visible. Going below ~0.2 on black makes
-// them read as gone rather than "secondary" which isn't what we want.
-const EDGE_ALPHA_DIM = 0.22;
-// One-off pairs are the bulk of the clutter  they're neither recurring
-// behavior nor hubs, just single transfers. Hide them once they're no
-// longer the freshest signal. Edges unlock again the moment they get a
-// second tx.
-const MIN_EDGE_TX_COUNT = 2;
-// Absolute world-space cutoff beyond which an edge is treated as
-// "long" and rendered dim. Fixed, not a moving percentile, because a
-// percentile-based cutoff made boundary edges blink between bright and
-// dim every tick as FA2 shifted lengths.
-const EDGE_LONG_CUTOFF = 3000;
+// Uniform per-edge alpha. Floor chosen so a single isolated edge
+// reads as unambiguously present; density emerges from compositing
+// where edges overlap. Tune by eye if margin singletons read as
+// faint or megacore reads as featureless.
+const EDGE_COLOR = "rgba(200,210,235,0.25)";
 
-// Edge color is computed once at the moment the edge becomes visible
-// and then left alone. FA2 will later stretch or squeeze that edge,
-// but re-evaluating every tick produced visible blinking that was
-// worse than any information gained from a live color. "Once formed,
-// it's formed."
-function computeEdgeColor(graph: Graph, src: string, tgt: string): string {
-  const sx = graph.getNodeAttribute(src, "x") as number;
-  const sy = graph.getNodeAttribute(src, "y") as number;
-  const tx = graph.getNodeAttribute(tgt, "x") as number;
-  const ty = graph.getNodeAttribute(tgt, "y") as number;
-  const len = Math.hypot(tx - sx, ty - sy);
-  const t = Math.min(1, len / EDGE_LONG_CUTOFF);
-  const alpha = EDGE_ALPHA_FULL + (EDGE_ALPHA_DIM - EDGE_ALPHA_FULL) * t;
-  return `rgba(200,210,235,${alpha.toFixed(3)})`;
-}
-
-// A node is visible iff any of its edges is visible or it has a
-// self-loop signal. Called at the two moments edge visibility can
-// change: initial edge creation and the tx-count crossing.
-function refreshNodeHidden(graph: Graph, nodeId: string): void {
-  let hasVisibleEdge = false;
-  graph.forEachEdge(nodeId, (_eid, attrs) => {
-    if (!(attrs.hidden as boolean)) hasVisibleEdge = true;
-  });
-  const selfLoops = (graph.getNodeAttribute(nodeId, "selfLoops") as number) ?? 0;
-  graph.setNodeAttribute(nodeId, "hidden", !hasVisibleEdge && selfLoops === 0);
-}
-
-// Single point where an edge becomes "real": union the components,
-// migrate the loser's members onto the winner's anchor, freeze the
-// edge color, unhide the edge, and bump the visible-degree-driven
-// sizes. Called both at first creation when MIN_EDGE_TX_COUNT == 1
-// and at the txCount crossing otherwise.
-function commitVisibility(
+// Single point where a new edge becomes part of the graph: union the
+// components, migrate the loser's members onto the winner's anchor,
+// and refresh sizes. Color is set uniformly at addEdge time, no
+// per-edge label needed.
+function commitEdge(
   graph: Graph,
   components: ComponentState,
   fromId: string,
   toId: string,
-  eid: string,
 ): void {
-  // Union + migration first so the freeze color is computed against
-  // the final positions, not the pre-migration distant ones.
   const rootA = findRoot(components, fromId);
   const rootB = findRoot(components, toId);
   if (rootA !== rootB) {
@@ -746,16 +652,10 @@ function commitVisibility(
       migrateMembersToAnchor(graph, merge.migrated, anchor);
     }
   }
-  graph.setEdgeAttribute(eid, "color", computeEdgeColor(graph, fromId, toId));
-  graph.setEdgeAttribute(eid, "hidden", false);
-  incAttr(graph, fromId, "visibleDegree", 1);
-  incAttr(graph, toId, "visibleDegree", 1);
   graph.setNodeAttribute(fromId, "size", nodeSize(graph, fromId));
   graph.setNodeAttribute(toId, "size", nodeSize(graph, toId));
   refreshEdgeSizes(graph, fromId);
   refreshEdgeSizes(graph, toId);
-  refreshNodeHidden(graph, fromId);
-  refreshNodeHidden(graph, toId);
 }
 
 // Teleport every member of a just-merged component to the vicinity of
@@ -813,7 +713,7 @@ const NODE_SIZE_MAX_PX = 10;
 const NODE_SIZE_REF_DEGREE = 60;
 
 function nodeSize(graph: Graph, id: string): number {
-  const degree = (graph.getNodeAttribute(id, "visibleDegree") as number) ?? 0;
+  const degree = (graph.getNodeAttribute(id, "degree") as number) ?? 0;
   if (degree <= 1) return 0.8;
   const norm = Math.min(1, (degree - 1) / (NODE_SIZE_REF_DEGREE - 1));
   return NODE_SIZE_MIN_PX + Math.sqrt(norm) * (NODE_SIZE_MAX_PX - NODE_SIZE_MIN_PX);
