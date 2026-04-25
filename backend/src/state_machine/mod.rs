@@ -7,10 +7,10 @@
 //! the wallet volume index used to name the top wallet).
 //!
 //! ## Transitions
-//! - `Increment(edge)` — called by the `state_sink` consumer on each
+//! - `Increment(edge)`  called by the `state_sink` consumer on each
 //!   Kafka message. Adds to edge/wallet aggregates, pushes to the ring,
 //!   updates running stats. Happens hundreds of times per second.
-//! - `AdvanceWindow(now)` — called by a 1Hz tick. Drains ring entries
+//! - `AdvanceWindow(now)`  called by a 1Hz tick. Drains ring entries
 //!   older than `now - window_secs`, subtracts them from aggregates, and
 //!   removes keys whose score dropped to zero.
 //!
@@ -19,8 +19,8 @@
 //! Snapshots render a *hub subgraph*: the top `HUB_COUNT` wallets by
 //! degree (distinct counterparties, volume-tiebroken) and every edge that
 //! touches one of them, capped at `EDGE_CAP` by volume. This reads as a
-//! constellation — exchanges as stars, drainers as sudden fanouts,
-//! bridges as new hub-to-hub links — instead of a volume-ranked event
+//! constellation  exchanges as stars, drainers as sudden fanouts,
+//! bridges as new hub-to-hub links  instead of a volume-ranked event
 //! list. The cost of the subgraph build is O(|edge_agg|) per snapshot,
 //! which is cheap at ≤ 2 Hz snapshot rate.
 //!
@@ -29,7 +29,7 @@
 //! Aggregate updates are additive (`volume += amount`), so a Kafka redelivery
 //! after a crash-before-commit double-counts. Acceptable for v0 because the
 //! external `state-reset` script wipes state on every restart, so duplicates
-//! only accumulate within a single uptime — at most the N-message commit
+//! only accumulate within a single uptime  at most the N-message commit
 //! window (1000 msgs / 2s). When moving to paid RPC and dropping the reset
 //! script, add LRU dedupe on `(signature, instruction_idx)` in `apply`.
 
@@ -56,7 +56,7 @@ pub type EdgeKey = (WalletId, WalletId);
 const RECENT_RATE_WINDOW_SECS: u32 = 30;
 const HUB_COUNT: usize = 50;
 /// Fraction of total hub-touching volume we try to preserve when
-/// selecting which edges to render. Principled Pareto filter — keep
+/// selecting which edges to render. Principled Pareto filter  keep
 /// sorting by volume desc until we've covered this much, then stop.
 /// Power-law edge distributions mean this typically lands in the
 /// top ~10-20% of edges while preserving every structurally heavy
@@ -148,7 +148,7 @@ impl StateMachine {
     }
 
     fn advance_window(&mut self, now: u32) {
-        // Use max(host_now, latest_block_time) — self-correcting against
+        // Use max(host_now, latest_block_time)  self-correcting against
         // host clock skew. During catch-up this trails Solana's clock.
         let reference = now.max(self.latest_block_time);
         let cutoff = reference.saturating_sub(self.window_secs);
@@ -408,7 +408,7 @@ impl StateMachine {
 ///   1. Derive each wallet's degree = |distinct counterparties| by walking
 ///      edge_agg keys once.
 ///   2. Rank wallets by (degree desc, volume desc) and take top HUB_COUNT.
-///   3. Keep every edge_agg entry that touches any hub. No global cap —
+///   3. Keep every edge_agg entry that touches any hub. No global cap 
 ///      the hub definition itself bounds output: |hubs| * max_hub_degree
 ///      is the worst case, which in a power-law graph is tame.
 ///   4. Node set = endpoints of the kept edges (hubs + their 1-hop orbits).
@@ -452,7 +452,7 @@ fn build_hub_subgraph(
 
     // 4. Edges touching any hub. Apply a volume-coverage filter: sort
     // by volume desc and keep just enough edges to capture
-    // VOLUME_COVERAGE of total hub-touching volume. No magic K — the
+    // VOLUME_COVERAGE of total hub-touching volume. No magic K  the
     // truncation point is derived from the data.
     let mut included: Vec<(WalletId, WalletId, u64, u64)> = edge_agg
         .iter()
@@ -508,13 +508,14 @@ fn build_hub_subgraph(
                 volume_sol: lamports_to_sol(volume),
                 component: cc_owned.get(w.as_ref()).copied(),
                 degree,
+                x: 0.0,
+                y: 0.0,
             }
         })
         .collect();
 
-    // Hubs first so the frontend can iterate in order — spokes then
-    // find their hub already placed in the sigma graph, avoiding the
-    // perimeter-fallback seed path.
+    // Sort hubs-first so the frontend can iterate in order. Positions
+    // are stamped later in the API handler from the force-sim store.
     nodes.sort_unstable_by(|a, b| b.degree.cmp(&a.degree));
 
     (nodes, edges)

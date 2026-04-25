@@ -3,7 +3,6 @@
 import "@react-sigma/core/lib/style.css";
 
 import { SigmaContainer, useLoadGraph, useSigma } from "@react-sigma/core";
-import { useWorkerLayoutForceAtlas2 } from "@react-sigma/layout-forceatlas2";
 import Graph from "graphology";
 import { useEffect, useMemo, useRef } from "react";
 import type { EdgeView, NodeView } from "@/lib/api";
@@ -14,36 +13,20 @@ interface GraphCanvasProps {
   edges: EdgeView[];
 }
 
-// Canvas colors are hex/rgba — Sigma's WebGL parser doesn't accept oklch().
-// CSS tokens in globals.css remain canonical for HTML surfaces.
+// Canvas colors are hex/rgba  Sigma's WebGL parser doesn't accept oklch().
 const BG = "#0c0d12";
 const LABEL_COLOR = "#e9ebf1";
 const EDGE_ALPHA_MIN = 0.08;
 const EDGE_ALPHA_MAX = 0.85;
+const POSITION_TWEEN_MS = 500;
 
 function sizeForNode(degree: number, volumeSol: number): number {
-  // Degree dominates — a hub's significance is how many wallets touch
-  // it, not how much volume flowed. Volume is a soft tiebreaker among
-  // equal-degree nodes so whales visually outrank random lonely wallets.
-  return 2 + Math.sqrt(degree) * 1.6 + Math.log1p(volumeSol) * 0.15;
+  if (degree <= 1) return 0.6;
+  return 1.5 + Math.pow(degree, 0.6) * 1.6 + Math.log1p(volumeSol) * 0.1;
 }
 
 function widthFromVolume(volumeSol: number): number {
   return 0.8 + Math.log1p(volumeSol) * 0.7;
-}
-
-function edgeWeight(fromDeg: number, toDeg: number): number {
-  // Weaken edges touching high-degree hubs so spokes have room to spread
-  // instead of piling against the hub. With edgeWeightInfluence=1, FA2
-  // scales attraction linearly with this value.
-  const hub = Math.max(fromDeg, toDeg, 1);
-  return 1 / Math.log2(hub + 1);
-}
-
-function nodeDegreeMap(nodes: NodeView[]): Map<string, number> {
-  const m = new Map<string, number>();
-  for (const n of nodes) m.set(n.id, n.degree);
-  return m;
 }
 
 function maxEdgeVolume(edges: EdgeView[]): number {
@@ -52,27 +35,10 @@ function maxEdgeVolume(edges: EdgeView[]): number {
   return Math.max(max, 1);
 }
 
-/**
- * Edge alpha scales with log-normalized volume so the structural backbone
- * (heavy corridors) reads prominently while single-transfer drive-bys recede
- * to background mesh. Replaces the old flat-alpha EDGE_COLOR.
- */
 function edgeColor(volumeSol: number, maxVol: number): string {
   const t = Math.log1p(volumeSol) / Math.log1p(maxVol);
   const alpha = EDGE_ALPHA_MIN + t * (EDGE_ALPHA_MAX - EDGE_ALPHA_MIN);
   return `rgba(200, 210, 235, ${alpha.toFixed(3)})`;
-}
-
-function seedPosition(i: number, total: number): { x: number; y: number } {
-  const angle = (i / Math.max(total, 1)) * Math.PI * 2;
-  const radius = 1 + (i % 7) * 0.15;
-  return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
-}
-
-function perimeterSeed(outerRadius: number): { x: number; y: number } {
-  const angle = Math.random() * Math.PI * 2;
-  const r = outerRadius * (1.08 + Math.random() * 0.18);
-  return { x: Math.cos(angle) * r, y: Math.sin(angle) * r };
 }
 
 function nodeLabel(id: string): string {
@@ -83,103 +49,61 @@ function edgeKey(from: string, to: string): string {
   return from < to ? `${from}|${to}` : `${to}|${from}`;
 }
 
-function initialGraph(nodes: NodeView[], edges: EdgeView[]): Graph {
+function buildGraph(nodes: NodeView[], edges: EdgeView[]): Graph {
   const graph = new Graph({ multi: false, type: "undirected" });
-  const degrees = nodeDegreeMap(nodes);
   const maxVol = maxEdgeVolume(edges);
-
-  // Backend sends nodes pre-sorted by degree desc, so iterating in
-  // received order places hubs first and spokes find their hub already
-  // in the graph by the time they seed.
-  nodes.forEach((n, i) => {
-    const { x, y } = seedPosition(i, nodes.length);
+  for (const n of nodes) {
     graph.addNode(n.id, {
-      x,
-      y,
+      x: n.x,
+      y: n.y,
       size: sizeForNode(n.degree, n.volume_sol),
       color: colorForComponent(n.component),
       label: nodeLabel(n.id),
     });
-  });
-
-  edges.forEach((e) => {
-    if (!graph.hasNode(e.from) || !graph.hasNode(e.to)) return;
-    if (graph.hasEdge(e.from, e.to) || graph.hasEdge(e.to, e.from)) return;
+  }
+  for (const e of edges) {
+    if (!graph.hasNode(e.from) || !graph.hasNode(e.to)) continue;
+    if (graph.hasEdge(e.from, e.to) || graph.hasEdge(e.to, e.from)) continue;
     graph.addEdge(e.from, e.to, {
       size: widthFromVolume(e.volume_sol),
       color: edgeColor(e.volume_sol, maxVol),
-      weight: edgeWeight(degrees.get(e.from) ?? 0, degrees.get(e.to) ?? 0),
     });
-  });
+  }
   return graph;
 }
 
-function graphRadius(graph: Graph): number {
-  let max = 0;
-  graph.forEachNode((_id, attrs) => {
-    const x = typeof attrs.x === "number" ? attrs.x : 0;
-    const y = typeof attrs.y === "number" ? attrs.y : 0;
-    const r = Math.sqrt(x * x + y * y);
-    if (r > max) max = r;
-  });
-  return max || 1;
+interface PositionTween {
+  nodeId: string;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
 }
 
-function neighborsByNode(edges: EdgeView[]): Map<string, string[]> {
-  const m = new Map<string, string[]>();
-  for (const e of edges) {
-    if (!m.has(e.from)) m.set(e.from, []);
-    if (!m.has(e.to)) m.set(e.to, []);
-    m.get(e.from)!.push(e.to);
-    m.get(e.to)!.push(e.from);
-  }
-  return m;
-}
-
-function seedForNewNode(
+/**
+ * Reconcile the live sigma graph against a fresh backend snapshot.
+ * Drops nodes/edges that left, adds ones that arrived, updates visual
+ * attributes in place, and collects tween targets for any node whose
+ * backend position moved.
+ */
+function applyDiff(
   graph: Graph,
-  id: string,
-  neighbors: Map<string, string[]>,
-  outerRadius: number,
-): { x: number; y: number; isLonely: boolean } {
-  const peers = neighbors.get(id) ?? [];
-  const placed = peers.find((p) => graph.hasNode(p));
-  if (placed) {
-    const a = graph.getNodeAttributes(placed) as { x: number; y: number };
-    const jitter = 0.5;
-    return {
-      x: a.x + (Math.random() - 0.5) * jitter,
-      y: a.y + (Math.random() - 0.5) * jitter,
-      isLonely: false,
-    };
-  }
-  if (peers.length > 0) {
-    // Has edges in current data but no placed neighbor yet — still edge-connected.
-    const { x, y } = perimeterSeed(outerRadius * 0.8);
-    return { x, y, isLonely: false };
-  }
-  const { x, y } = perimeterSeed(outerRadius);
-  return { x, y, isLonely: true };
-}
-
-function applyDiff(graph: Graph, nodes: NodeView[], edges: EdgeView[]) {
+  nodes: NodeView[],
+  edges: EdgeView[],
+): PositionTween[] {
   const nextNodeIds = new Set(nodes.map((n) => n.id));
   const nextEdgeKeys = new Set(edges.map((e) => edgeKey(e.from, e.to)));
 
   graph.forEachNode((id) => {
     if (!nextNodeIds.has(id)) graph.dropNode(id);
   });
-
   graph.forEachEdge((eid, _attrs, source, target) => {
     if (!nextEdgeKeys.has(edgeKey(source, target))) graph.dropEdge(eid);
   });
 
-  const neighbors = neighborsByNode(edges);
-  const degrees = nodeDegreeMap(nodes);
   const maxVol = maxEdgeVolume(edges);
-  const outerRadius = graphRadius(graph);
+  const tweens: PositionTween[] = [];
 
-  // Nodes arrive pre-sorted hubs-first from the backend.
   for (const n of nodes) {
     const attrs = {
       size: sizeForNode(n.degree, n.volume_sol),
@@ -187,10 +111,21 @@ function applyDiff(graph: Graph, nodes: NodeView[], edges: EdgeView[]) {
       label: nodeLabel(n.id),
     };
     if (graph.hasNode(n.id)) {
+      const cur = graph.getNodeAttributes(n.id) as { x: number; y: number };
       graph.mergeNodeAttributes(n.id, attrs);
+      if (cur.x !== n.x || cur.y !== n.y) {
+        tweens.push({
+          nodeId: n.id,
+          fromX: cur.x,
+          fromY: cur.y,
+          toX: n.x,
+          toY: n.y,
+        });
+      }
     } else {
-      const seed = seedForNewNode(graph, n.id, neighbors, outerRadius);
-      graph.addNode(n.id, { x: seed.x, y: seed.y, ...attrs });
+      // New node  paint at destination immediately so it doesn't pop
+      // in from the origin.
+      graph.addNode(n.id, { x: n.x, y: n.y, ...attrs });
     }
   }
 
@@ -203,7 +138,6 @@ function applyDiff(graph: Graph, nodes: NodeView[], edges: EdgeView[]) {
     const attrs = {
       size: widthFromVolume(e.volume_sol),
       color: edgeColor(e.volume_sol, maxVol),
-      weight: edgeWeight(degrees.get(e.from) ?? 0, degrees.get(e.to) ?? 0),
     };
     if (existing) {
       graph.mergeEdgeAttributes(existing, attrs);
@@ -211,48 +145,57 @@ function applyDiff(graph: Graph, nodes: NodeView[], edges: EdgeView[]) {
       graph.addEdge(e.from, e.to, attrs);
     }
   }
+  return tweens;
+}
+
+function animateTweens(
+  graph: Graph,
+  tweens: PositionTween[],
+  durationMs: number,
+): () => void {
+  if (tweens.length === 0) return () => {};
+  let cancelled = false;
+  const start = performance.now();
+  const tick = () => {
+    if (cancelled) return;
+    const t = Math.min(1, (performance.now() - start) / durationMs);
+    const ease = 1 - Math.pow(1 - t, 3);
+    for (const p of tweens) {
+      if (!graph.hasNode(p.nodeId)) continue;
+      graph.setNodeAttribute(
+        p.nodeId,
+        "x",
+        p.fromX + (p.toX - p.fromX) * ease,
+      );
+      graph.setNodeAttribute(
+        p.nodeId,
+        "y",
+        p.fromY + (p.toY - p.fromY) * ease,
+      );
+    }
+    if (t < 1) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  return () => {
+    cancelled = true;
+  };
 }
 
 function GraphLoader({ nodes, edges }: GraphCanvasProps) {
   const sigma = useSigma();
   const loadGraph = useLoadGraph();
   const loaded = useRef(false);
-  const { start, stop } = useWorkerLayoutForceAtlas2({
-    settings: {
-      // Light gravity, non-strong: just enough pull to resist drift, not
-      // enough to flatten local hub-spoke clusters into the center.
-      // StrongGravityMode scales force with distance which smooshes the
-      // whole graph toward center — off.
-      gravity: 0.3,
-      strongGravityMode: false,
-      // Higher repulsion keeps spokes from crowding their hub.
-      scalingRatio: 60,
-      slowDown: 4,
-      barnesHutOptimize: true,
-      linLogMode: true,
-      // Honor per-edge weight (see edgeWeight()): edges touching
-      // high-degree hubs pull less, giving spokes breathing room.
-      edgeWeightInfluence: 1,
-    },
-  });
 
   useEffect(() => {
     if (!loaded.current) {
-      loadGraph(initialGraph(nodes, edges));
+      loadGraph(buildGraph(nodes, edges));
       loaded.current = true;
-      start();
-      const firstRun = setTimeout(stop, 4000);
-      return () => clearTimeout(firstRun);
+      return;
     }
-
-    applyDiff(sigma.getGraph(), nodes, edges);
-    start();
-    const relax = setTimeout(stop, 1200);
-    return () => {
-      clearTimeout(relax);
-      stop();
-    };
-  }, [nodes, edges, sigma, loadGraph, start, stop]);
+    const tweens = applyDiff(sigma.getGraph(), nodes, edges);
+    const cancel = animateTweens(sigma.getGraph(), tweens, POSITION_TWEEN_MS);
+    return () => cancel();
+  }, [nodes, edges, sigma, loadGraph]);
 
   return null;
 }

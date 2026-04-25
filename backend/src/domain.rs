@@ -65,6 +65,11 @@ pub struct NodeView {
     /// (not just the rendered subset). Sent so the frontend can size
     /// and order nodes without recomputing degree from the edge list.
     pub degree: u32,
+    /// Canvas coordinates from the server-side Sunflower layout. The
+    /// frontend just paints these: every browser sees the exact same
+    /// graph because positions are deterministic in the backend.
+    pub x: f64,
+    pub y: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -83,7 +88,7 @@ pub struct OverviewResponse {
     pub edges: Vec<EdgeView>,
     pub generated_at: u32,
     /// True when the state machine doesn't yet hold a full `window_secs`
-    /// of data — e.g. freshly booted and still warming up. Frontend should
+    /// of data  e.g. freshly booted and still warming up. Frontend should
     /// show the actual elapsed time in `window.label` and indicate partial.
     pub is_partial: bool,
 }

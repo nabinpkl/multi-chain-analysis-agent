@@ -20,6 +20,7 @@
     "date-fns": "^4.1.0",
     "embla-carousel-react": "^8.6.0",
     "graphology": "^0.26.0",
+    "graphology-communities-louvain": "^2.0.2",
     "graphology-layout-forceatlas2": "^0.10.1",
     "graphology-types": "^0.24.8",
     "input-otp": "^1.4.2",

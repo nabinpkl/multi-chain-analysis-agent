@@ -9,6 +9,7 @@ mod api;
 mod config;
 mod domain;
 mod ingest;
+mod layout;
 mod rpc;
 mod sinks;
 mod state;
@@ -53,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut bg_handles = Vec::new();
 
-    // state-sink consumer — drives the in-memory projection from Kafka.
+    // state-sink consumer  drives the in-memory projection from Kafka.
     let state_sink_handle = {
         let consumer = build_consumer(
             &config.kafka_brokers,
@@ -63,26 +64,36 @@ async fn main() -> anyhow::Result<()> {
         )?;
         info!(group = %config.kafka_group_live_state, topic = %config.kafka_topic_raw_edges, "state-sink consumer ready");
         let sm = state.state_machine.clone();
+        let raw_tx = state.raw_tx.clone();
         let rx = shutdown_rx.clone();
         tokio::spawn(async move {
-            if let Err(e) = state_sink::run(consumer, sm, rx).await {
+            if let Err(e) = state_sink::run(consumer, sm, raw_tx, rx).await {
                 error!(error = %e, "state-sink exited with error");
             }
         })
     };
     bg_handles.push(state_sink_handle);
 
-    // 1Hz tick driving AdvanceWindow transitions + SSE signal.
+    // 1Hz tick: AdvanceWindow + advance the force layout + SSE signal.
     let tick_handle = {
         let sm = state.state_machine.clone();
+        let positions = state.positions.clone();
         let tx = state.tick_tx.clone();
+        let window_secs = state.window_secs;
         let interval = config.state_tick_interval;
         let rx = shutdown_rx.clone();
-        tokio::spawn(state_sink::tick_loop(sm, tx, interval, rx))
+        tokio::spawn(state_sink::tick_loop(
+            sm,
+            positions,
+            tx,
+            window_secs,
+            interval,
+            rx,
+        ))
     };
     bg_handles.push(tick_handle);
 
-    // ch-sink consumer — accumulates cold projection.
+    // ch-sink consumer  accumulates cold projection.
     let ch_sink_handle = {
         let consumer = build_consumer(
             &config.kafka_brokers,
@@ -106,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
     bg_handles.push(ch_sink_handle);
 
     if config.solana_rpc_url.is_empty() {
-        warn!("SOLANA_RPC_URL not set — ingester and tip tracker disabled");
+        warn!("SOLANA_RPC_URL not set  ingester and tip tracker disabled");
     } else {
         let rpc = RpcClient::new(config.solana_rpc_url.clone(), config.rpc_min_interval);
 

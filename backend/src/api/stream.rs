@@ -13,9 +13,9 @@ use crate::api::graph::{OverviewParams, parse_window};
 use crate::domain::OverviewResponse;
 use crate::state::AppState;
 
-/// `GET /graph/overview/stream?window=15m|1h|6h|24h` — SSE.
+/// `GET /graph/overview/stream?window=15m|1h|6h|24h`  SSE.
 /// Sends an initial `snapshot` event, then a fresh `snapshot` each tick
-/// the state machine advances. Each connection owns its own window —
+/// the state machine advances. Each connection owns its own window 
 /// the server recomputes per-subscriber on each tick so viewers picking
 /// different windows get different data. Slow-subscriber backpressure
 /// is surfaced as a `resync` event; client is expected to refetch
@@ -28,7 +28,9 @@ pub async fn stream(
 
     let initial = {
         let now = now_secs();
-        Arc::new(state.state_machine.read().snapshot_window(now, window_secs))
+        let mut resp = state.state_machine.read().snapshot_window(now, window_secs);
+        crate::layout::stamp_positions(&mut resp.nodes, &state.positions.read());
+        Arc::new(resp)
     };
 
     let init_stream = futures_util::stream::once(async move {
@@ -36,17 +38,20 @@ pub async fn stream(
     });
 
     let sm = state.state_machine.clone();
+    let positions = state.positions.clone();
     let rx = state.tick_tx.subscribe();
     let updates = BroadcastStream::new(rx).map(move |res| -> Result<Event, Infallible> {
         match res {
             Ok(()) => {
                 let now = now_secs();
-                let snap = Arc::new(sm.read().snapshot_window(now, window_secs));
+                let mut resp = sm.read().snapshot_window(now, window_secs);
+                crate::layout::stamp_positions(&mut resp.nodes, &positions.read());
+                let snap = Arc::new(resp);
                 Ok(snapshot_event(&snap))
             }
             Err(BroadcastStreamRecvError::Lagged(_)) => Ok(Event::default()
                 .event("resync")
-                .data("broadcast lag — client should refetch /graph/overview")),
+                .data("broadcast lag  client should refetch /graph/overview")),
         }
     });
 

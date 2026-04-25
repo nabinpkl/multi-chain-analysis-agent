@@ -27,8 +27,9 @@ pub fn parse_window(label: Option<&str>, max: u32) -> u32 {
     .min(max)
 }
 
-/// `GET /graph/overview?window=15m|1h|6h|24h` — reads the live projection
-/// from the in-memory state machine, scoped to the requested window.
+/// `GET /graph/overview?window=15m|1h|6h|24h`  reads the live projection
+/// from the in-memory state machine, scoped to the requested window,
+/// and stamps each node's x/y from the persistent force-layout store.
 pub async fn overview(
     State(state): State<AppState>,
     Query(params): Query<OverviewParams>,
@@ -38,6 +39,7 @@ pub async fn overview(
         .map(|d| d.as_secs() as u32)
         .unwrap_or(0);
     let window_secs = parse_window(params.window.as_deref(), state.window_secs);
-    let snapshot = state.state_machine.read().snapshot_window(now, window_secs);
+    let mut snapshot = state.state_machine.read().snapshot_window(now, window_secs);
+    crate::layout::stamp_positions(&mut snapshot.nodes, &state.positions.read());
     Json(snapshot)
 }
