@@ -40,10 +40,10 @@ pub async fn stream(
 
 /// Token-issuance / destruction direction on the wire. Only present for
 /// SPL edges that originate from or terminate at a mint authority.
-#[derive(Serialize, TS)]
+#[derive(Serialize, TS, Clone, Debug)]
 #[serde(rename_all = "lowercase")]
 #[ts(export, export_to = "../../frontend/src/lib/generated/")]
-enum EdgeKind {
+pub enum EdgeKind {
     Mint,
     Burn,
 }

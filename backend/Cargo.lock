@@ -827,6 +827,7 @@ dependencies = [
  "parking_lot",
  "rdkafka",
  "reqwest",
+ "rustc-hash",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

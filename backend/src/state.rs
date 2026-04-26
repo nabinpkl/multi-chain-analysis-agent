@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use clickhouse::Client;
+use parking_lot::RwLock;
 use tokio::sync::broadcast;
 
 use crate::config::Config;
 use crate::domain::Edge;
+use crate::graph::GraphState;
 use crate::store::EdgeStore;
 use crate::store::clickhouse_store::ClickHouseEdgeStore;
 use crate::tip::TipTracker;
@@ -21,6 +23,8 @@ pub struct AppState {
     /// Per-edge broadcast. Fires once per Kafka message in state-sink,
     /// consumed by `/graph/raw/stream` subscribers.
     pub raw_tx: broadcast::Sender<Arc<Edge>>,
+    /// In-memory graph engine: node interner + adjacency + Union-Find.
+    pub graph: Arc<RwLock<GraphState>>,
 }
 
 impl AppState {
@@ -40,6 +44,7 @@ impl AppState {
             store: ch_store,
             tip: TipTracker::default(),
             raw_tx,
+            graph: Arc::new(RwLock::new(GraphState::default())),
         }
     }
 }

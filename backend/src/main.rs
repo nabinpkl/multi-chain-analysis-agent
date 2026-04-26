@@ -8,6 +8,7 @@ use tracing::{error, info, warn};
 mod api;
 mod config;
 mod domain;
+mod graph;
 mod ingest;
 mod rpc;
 mod sinks;
@@ -91,6 +92,24 @@ async fn main() -> anyhow::Result<()> {
         })
     };
     bg_handles.push(ch_sink_handle);
+
+    let graph_consumer_handle = {
+        let consumer = build_consumer(
+            &config.kafka_brokers,
+            &config.kafka_group_graph,
+            &config.kafka_topic_raw_edges,
+            "latest",
+        )?;
+        info!(group = %config.kafka_group_graph, topic = %config.kafka_topic_raw_edges, "graph-engine consumer ready");
+        let graph = state.graph.clone();
+        let rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = graph::consumer::run(consumer, graph, rx).await {
+                error!(error = %e, "graph-consumer exited with error");
+            }
+        })
+    };
+    bg_handles.push(graph_consumer_handle);
 
     if config.solana_rpc_url.is_empty() {
         warn!("SOLANA_RPC_URL not set  ingester and tip tracker disabled");

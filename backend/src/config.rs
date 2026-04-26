@@ -15,6 +15,7 @@ pub struct Config {
     pub kafka_topic_raw_edges: String,
     pub kafka_group_live_state: String,
     pub kafka_group_ch_sink: String,
+    pub kafka_group_graph: String,
     pub kafka_auto_offset_reset: String,
     pub ch_sink_batch_size: usize,
     pub ch_sink_flush: Duration,
@@ -45,6 +46,8 @@ impl Config {
                 .unwrap_or_else(|_| "live-state".into()),
             kafka_group_ch_sink: env::var("KAFKA_GROUP_CH_SINK")
                 .unwrap_or_else(|_| "ch-sink".into()),
+            kafka_group_graph: env::var("KAFKA_GROUP_GRAPH")
+                .unwrap_or_else(|_| "graph-engine".into()),
             kafka_auto_offset_reset: env::var("KAFKA_AUTO_OFFSET_RESET")
                 .unwrap_or_else(|_| "latest".into()),
             ch_sink_batch_size: env::var("CH_SINK_BATCH_SIZE")

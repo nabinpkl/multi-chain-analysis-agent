@@ -27,3 +27,4 @@ rdkafka = { version = "0.36", features = ["cmake-build", "tokio", "ssl-vendored"
 tokio-stream = { version = "0.1", features = ["sync"] }
 parking_lot = "0.12"
 ts-rs = { version = "10", features = ["serde-compat"] }
+rustc-hash = "2"
