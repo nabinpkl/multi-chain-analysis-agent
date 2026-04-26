@@ -18,8 +18,6 @@ pub struct Config {
     pub kafka_auto_offset_reset: String,
     pub ch_sink_batch_size: usize,
     pub ch_sink_flush: Duration,
-    pub state_window_secs: u32,
-    pub state_tick_interval: Duration,
 }
 
 impl Config {
@@ -58,16 +56,6 @@ impl Config {
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(5),
-            ),
-            state_window_secs: env::var("STATE_WINDOW_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(86400),
-            state_tick_interval: Duration::from_millis(
-                env::var("STATE_TICK_INTERVAL_MS")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(1000),
             ),
         }
     }

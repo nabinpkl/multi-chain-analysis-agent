@@ -71,11 +71,15 @@ export function useRawStream() {
     edgeCount: number;
     nodeCount: number;
     lagged: number;
+    firstBlockTime: number;
+    latestBlockTime: number;
   }>({
     connected: false,
     edgeCount: 0,
     nodeCount: 0,
     lagged: 0,
+    firstBlockTime: 0,
+    latestBlockTime: 0,
   });
   const [roleSummary, setRoleSummary] = useState<RoleSummary>({
     "token-mint": 0,
@@ -100,10 +104,14 @@ export function useRawStream() {
       for (const e of batch) {
         applyEdge(graph, e, componentsRef.current, mintAddrsRef.current);
       }
+      const latest = batch.reduce((m, e) => Math.max(m, e.block_time), 0);
+      const earliest = batch.reduce((m, e) => (e.block_time > 0 && (m === 0 || e.block_time < m) ? e.block_time : m), 0);
       setStatus((s) => ({
         ...s,
         edgeCount: graph.size,
         nodeCount: graph.order,
+        firstBlockTime: s.firstBlockTime === 0 && earliest > 0 ? earliest : s.firstBlockTime,
+        latestBlockTime: latest > 0 ? latest : s.latestBlockTime,
       }));
     };
 

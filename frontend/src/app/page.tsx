@@ -1,5 +1,5 @@
-import { OverviewPage } from "@/components/flow/overview-page";
+import { GraphPage } from "@/components/flow/graph-page";
 
 export default function Home() {
-  return <OverviewPage />;
+  return <GraphPage />;
 }
