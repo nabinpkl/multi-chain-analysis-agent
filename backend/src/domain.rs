@@ -25,23 +25,3 @@ pub struct Edge {
     pub version: u64,
 }
 
-#[derive(Debug, Clone, Row, Deserialize)]
-pub struct EdgeAggregate {
-    pub from_wallet: String,
-    pub to_wallet: String,
-    pub volume_lamports: u64,
-    pub tx_count: u64,
-}
-
-#[derive(Debug, Clone, Row, Deserialize)]
-pub struct WalletAggregate {
-    pub wallet: String,
-    pub volume_lamports: u64,
-}
-
-#[derive(Debug, Clone, Row, Deserialize)]
-pub struct WindowStats {
-    pub total_volume_lamports: u64,
-    pub total_txs: u64,
-    pub unique_wallets: u64,
-}

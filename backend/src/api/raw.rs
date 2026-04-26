@@ -7,6 +7,7 @@ use axum::response::Sse;
 use axum::response::sse::{Event, KeepAlive};
 use futures_util::stream::{Stream, StreamExt};
 use serde::Serialize;
+use ts_rs::TS;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
@@ -37,25 +38,36 @@ pub async fn stream(
     Sse::new(updates).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
 
-#[derive(Serialize)]
+/// Token-issuance / destruction direction on the wire. Only present for
+/// SPL edges that originate from or terminate at a mint authority.
+#[derive(Serialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+enum EdgeKind {
+    Mint,
+    Burn,
+}
+
+#[derive(Serialize, TS)]
+#[ts(export, export_to = "../../frontend/src/lib/generated/")]
 struct EdgeWire<'a> {
     signature: &'a str,
     block_time: u32,
     from: &'a str,
     to: &'a str,
-    /// SOL volume only. For SPL transfers (mint != ""), this is 0
+    /// SOL volume only. For SPL transfers (`mint` present), this is 0
     /// because the amount is in unknown token base units; the frontend
     /// uses edge presence + degree only for SPL.
     volume_sol: f64,
-    /// Empty / absent for native SOL, otherwise the SPL mint pubkey.
-    /// Skipped on the wire when empty so SOL-dominant streams stay
-    /// compact.
-    #[serde(skip_serializing_if = "str::is_empty")]
-    mint: &'a str,
-    /// One of "mint" / "burn" when the edge represents token issuance
-    /// or destruction. Absent for regular transfers.
-    #[serde(skip_serializing_if = "str::is_empty")]
-    kind: &'a str,
+    /// SPL/Token-2022 mint pubkey if this edge represents a token
+    /// transfer. Absent for native SOL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    mint: Option<&'a str>,
+    /// Token issuance or destruction direction. Absent for regular transfers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    kind: Option<EdgeKind>,
 }
 
 fn edge_event(edge: &Arc<Edge>) -> Event {
@@ -70,8 +82,12 @@ fn edge_event(edge: &Arc<Edge>) -> Event {
         } else {
             0.0
         },
-        mint: &edge.mint,
-        kind: &edge.kind,
+        mint: if is_sol { None } else { Some(&edge.mint) },
+        kind: match edge.kind.as_str() {
+            "mint" => Some(EdgeKind::Mint),
+            "burn" => Some(EdgeKind::Burn),
+            _ => None,
+        },
     };
     match Event::default().event("edge").json_data(&wire) {
         Ok(ev) => ev,

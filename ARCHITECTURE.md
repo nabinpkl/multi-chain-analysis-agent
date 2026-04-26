@@ -10,3 +10,13 @@
 # Why sse to brodcast?
 
 # what does Delta changes state machine model do?
+
+Arcitecture
+ingester → redpanda → ch-sink (persist)
+                    → graph-engine (in-memory graphology-equivalent in Rust)
+                                    ↓
+                            snapshot + delta broadcast
+                                    ↓
+                    /graph/snapshot (initial) + /graph/stream (deltas SSE)
+                                    ↓
+                            frontend = thin renderer
