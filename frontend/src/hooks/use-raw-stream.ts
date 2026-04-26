@@ -81,7 +81,9 @@ export function useRawStream() {
     "token-mint": 0,
     "tip-account": 0,
     "mev-searcher": 0,
-    "flow-hub": 0,
+    "multi-hub": 0,
+    "sol-hub": 0,
+    "spl-hub": 0,
     whale: 0,
     "mpc-member": 0,
     normal: 0,
@@ -368,7 +370,9 @@ export function useRawStream() {
         "token-mint": 0,
         "tip-account": 0,
         "mev-searcher": 0,
-        "flow-hub": 0,
+        "multi-hub": 0,
+        "sol-hub": 0,
+        "spl-hub": 0,
         whale: 0,
         "mpc-member": 0,
         normal: 0,
@@ -492,6 +496,11 @@ function ensureNode(
     color: ROLE_PALETTE.normal.rgb,
     label: nodeLabel(id),
     degree: 0,
+    // Per-node "have we ever seen a SOL/SPL edge to this counterparty"
+    // counts. Drive the sol-hub / spl-hub / multi-hub split. Pure
+    // connectivity signals  no amounts involved.
+    solDegree: 0,
+    splDegree: 0,
     volume: 0,
     selfLoops: 0,
     // MPC signal inputs. inVol/outVol feed the balanced-flow ratio;
@@ -558,6 +567,7 @@ function applyEdge(
   incAttr(graph, e.from, "outVol", e.volume_sol);
   incAttr(graph, e.to, "inVol", e.volume_sol);
 
+  const isSpl = !!e.mint;
   // Edge: thicken on repeats. graphology is undirected + simple, so
   // hasEdge handles both directions.
   if (graph.hasEdge(e.from, e.to)) {
@@ -571,6 +581,18 @@ function applyEdge(
       edgeWidth(graph.getEdgeAttribute(eid, "volume") as number, graph, e.from, e.to),
     );
     graph.setEdgeAttribute(eid, "weight", graph.getEdgeAttribute(eid, "txCount") as number);
+    // Promote the edge if this is the first time we've seen the
+    // other token-class on this pair, and bump the node-level
+    // sol/spl-degree counters once.
+    if (isSpl && !graph.getEdgeAttribute(eid, "hasSpl")) {
+      graph.setEdgeAttribute(eid, "hasSpl", true);
+      incAttr(graph, e.from, "splDegree", 1);
+      incAttr(graph, e.to, "splDegree", 1);
+    } else if (!isSpl && !graph.getEdgeAttribute(eid, "hasSol")) {
+      graph.setEdgeAttribute(eid, "hasSol", true);
+      incAttr(graph, e.from, "solDegree", 1);
+      incAttr(graph, e.to, "solDegree", 1);
+    }
   } else {
     // Canonical direction = the "from" of the very first observation.
     // Later txs are classified as AB (matches canonical) or BA (reverse).
@@ -586,9 +608,18 @@ function applyEdge(
       size: edgeWidth(e.volume_sol, graph, e.from, e.to),
       color: e.kind ? colorForEdgeKind(e.kind) : EDGE_COLOR,
       kind: e.kind ?? "transfer",
+      hasSol: !isSpl,
+      hasSpl: isSpl,
     });
     incAttr(graph, e.from, "degree", 1);
     incAttr(graph, e.to, "degree", 1);
+    if (isSpl) {
+      incAttr(graph, e.from, "splDegree", 1);
+      incAttr(graph, e.to, "splDegree", 1);
+    } else {
+      incAttr(graph, e.from, "solDegree", 1);
+      incAttr(graph, e.to, "solDegree", 1);
+    }
     commitEdge(graph, components, e.from, e.to);
   }
 }

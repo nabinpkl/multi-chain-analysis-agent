@@ -59,17 +59,71 @@ giant hubs bridges etc.
 
 # Worth considering a fix later — e.g., full-strength attraction when both endpoints are hubs.
 
+**What the frontend shows today is 100% geometric**
 
-Yes — and it's exactly the right frame. We backed into a solar system. Hubs are stars, spokes are planets/moons in orbit, hub-to-hub edges are binary star gravitational couplings, the canvas gravity is the galactic center.
+Everything visible is one of:
+- The graph canvas (Sigma rendering nodes and edges)
+- Role swatches with counts in the sidebar (9 numbers)
+- Total wallets / edges / lagged in the status panel
+- Edge color legend (3 line samples)
+- A paragraph of marketing copy
 
-What planetary physics gives us that Force-Atlas 2 doesn't:
+That's the full surface. Nine count integers and a paragraph. No tables, no rankings, no detail panels, no search, no time series, nothing clickable.
 
-- **Mass-weighted inertia**: in real solar systems, the sun barely moves when a comet swings by. Our hubs *should* feel immovable relative to their spokes. FA2 treats every node as equal mass → hubs drift. If we set `node.mass = degree` and bump repulsion scaling with mass, hubs become gravitational anchors.
+**What the data layer ALREADY computes but never surfaces**
 
-- **Orbital stability instead of equilibrium-by-damping**: FA2 reaches equilibrium by dissipating energy (`slowDown`). Real orbits are stable because of angular momentum — they don't need damping to hold shape. That's why our graph "bubbles" — it has no angular memory, only damping. A custom orbital layout would remember each spoke's angle around its hub and preserve it across snapshots.
+Every detect tick (every 3 seconds) we compute:
 
-- **Attraction proportional to mass, not inverse**: my current `edgeWeight = 1 / log(hub_degree)` is *anti-planetary*. Real moons are strongly bound to heavy planets, not weakly. Reversing that (+ relying on mass-weighted repulsion to prevent spoke pileup) brings us closer.
+- **Tip-style accounts**: top 8 by degree+dust signature, IDs, full bucket distribution by tips-touched, total unique searchers
+- **Heavy MEV searchers**: full per-bot record (tips touched, in/out/bidir SOL, non-tip degree)
+- **MPC communities**: flagged community IDs, looper share, intra-volume share, size, total volume per community
+- **Top hubs**: by degree (10), by volume (10), with their full IDs and metrics
+- **Cluster centrality diagnostics**: per-component biggest/runner-up degrees, top-vs-second ratios, distance from centroid
+- **Per-component stats**: size, totalVolume, edgeCount, top members by degree and volume, role counts
+- **Per-node roles**: classified label for every wallet
+- **Per-mint activity**: count of edges per mint, kind distribution
 
-- **Hierarchy**: stars host planets host moons. Our graph has hubs and their sub-hubs. A true hierarchical layout could place sub-hubs in orbital shells inside the primary hub's gravity well.
+All of this lives in `componentStatsRef`, `rolesRef`, `mintAddrsRef`, plus the console logs that dump it every 3 seconds. The user can see it only by opening DevTools and reading raw JSON output. That's not a surface — that's a diagnostic dump.
 
-**What's the move?** Nothing urgent today. But when you come back to polish: replace FA2 with a custom orbital layout — sigma.js supports pluggable layouts. Roughly a week of work. Payoff is enormous: the visualization stops "bubbling" and starts "orbiting." Real stability, visually and structurally. You'd have built something no other blockchain viz does.
+**The missing analytical surfaces**
+
+In rough priority order based on what the data already supports:
+
+1. **Top MPC communities table** — ranked by total volume, with member count, looper share, intra-volume share. Clickable to show members. We have all of this in `componentStatsRef` and the `[mpc]` log.
+
+2. **Heavy MEV searchers leaderboard** — ranked by tips touched + non-tip degree. Already computed in the `[mev] heavy searchers` log. Just needs a table.
+
+3. **Top mints leaderboard** — ranked by edges, broken down by transfer/mint/burn. Surfaces the pump.fun lifecycle and the rent-recovery patterns we discovered. Computable from the edge stream directly.
+
+4. **Hub leaderboards** — top sol-hub, spl-hub, multi-hub with their degrees and connection patterns. Useful for finding DEX vaults, exchange wallets, cross-asset routers.
+
+5. **Wallet profile (click-through)** — click any node, see its role, full address, in/out volume, neighbor list, component membership. Most table-stakes for any chain explorer; we have everything needed.
+
+6. **Per-component summary** — list of the largest 20 components with their stats. Lets the user navigate the topology by zooming to specific components.
+
+7. **Live tx-rate / activity timeline** — count of transactions, edges, mints, burns per minute over the last hour. Useful baseline for "is something unusual happening right now?"
+
+**Performance considerations you mentioned**
+
+After SPL capture, edge throughput jumped ~3-5x. Frame rate is still acceptable (haven't seen it tank), but we haven't stress-tested the layout at 50k+ wallets. The per-component layout is `O(N²)` for components ≤400 nodes, attraction `O(E)` for edges. Those scale linearly-ish for now.
+
+Specific perf hotspots to look at:
+- Detect tick walks the entire graph every 3s (forEachNode + classifier) — `O(N)` but the constant factor matters
+- Louvain runs synchronously on the main thread (graphology-communities-louvain) — could be moved to a worker
+- Component-stats walks every component's members — `O(N)` per detect
+- Sigma rendering scales with visible nodes/edges
+
+**Suggested starting point**
+
+The "MPC explorer" surface (your original Pass 2 from the session summary) is probably the highest-leverage analytical addition because:
+
+- The data is unique on the chain (most explorers don't surface MPC closed-loop detection)
+- We already compute it every 3 seconds and just throw it on the floor
+- The first-pass UI is just a sortable table — small lift
+- It builds on the existing classifier, no new heuristics needed
+
+Alternatively the "wallet profile page" (table stakes) is the user-facing one that completes the chain-explorer feel.
+
+Or we could start with a unified "live ticker" panel that shows: top mints right now, top MPC communities right now, top heavy searchers right now — all in one sidebar, ranked, refreshed every 3s. Lowest-effort way to expose the data we're already computing.
+
+Which direction feels right? My read: the live ticker first (cheap, exposes the data we've been talking about all session), then a wallet profile click-through, then the dedicated MPC explorer. But you might want to go straight to one of the more focused surfaces.

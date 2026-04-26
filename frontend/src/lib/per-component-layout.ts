@@ -77,17 +77,12 @@ const MIN_COMPONENT_SIZE_FOR_PUSH = 2;
 // which is the desired visual ("you can see the bridge, but the
 // communities don't sit on top of each other").
 const CROSS_COMMUNITY_REPULSION_FACTOR = 20;
-// Tip-account nodes (Jito tips co-anchoring the megacore) get pulled
-// toward angular target positions on a ring around the component
-// centroid. Forces them apart from each other deterministically; their
-// attached searcher fans follow via standard edge attraction. Result:
-// the megacore stops being one beige blob and resolves into N visible
-// petals, one per tip, with multi-tip searchers settling into the
-// center between petals. Spring-like force toward the target; decays
-// as the tip approaches its target.
-const TIP_TARGET_RING_K = 0.025;
-const TIP_RING_RADIUS_MIN = 220;
-const TIP_RING_RADIUS_MAX = 850;
+// Tip-vs-tip repulsion. Always-active O(K^2) loop over the small
+// set of tips in each component (typically ≤8) so tips stay
+// angularly distributed without piling up. Standard 1/d² with a
+// large constant: only meaningful at short distances, harmless
+// when tips are far apart.
+const TIP_TIP_REPULSION = 80000;
 // A node with this many visible edges is a megahub: probably a
 // Jito tip account, DEX fee receiver, or other routing/aggregator
 // wallet. We don't filter it (we want to see it exists), but its
@@ -168,11 +163,12 @@ export function stepPerComponentLayout(
     const degrees = new Int32Array(n);
     const idIndex = new Map<string, number>();
     // Indices of nodes in this component whose role is "tip-account".
-    // Drives the ring-spread force below; sorted by id so each tip
-    // always lands on the same angular position frame to frame.
+    // Tips get extra forces below: tip-vs-non-tip repulsion (pushes
+    // them outward against the searcher mass) and tip-vs-tip
+    // repulsion (keeps them angularly distributed). No fixed angular
+    // targets  positions emerge from force balance.
     const tipIndices: number[] = [];
-    let cx = 0;
-    let cy = 0;
+    const isTip = new Uint8Array(n);
 
     for (let i = 0; i < n; i++) {
       const id = ids[i];
@@ -182,17 +178,11 @@ export function stepPerComponentLayout(
       sizes[i] = Math.max(1, (graph.getNodeAttribute(id, "size") as number) ?? 1);
       communities[i] = nodeToCommunity?.get(id) ?? -1;
       degrees[i] = (graph.getNodeAttribute(id, "degree") as number) ?? 0;
-      cx += xs[i];
-      cy += ys[i];
       if (graph.getNodeAttribute(id, "role") === "tip-account") {
         tipIndices.push(i);
+        isTip[i] = 1;
       }
     }
-    cx /= n;
-    cy /= n;
-    // Stable angular assignment: sort tips by id so the same tip lands
-    // on the same petal across frames even as new tips appear.
-    tipIndices.sort((a, b) => (ids[a] < ids[b] ? -1 : ids[a] > ids[b] ? 1 : 0));
 
     // Pairwise repulsion, size-weighted so hubs claim their own space
     // and leaves orbit at an equilibrium proportional to the hub.
@@ -266,23 +256,63 @@ export function stepPerComponentLayout(
       });
     }
 
-    // Ring-spread force on tip-accounts. With >=2 tips in the
-    // component, distribute them evenly around a ring at the
-    // component centroid; spring force pulls each toward its target
-    // angle. Searcher fans follow via existing edge attraction.
-    if (tipIndices.length >= 2) {
-      const ringRadius = Math.min(
-        TIP_RING_RADIUS_MAX,
-        Math.max(TIP_RING_RADIUS_MIN, Math.sqrt(n) * 50),
-      );
+    // Tip-account positioning: organic, not ad-hoc. Two always-on
+    // forces, no fixed angular targets or radii.
+    //
+    //  - Tip-vs-non-tip repulsion: every non-tip member of the
+    //    component pushes each tip outward via standard 1/d². As the
+    //    searcher mass grows, its outward pressure on tips grows
+    //    with it, so tips drift to the cluster perimeter without us
+    //    declaring a perimeter.
+    //
+    //  - Tip-vs-tip repulsion: small O(K^2) loop keeps tips
+    //    angularly distributed without any of them piling on top of
+    //    each other.
+    //
+    // Both run regardless of component size (the standard pairwise
+    // loop above is gated by MAX_N2_COMPONENT_SIZE and skips for the
+    // megacore). Equilibrium emerges from force balance with edge
+    // attraction; nothing tells the tips where to be.
+    if (tipIndices.length >= 1) {
+      // Tip-vs-non-tip repulsion. O(tips * n) per component.
+      // Reciprocal: also pushes the non-tip out, which keeps leaves
+      // from packing too tightly against tip nodes.
+      for (const i of tipIndices) {
+        for (let j = 0; j < n; j++) {
+          if (j === i || isTip[j]) continue;
+          const dx = xs[j] - xs[i];
+          const dy = ys[j] - ys[i];
+          const d2 = dx * dx + dy * dy + 0.01;
+          const d = Math.sqrt(d2);
+          const sizeFactor = Math.pow(sizes[i] * sizes[j], SIZE_POW);
+          const f = (REPULSION * sizeFactor) / d2;
+          const ux = dx / d;
+          const uy = dy / d;
+          fx[i] -= f * ux;
+          fy[i] -= f * uy;
+          fx[j] += f * ux;
+          fy[j] += f * uy;
+        }
+      }
+
+      // Tip-vs-tip repulsion.
       const numTips = tipIndices.length;
-      for (let k = 0; k < numTips; k++) {
-        const i = tipIndices[k];
-        const theta = (2 * Math.PI * k) / numTips;
-        const targetX = cx + ringRadius * Math.cos(theta);
-        const targetY = cy + ringRadius * Math.sin(theta);
-        fx[i] += (targetX - xs[i]) * TIP_TARGET_RING_K;
-        fy[i] += (targetY - ys[i]) * TIP_TARGET_RING_K;
+      for (let a = 0; a < numTips; a++) {
+        const i = tipIndices[a];
+        for (let b = a + 1; b < numTips; b++) {
+          const j = tipIndices[b];
+          const dx = xs[j] - xs[i];
+          const dy = ys[j] - ys[i];
+          const d2 = dx * dx + dy * dy + 0.01;
+          const d = Math.sqrt(d2);
+          const f = TIP_TIP_REPULSION / d2;
+          const ux = dx / d;
+          const uy = dy / d;
+          fx[i] -= f * ux;
+          fy[i] -= f * uy;
+          fx[j] += f * ux;
+          fy[j] += f * uy;
+        }
       }
     }
 

@@ -26,10 +26,20 @@ export const ROLE_PALETTE: Record<
     oklch: "oklch(0.78 0.13 215)",
     label: "MEV searcher",
   },
-  "flow-hub": {
+  "multi-hub": {
+    rgb: "rgb(40, 130, 70)",
+    oklch: "oklch(0.55 0.13 150)",
+    label: "Multi hub (SOL+SPL)",
+  },
+  "sol-hub": {
     rgb: "rgb(120, 210, 110)",
     oklch: "oklch(0.79 0.16 145)",
-    label: "Flow hub",
+    label: "SOL hub",
+  },
+  "spl-hub": {
+    rgb: "rgb(190, 220, 80)",
+    oklch: "oklch(0.84 0.16 115)",
+    label: "SPL hub",
   },
   whale: {
     rgb: "rgb(240, 200, 90)",

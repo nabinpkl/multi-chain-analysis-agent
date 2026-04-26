@@ -1,30 +1,29 @@
-
 # Must Do's
-- Every backend feature change do docker compose up -d --build at last.
+- Every backend feature change run docker compose up -d --build at end.
+- Use latest docs for frontend and backend libraries before coding.
+- For every library you need to add always search is it maintained. If not maintained we don't use it.
 
 # Don'ts
-- No God component if it makes sense to extract to a component do it
-- No dead code — if something is removed, delete it entirely (files, imports, types, everything referencing it)
-- No backward compatibility layers — this is iteration-based development; just change the code directly
+- No God component. Extract component if make sense.
+- No dead code. Removed = delete entirely (files, imports, types, all refs).
+- No backward compat layers. Iteration-based dev. Change code direct.
 
 # Writing rules (docs/LinkedInEngineeringPosts/ only)
 
-These rules apply when drafting or editing post content inside `docs/EngineeringPosts/`.
+Apply when drafting/editing post content in `docs/EngineeringPosts/`.
 
-- No em-dashes. They read as AI-written on sight. Use periods, commas, colons, or parens instead.
-- No "X is not Y, it's Z" cadence unless it really earns it.
-- Keep the numbers. They do the heavy lifting.
+- No em-dashes. Read AI-written. Use periods, commas, colons, parens.
+- No "X is not Y, it's Z" cadence unless earned.
+- Keep numbers. Heavy lifting.
 - First person, plain words, short paragraphs.
-- Audience is peer engineers and technical hiring managers, not recruiters. Technical terms (O-notation, mmap, asymptotic) stay when they advance the story. Flex-for-flex's-sake (naming libraries just to sound senior) gets cut.
-- The post is a log, not content marketing. Skip hook-bait openers. The reader arrived from a resume link, not a scroll.
+- Audience = peer engineers + technical hiring managers, not recruiters. Technical terms (O-notation, mmap, asymptotic) stay when advance story. Flex-for-flex's-sake (naming libs to sound senior) cut.
+- Post = log, not content marketing. Skip hook-bait openers. Reader from resume link, not scroll.
 
 # MultiChain Analysis Engine
 
-# JustGetDomain.com — Build Context
-
 ## What It Is
 
-Listen txs from multiple chain normalize it link each tx to the data then build a graph serve the graph.
+Listen txs from multiple chain, normalize, link each tx to data, build graph, serve graph.
 
 ## Infrastructure
 
@@ -34,18 +33,19 @@ Listen txs from multiple chain normalize it link each tx to the data then build 
 
 ## `frontend/` stack
 
-- **Framework:** Next.js 16.2.3, App Router, TypeScript, `src/` directory, `@/*` alias
+- **Framework:** Next.js 16+, App Router, TypeScript, `src/` directory, `@/*` alias
 - **Package manager:** pnpm
 - **Styling:** Tailwind CSS v4 (CSS-first via `@tailwindcss/postcss`)
 - **UI components:** shadcn/ui — all components installed in `src/components/ui/`
 - **State:** Zustand v5 (client), TanStack Query v5 (server)
 - **Animation:** motion v12 (`motion/react`)
-- Color: Every color should be oklch no # based colors (if needed convert first)
+- Color: All colors oklch, no # based (convert if needed).
+
 
 ## Backend Rust Service Architecture
 
 ### Decision: Axum
-Axum 0.8.x is the 2026 default. Built on Tokio, via Tower middleware for connection hygiene. Same runtime for batch (tokio::io file streaming) and serving. Single binary, single process.
+Axum 0.8.x = 2026 default. Built on Tokio, via Tower middleware for connection hygiene. Same runtime for batch (tokio::io file streaming) + serving. Single binary, single process.
 
 ### Core Crate Stack
 #### All latest
@@ -60,49 +60,49 @@ rustc-hash         # FxHashSet — faster than std HashMap
 
 **1. Idempotency on ingestion — non-negotiable.**
 
-You will restart, replay, double-fetch. Make every write idempotent.
+Will restart, replay, double-fetch. Make every write idempotent.
 
-- Use `signature` (tx hash) as the primary uniqueness key
-- ClickHouse: `ReplacingMergeTree(version)` engine on the edges table — duplicates collapse on merge
-- Re-fetching slot N must produce the same DB state as fetching it once
-- Why it matters: you'll absolutely run `getBlock(N)` twice during a restart. Without idempotency you have phantom edges in your graph.
+- Use `signature` (tx hash) as primary uniqueness key
+- ClickHouse: `ReplacingMergeTree(version)` engine on edges table. Duplicates collapse on merge.
+- Re-fetching slot N must produce same DB state as fetching once
+- Why: will run `getBlock(N)` twice on restart. Without idempotency = phantom edges in graph.
 
 **2. Durable checkpoint of last-processed slot.**
 
 - Single-row table `ingestion_state` storing `(component, last_slot, updated_at)`
-- Update **after** the batch commits, not before
-- On startup, read it to know where to resume
-- Why: without this, restart = re-ingest from genesis or skip slots silently. Both bad.
+- Update **after** batch commits, not before
+- On startup, read to know where to resume
+- Why: without this, restart = re-ingest from genesis or skip slots silent. Both bad.
 
 **3. Rate-limited RPC client wrapper.**
 
-You have a hard 5 req/sec cap. Don't trust yourself to remember everywhere.
+Hard 5 req/sec cap. Don't trust self to remember everywhere.
 
-- Wrap the RPC client in a token-bucket limiter (`governor` crate)
-- Set it to ~4/sec (leave headroom for bursts)
-- Every call goes through the wrapper — no exceptions
-- Why: violate the cap and you get 429s, then progressive backoff, then bans. Self-imposed limit prevents drift.
+- Wrap RPC client in token-bucket limiter (`governor` crate)
+- Set ~4/sec (headroom for bursts)
+- Every call goes through wrapper. No exceptions.
+- Why: violate cap = 429s, then progressive backoff, then bans. Self-imposed limit prevents drift.
 
 **4. Batched writes, not single-row inserts.**
 
 ClickHouse hates 1-row inserts. Buffer in memory.
 
-- Accumulate edges in a `Vec<Edge>` per ingestion worker
-- Flush on either: 10k rows OR 5 seconds elapsed (whichever first)
-- Use `tokio::sync::mpsc` channel between fetcher and writer
-- Why: 1-row inserts can be 100× slower and cause part-fragmentation in ClickHouse.
+- Accumulate edges in `Vec<Edge>` per ingestion worker
+- Flush on: 10k rows OR 5 sec elapsed (whichever first)
+- Use `tokio::sync::mpsc` channel between fetcher + writer
+- Why: 1-row inserts can be 100× slower, cause part-fragmentation in ClickHouse.
 
 **5. Graceful shutdown.**
 
-`Ctrl+C` should not lose the current batch.
+`Ctrl+C` must not lose current batch.
 
 - `tokio::signal::ctrl_c()` triggers shutdown
-- Drain in-flight RPC calls, flush write buffer, update checkpoint, then exit
-- Why: ungraceful shutdown = re-ingestion of partial slots on next start, wasted RPC budget.
+- Drain in-flight RPC calls, flush write buffer, update checkpoint, exit
+- Why: ungraceful shutdown = re-ingest partial slots next start, wasted RPC budget.
 
 **6. Error categorization.**
 
-Not all errors are equal. Decide once, encode in types:
+Not all errors equal. Decide once, encode in types:
 
 | Error | Action |
 |---|---|
@@ -113,85 +113,79 @@ Not all errors are equal. Decide once, encode in types:
 | Parse failure | Log + alert + skip slot (don't crash) |
 | DB write failure | Retry batch, then crash if persistent |
 
-Implement as `enum IngestError` with explicit handling in the loop.
+Implemented as `enum IngestError` with explicit handling in loop.
 
-**7. Schema migrations from day one.**
-
-- `refinery` crate + numbered SQL files in `migrations/`
-- Run on startup before opening connections
-- Why: you *will* change the schema in week two. Doing it manually invites drift between dev/prod.
-
-**8. Structured logging + tracing from the start.**
+**7. Structured logging + tracing from start.**
 
 - `tracing` + `tracing-subscriber` (Rust ecosystem standard)
-- Log: slot fetched, batch flushed, errors with context, rate limit hits
-- JSON output in production, pretty in dev
-- Why: when things break at 3am you need timestamps, slot numbers, and request IDs. Adding logs after the fact is painful.
+- Log: slot fetched, batch flushed, errors w/ context, rate limit hits
+- JSON output in prod, pretty in dev
+- Why: when things break 3am need timestamps, slot numbers, request IDs. Adding logs after = painful.
 
-**9. Frontend ↔ backend type contract.**
+**8. Frontend ↔ backend type contract.** (Later)
 
-You have Rust backend + Next.js frontend. Don't hand-write TypeScript types.
+Rust backend + Next.js frontend. Don't hand-write TS types.
 
 - Generate TS types from Rust structs via `ts-rs` crate (derive macro)
-- Or use `utoipa` to generate OpenAPI spec → `openapi-typescript` to TS
+- Or `utoipa` → OpenAPI spec → `openapi-typescript` to TS
 - Why: hand-keeping two type systems in sync rots fast.
 
-**10. Config via env vars, not files.**
+**9. Config via env vars, not files.** (Later)
 
 - `figment` or `envy` crate to load config
 - All secrets (RPC API key, ClickHouse password) from env
-- Never commit `.env` — only `.env.example`
-- Why: Oracle VM deploy + Vercel frontend means you'll have config in two places. Env vars are universal.
+- Never commit `.env`. Only `.env.example`.
+- Why: Oracle VM deploy + Vercel frontend = config in two places. Env vars universal.
 
-**11. Backpressure boundary between fetch and write.**
+**10. Backpressure boundary between fetch + write.**
 
-- Bounded channel (`tokio::sync::mpsc::channel(100)`) between RPC fetcher and DB writer
-- If writer is slow, fetcher blocks on send → naturally slows ingestion → respects rate limit
+- Bounded channel (`tokio::sync::mpsc::channel(100)`) between RPC fetcher + DB writer
+- If writer slow, fetcher blocks on send → slows ingestion → respects rate limit
 - Why: unbounded channels = OOM under DB stalls. Bounded = self-regulating.
 
-**12. Health endpoint for the API.**
+**11. Health endpoint for API.**
 
 - `GET /health` → returns `{ last_slot, lag_seconds, db_ok }`
-- Why: when frontend looks weird, first question is "is the ingester alive and current?"
+- Why: when frontend looks weird, first question = "ingester alive + current?"
 
-**13. Don't precompute graph metrics yet.**
+**12. Don't precompute graph metrics yet.**
 
 Tempting to materialize PageRank, centrality, communities upfront. Resist.
 
 - v0: only raw edges + simple aggregates
-- Add precomputed metrics when you have a query that's actually slow
-- Why: you'll over-engineer based on imagined queries. Build heuristics after seeing real usage patterns.
+- Add precomputed metrics when query actually slow
+- Why: will over-engineer on imagined queries. Build heuristics after real usage.
 
-**14. Frontend rendering boundary.**
+**13. Frontend rendering boundary.**
 
-You said graph viz. Browsers fall over at ~10k nodes with naive SVG/D3.
+Graph viz. Browsers fall over at ~10k nodes with naive SVG/D3.
 
-- Use Sigma.js, Cosmograph, or react-force-graph (WebGL-based) for 10k-100k nodes
-- Always paginate / cap server-side — never let API return >50k edges in one response
-- Why: a single bad query (`top wallets ever`) can crash a user's tab.
+- Use Sigma.js, Cosmograph, or react-force-graph (WebGL) for 10k-100k nodes
+- Always paginate / cap server-side. Never let API return >50k edges per response.
+- Why: one bad query (`top wallets ever`) crashes user tab.
 
-**15. Sentry / error reporting.**
+**14. Sentry / error reporting.**
 
-- Free tier covers solo dev easily
+- Free tier covers solo dev
 - Catches frontend errors, backend panics, deploy issues
-- Why: portfolio piece will be visited by people who don't tell you when it breaks. Sentry tells you instead.
+- Why: portfolio piece visited by people who don't tell you when broken. Sentry tells you.
 
 **Things to explicitly NOT worry about for v0:**
 
 - Authentication / multi-tenancy
 - Horizontal scaling
 - Distributed tracing (single-node, overkill)
-- Real-time WebSocket push to frontend (poll is fine)
-- Caching layer (ClickHouse is fast enough for v0)
+- Real-time WebSocket push to frontend (poll fine)
+- Caching layer (ClickHouse fast enough v0)
 - Microservices / message queues
 - Kubernetes (single VM, just systemd)
 
-Each of those is a real tool, but adding them now is anti-portfolio: it signals you've over-engineered a small project rather than executed cleanly on a focused one.
+Each = real tool, but adding now = anti-portfolio: signals over-engineered small project, not executed cleanly on focused one.
 
-**The mental frame:** every architectural choice should answer "what breaks first when this grows or restarts." If the answer is "data integrity, ingestion lag, or silent failure," fix it now. If the answer is "we'd need more capacity," defer it.
+**Mental frame:** every architectural choice answer "what breaks first when grows or restarts." Answer = "data integrity, ingestion lag, silent failure" → fix now. Answer = "need more capacity" → defer.
 
 # Known Limitations
 
 ## SOL transfer parser (v0)
 
-The ingester only captures SOL transfers via `SystemProgram::transfer` and `transferWithSeed` (top-level + inner instructions). It does **not** capture SOL movements that bypass `SystemProgram` entirely, such as program-owned PDAs that mutate lamports directly on accounts they own. This is good enough for daily-graph viz but understates true SOL flow involving complex DeFi programs. Revisit when fraud heuristics need stricter accounting (likely via `meta.preBalances`/`postBalances` diff as a complementary signal). See `Tickets.md` backlog.
+Ingester only captures SOL transfers via `SystemProgram::transfer` and `transferWithSeed` (top-level + inner instructions). Does **not** capture SOL movements bypassing `SystemProgram`, e.g. program-owned PDAs mutating lamports direct on accounts they own. Good enough for daily-graph viz but understates true SOL flow with complex DeFi programs. Revisit when fraud heuristics need stricter accounting (likely via `meta.preBalances`/`postBalances` diff as complementary signal). See `Tickets.md` backlog.

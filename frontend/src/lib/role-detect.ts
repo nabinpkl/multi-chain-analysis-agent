@@ -10,7 +10,9 @@ export type NodeRole =
   | "token-mint" // Mint pubkey: an SPL/Token-2022 mint account, not a wallet.
   | "tip-account" // Jito-style fee/tip receiver: high degree, dust avg/edge.
   | "mev-searcher" // Touches >=7 tip accounts, near-zero non-tip SOL footprint.
-  | "flow-hub" // High-degree real economic actor (DEX vault, exchange hot wallet).
+  | "multi-hub" // High-degree wallet touching both SOL and SPL counterparties.
+  | "sol-hub" // High-degree wallet whose neighbors are reached only via SOL.
+  | "spl-hub" // High-degree wallet whose neighbors are reached only via SPL.
   | "whale" // High-volume, low-fanout wallet (OTC, big trader).
   | "mpc-member" // Member of a Louvain community flagged by the MPC heuristic.
   | "normal";
@@ -46,10 +48,12 @@ export interface ClassifyInput {
 const MEV_TIPS_TOUCHED_MIN = 7;
 const MEV_MAX_SOL_FOOTPRINT = 0.01;
 
-// Flow-hub signature: real economic concentration. Distinct from tips
-// (which have orders of magnitude smaller per-edge volume).
-const FLOW_HUB_DEGREE_MIN = 50;
-const FLOW_HUB_AVG_VOL_PER_EDGE_MIN = 0.05;
+// Hub signature: connectivity only, no amount filter. A wallet with
+// 50+ unique counterparties is structurally a hub regardless of how
+// much value moves through it. The sub-classification (sol-hub /
+// spl-hub / multi-hub) uses binary presence of SOL vs SPL neighbors,
+// not amounts.
+const HUB_DEGREE_MIN = 50;
 
 // Whale signature: a few big counterparties. In contrast to flow-hub
 // (many edges, big average), the whale concentrates volume on a
@@ -66,12 +70,19 @@ const WHALE_DEGREE_MAX = 10;
  *
  * Resolution order is "first match wins" so a wallet that's both an
  * MPC member and a whale gets the more specific tag (whale). Order:
- *   token-mint -> tip-account -> mev-searcher -> flow-hub -> whale -> mpc-member -> normal
+ *   token-mint -> tip-account -> mev-searcher -> multi-hub -> sol-hub
+ *   -> spl-hub -> whale -> mpc-member -> normal
  *
  * `token-mint` runs first because mint pubkeys are token contracts and
  * a popular meme-coin mint can rack up thousands of recipient edges
  * with tiny per-edge volume  exactly the tip-account signature.
  * Without the override the classifier would mislabel them.
+ *
+ * Hub labels (multi/sol/spl) come after the more specific MEV/tip
+ * labels but before the value-based whale label. The split between
+ * the three hub types is purely on connectivity: does this wallet
+ * have any SOL neighbor, any SPL neighbor, both, or only one.
+ * No amount thresholds.
  */
 export function classifyNodes(input: ClassifyInput): Map<string, NodeRole> {
   const { graph, tipAddrs, mpcMembers, mintAddrs, tipsTouchedByNode } = input;
@@ -88,6 +99,8 @@ export function classifyNodes(input: ClassifyInput): Map<string, NodeRole> {
     }
 
     const degree = (graph.getNodeAttribute(id, "degree") as number) ?? 0;
+    const solDegree = (graph.getNodeAttribute(id, "solDegree") as number) ?? 0;
+    const splDegree = (graph.getNodeAttribute(id, "splDegree") as number) ?? 0;
     const volume = (graph.getNodeAttribute(id, "volume") as number) ?? 0;
     const inVol = (graph.getNodeAttribute(id, "inVol") as number) ?? 0;
     const outVol = (graph.getNodeAttribute(id, "outVol") as number) ?? 0;
@@ -110,17 +123,28 @@ export function classifyNodes(input: ClassifyInput): Map<string, NodeRole> {
       return;
     }
 
-    // flow-hub: real economic hub. Tip-accounts are excluded by the
-    // earlier branch, so no need to re-check here.
-    if (degree >= FLOW_HUB_DEGREE_MIN) {
-      const avgPerEdge = degree > 0 ? volume / degree : 0;
-      if (avgPerEdge >= FLOW_HUB_AVG_VOL_PER_EDGE_MIN) {
-        roles.set(id, "flow-hub");
+    // Hub labels: connectivity-only. A wallet with 50+ unique
+    // counterparties is structurally a hub. Sub-type by binary
+    // presence of SOL vs SPL neighbors  no fraction thresholds, no
+    // amount filters.
+    if (degree >= HUB_DEGREE_MIN) {
+      const hasSolNeighbor = solDegree >= 1;
+      const hasSplNeighbor = splDegree >= 1;
+      if (hasSolNeighbor && hasSplNeighbor) {
+        roles.set(id, "multi-hub");
+        return;
+      }
+      if (hasSolNeighbor) {
+        roles.set(id, "sol-hub");
+        return;
+      }
+      if (hasSplNeighbor) {
+        roles.set(id, "spl-hub");
         return;
       }
     }
 
-    // whale: high volume concentrated in a few edges.
+    // whale: high SOL volume concentrated in a few edges.
     if (volume >= WHALE_VOLUME_MIN && degree <= WHALE_DEGREE_MAX) {
       roles.set(id, "whale");
       return;
