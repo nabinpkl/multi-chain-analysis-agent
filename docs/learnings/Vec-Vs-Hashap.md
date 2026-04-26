@@ -1,6 +1,6 @@
 # Vec-as-Slab vs HashMap
 
-You nailed it. **Vec with EdgeIdx as key is already behaving as a HashMap with integer keys — just better.**
+ **Vec with EdgeIdx as key is already behaving as a HashMap with integer keys — just better.**
 
 ## Why Vec wins for integer keys
 

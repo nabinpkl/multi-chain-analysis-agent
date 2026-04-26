@@ -295,14 +295,16 @@ For union of small + large component: emit ComponentAssigned for nodes in smalle
 **Backend modified**:
 - `graph/mod.rs`  `ingest()` extended (cutoff advance + drain expired + add edge + settle splits + seq tag)
 - `graph/delta.rs`  replace slice 1 enum with slice 2 variants
-- `state.rs`  `raw_tx` → `delta_tx: broadcast::Sender<GraphDelta>`
+- `state.rs`  drop `raw_tx`; add `delta_tx: broadcast::Sender<GraphDelta>` (broadcast originates from `graph-engine` consumer task as it ingests, slice 1's plumbing extended)
 - `api/mod.rs`  drop `/graph/raw/stream` and `/graph/components` routes; add `/graph/stream`; keep `/graph/stats`
-- `main.rs`  wire `delta_tx` into AppState; no new background task
+- `main.rs`  wire `delta_tx` into AppState. Drop `state-sink` consumer task spawn (orphaned, see below). Existing `graph-engine` consumer task is the sole live ingest path.
+- `config.rs`  drop `KAFKA_GROUP_LIVE_STATE` env var (state-sink consumer group gone)
 - `Cargo.toml`  add `rayon`
 
 **Backend deleted**:
-- `api/raw.rs` (raw fire-hose obsolete)
+- `api/raw.rs` (raw fire-hose obsolete; frontend no longer needs raw edges  it consumes the typed delta protocol)
 - `api/components.rs` (slice 1 polling endpoint, replaced by SSE)
+- `sinks/state_sink.rs`  sole consumer of `raw_tx`, dies with `/graph/raw/stream`. Slice 1's `graph-engine` consumer group already consumes the same `solana.raw-edges` Kafka topic and now broadcasts deltas via `delta_tx`. Two consumer groups for the same topic was redundant; was kept in slice 1 only because the SSE fire-hose still needed `Arc<Edge>` broadcasts. With slice 2, one consumer group handles ingest → graph mutation → delta broadcast in a single path.
 
 **Frontend new**:
 - `hooks/use-graph-stream.ts`  protocol reducer + state holders
