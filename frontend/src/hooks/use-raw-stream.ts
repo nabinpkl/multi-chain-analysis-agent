@@ -2,11 +2,12 @@
 
 import Graph from "graphology";
 import { useEffect, useRef, useState } from "react";
-import { subscribeRawStream, type RawEdge } from "@/lib/api";
+import type { RawEdge } from "@/lib/api";
 import {
   addNode as addToComponent,
   createComponentState,
   findRoot,
+  setMembership,
   union,
   type ComponentState,
 } from "@/lib/components";
@@ -19,12 +20,23 @@ import { stepPerComponentLayout } from "@/lib/per-component-layout";
 import { classifyNodes, type NodeRole } from "@/lib/role-detect";
 import { colorForEdgeKind, colorForRole, ROLE_PALETTE } from "@/lib/role-colors";
 
+const DEFAULT_API_URL = "http://localhost:8002";
+
+function apiUrl(): string {
+  return process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_URL;
+}
+
 const MPC_DETECT_INTERVAL_MS = 3000;
 
 export type RoleSummary = Record<NodeRole, number>;
 
 /**
- * Owns a live graphology graph fed by the /graph/raw/stream SSE endpoint.
+ * Owns a live graphology graph fed by the /graph/stream SSE endpoint
+ * (delta protocol). Consumes NodeAdded + EdgeAdded deltas, mapping
+ * u32 node indices to pubkeys, then feeds the resulting RawEdge-shaped
+ * objects into the same applyEdge path as slice 1. Backend graph state
+ * is a "shadow"; frontend computes its own Union-Find / layout / roles.
+ *
  * Every ingested transaction either:
  *   - adds a new wallet (positioned near its partner; hash-jittered if new),
  *   - updates an existing edge's volume/tx count,
@@ -34,7 +46,11 @@ export type RoleSummary = Record<NodeRole, number>;
  * and mutate the shared Graph instance in place. React only re-renders the
  * status pill (`connected`, `edgeCount`), not the canvas.
  */
-export function useRawStream() {
+export type ComponentSource = "frontend" | "backend";
+
+export function useRawStream({
+  componentSource = "frontend",
+}: { componentSource?: ComponentSource } = {}) {
   const graphRef = useRef<Graph | null>(null);
   if (graphRef.current === null) {
     graphRef.current = new Graph({ multi: false, type: "undirected" });
@@ -47,39 +63,30 @@ export function useRawStream() {
   // instead of relying on FA2 to pull them across the canvas.
   const componentsRef = useRef<ComponentState>(createComponentState());
   // Latest Louvain assignment, refreshed on the detect interval.
-  // Layout uses it to push different communities apart even within a
-  // single connected component so MPC sub-clusters don't sit on top of
-  // their neighbors.
   const nodeToCommunityRef = useRef<Map<string, number>>(new Map());
-  // Latest per-node role classification, recomputed each detect tick
-  // from the current graph state. Sidecar to the graph itself so future
-  // UIs can subscribe without recomputing. The same role is also
-  // written onto each node as a `role` attribute for direct readers.
+  // Latest per-node role classification, recomputed each detect tick.
   const rolesRef = useRef<Map<string, NodeRole>>(new Map());
-  // Set of pubkeys we've observed as the synthetic peer on a mint or
-  // burn edge. They're SPL/Token-2022 mint accounts (token contracts),
-  // not user wallets. The role classifier checks this set first so a
-  // popular meme-coin mint doesn't get mislabeled as a tip-account.
+  // Set of pubkeys observed as the synthetic peer on a mint or burn edge.
   const mintAddrsRef = useRef<Set<string>>(new Set());
-  // Latest per-component aggregates (size, totalVolume, top members,
-  // role counts), keyed by Union-Find root id. Recomputed each detect
-  // tick. Connected components are the most informative grouping in
-  // raw blockchain data; this lets downstream views skip the walk.
+  // Latest per-component aggregates, keyed by Union-Find root id.
   const componentStatsRef = useRef<Map<string, ComponentStats>>(new Map());
+  // NodeIdx (u32) -> pubkey map populated from NodeAdded deltas.
+  const idxToPubkeyRef = useRef<Map<number, string>>(new Map());
+  // Trigger value to force EventSource reconnect on reset().
+  const resetTriggerRef = useRef<number>(0);
+  // Track current componentSource in a ref so effect callbacks see latest value.
+  const componentSourceRef = useRef<ComponentSource>(componentSource);
+
   const [status, setStatus] = useState<{
     connected: boolean;
     edgeCount: number;
     nodeCount: number;
     lagged: number;
-    firstBlockTime: number;
-    latestBlockTime: number;
   }>({
     connected: false,
     edgeCount: 0,
     nodeCount: 0,
     lagged: 0,
-    firstBlockTime: 0,
-    latestBlockTime: 0,
   });
   const [roleSummary, setRoleSummary] = useState<RoleSummary>({
     "token-mint": 0,
@@ -92,9 +99,51 @@ export function useRawStream() {
     "mpc-member": 0,
     normal: 0,
   });
+  // Increment to trigger useEffect re-run (new EventSource).
+  const [resetTick, setResetTick] = useState(0);
+
+  // When componentSource changes, update ref and reset so stale UF state
+  // doesn't mix with the new source.
+  useEffect(() => {
+    if (componentSourceRef.current !== componentSource) {
+      componentSourceRef.current = componentSource;
+      reset();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [componentSource]);
+
+  // reset(): clear all state, close current EventSource, open new one
+  // with ?skip_bootstrap=1 so only live edges arrive (no replay).
+  const reset = () => {
+    const graph = graphRef.current!;
+    graph.clear();
+    componentsRef.current = createComponentState();
+    mintAddrsRef.current = new Set();
+    idxToPubkeyRef.current = new Map();
+    nodeToCommunityRef.current = new Map();
+    rolesRef.current = new Map();
+    componentStatsRef.current = new Map();
+    pendingRef.current = [];
+    resetTriggerRef.current += 1;
+    setStatus({ connected: false, edgeCount: 0, nodeCount: 0, lagged: 0 });
+    setRoleSummary({
+      "token-mint": 0,
+      "tip-account": 0,
+      "mev-searcher": 0,
+      "multi-hub": 0,
+      "sol-hub": 0,
+      "spl-hub": 0,
+      whale: 0,
+      "mpc-member": 0,
+      normal: 0,
+    });
+    setResetTick((n) => n + 1);
+  };
 
   useEffect(() => {
     const graph = graphRef.current!;
+    const idxToPubkey = idxToPubkeyRef.current;
+    const isReset = resetTriggerRef.current > 0;
 
     const flush = () => {
       rafRef.current = null;
@@ -102,16 +151,18 @@ export function useRawStream() {
       if (batch.length === 0) return;
       pendingRef.current = [];
       for (const e of batch) {
-        applyEdge(graph, e, componentsRef.current, mintAddrsRef.current);
+        applyEdge(
+          graph,
+          e,
+          componentsRef.current,
+          mintAddrsRef.current,
+          componentSourceRef.current,
+        );
       }
-      const latest = batch.reduce((m, e) => Math.max(m, e.block_time), 0);
-      const earliest = batch.reduce((m, e) => (e.block_time > 0 && (m === 0 || e.block_time < m) ? e.block_time : m), 0);
       setStatus((s) => ({
         ...s,
         edgeCount: graph.size,
         nodeCount: graph.order,
-        firstBlockTime: s.firstBlockTime === 0 && earliest > 0 ? earliest : s.firstBlockTime,
-        latestBlockTime: latest > 0 ? latest : s.latestBlockTime,
       }));
     };
 
@@ -120,51 +171,165 @@ export function useRawStream() {
       rafRef.current = requestAnimationFrame(flush);
     };
 
-    const unsubscribe = subscribeRawStream(
-      (edge) => {
+    // Open SSE connection to the delta-protocol endpoint.
+    const url = new URL("/graph/stream", apiUrl());
+    if (isReset) {
+      url.searchParams.set("skip_bootstrap", "1");
+    }
+    const es = new EventSource(url.toString());
+
+    es.onopen = () => {
+      setStatus((s) => ({ ...s, connected: true }));
+    };
+
+    es.onerror = () => {
+      setStatus((s) => ({ ...s, connected: false }));
+    };
+
+    // NodeAdded: populate the idx->pubkey map. Do not add to graphology
+    // yet; defer until EdgeAdded so we can place the node near its partner.
+    es.addEventListener("NodeAdded", (ev) => {
+      try {
+        const d = JSON.parse((ev as MessageEvent).data);
+        idxToPubkey.set(d.idx as number, d.pubkey as string);
+      } catch {
+        // ignore malformed events
+      }
+    });
+
+    es.addEventListener("EdgeAdded", (ev) => {
+      try {
+        const d = JSON.parse((ev as MessageEvent).data);
+        const from = idxToPubkey.get(d.src as number);
+        const to = idxToPubkey.get(d.dst as number);
+        if (!from || !to) return;
+        // Build a RawEdge-shaped object. The god-hook's applyEdge
+        // consumer handles the rest exactly as in slice 1.
+        const edge: RawEdge = {
+          signature: String(d.idx),       // EdgeIdx is a stable per-edge id
+          block_time: Number(d.slot),      // slot as monotonic timestamp surrogate
+          from,
+          to,
+          volume_sol: d.mint ? 0 : Number(d.amount) / 1e9, // LAMPORTS_PER_SOL = 1e9
+          mint: d.mint ?? undefined,
+          kind: d.kind ?? undefined,
+        };
         pendingRef.current.push(edge);
         schedule();
-      },
-      (missed) => {
-        setStatus((s) => ({ ...s, lagged: s.lagged + missed }));
-      },
-      () => {
-        setStatus((s) => ({ ...s, connected: false }));
-      },
-    );
+      } catch {
+        // ignore malformed events
+      }
+    });
 
-    setStatus((s) => ({ ...s, connected: true }));
+    es.addEventListener("EdgeExpired", (ev) => {
+      try {
+        const d = JSON.parse((ev as MessageEvent).data);
+        const edgeKey = String(d.idx);
+        if (!graph.hasEdge(edgeKey)) return;
+        const src = graph.source(edgeKey);
+        const dst = graph.target(edgeKey);
+        graph.dropEdge(edgeKey);
+        // Decrement degrees on both endpoints if still present.
+        if (graph.hasNode(src)) {
+          graph.updateNodeAttribute(src, "degree", (n) => Math.max(0, (n ?? 1) - 1));
+        }
+        if (graph.hasNode(dst)) {
+          graph.updateNodeAttribute(dst, "degree", (n) => Math.max(0, (n ?? 1) - 1));
+        }
+        // Note: components UF isn't decremented (DSU doesn't support split).
+        // Frontend's component view becomes slightly stale on long
+        // window-slide events. Acceptable - backend is shadow, frontend owns visual.
+        setStatus((s) => ({ ...s, edgeCount: graph.size, nodeCount: graph.order }));
+      } catch {
+        // ignore malformed events
+      }
+    });
+
+    es.addEventListener("NodeExpired", (ev) => {
+      try {
+        const d = JSON.parse((ev as MessageEvent).data);
+        const pubkey = idxToPubkey.get(d.idx as number);
+        if (!pubkey) return;
+        if (graph.hasNode(pubkey)) graph.dropNode(pubkey);
+        idxToPubkey.delete(d.idx as number);
+        setStatus((s) => ({ ...s, edgeCount: graph.size, nodeCount: graph.order }));
+      } catch {
+        // ignore malformed events
+      }
+    });
+
+    if (componentSourceRef.current === "backend") {
+      es.addEventListener("ComponentAssigned", (ev) => {
+        try {
+          const d = JSON.parse((ev as MessageEvent).data) as {
+            node: number;
+            component_id: number;
+          };
+          const pubkey = idxToPubkey.get(d.node);
+          if (!pubkey) return; // node not yet seen
+          setMembership(
+            componentsRef.current,
+            pubkey,
+            String(d.component_id),
+          );
+        } catch {
+          // ignore malformed events
+        }
+      });
+
+      // Backend physics owns layout: every tick replays positions for
+      // every node that moved. Frontend RAF tick is suppressed below.
+      es.addEventListener("PositionsBatch", (ev) => {
+        try {
+          const d = JSON.parse((ev as MessageEvent).data) as {
+            positions: Array<{ idx: number; x: number; y: number }>;
+          };
+          for (const p of d.positions) {
+            const pubkey = idxToPubkey.get(p.idx);
+            if (!pubkey) continue;
+            if (!graph.hasNode(pubkey)) continue;
+            graph.setNodeAttribute(pubkey, "x", p.x);
+            graph.setNodeAttribute(pubkey, "y", p.y);
+          }
+        } catch {
+          // ignore malformed events
+        }
+      });
+    }
+
+    es.addEventListener("CaughtUp", () => {
+      // Bootstrap replay complete. Connected status is already true.
+      // Could set a "loaded" flag here if needed.
+    });
 
     // Per-component layout tick. Replaces the global FA2 worker so
     // forces only apply within each connected component  different
     // components sit at their deterministic spawn positions and never
     // drift toward each other under Barnes-Hut repulsion.
+    //
+    // Backend mode: backend owns physics, so the frontend RAF tick is
+    // skipped; positions arrive via PositionsBatch deltas.
     let layoutRafId: number | null = null;
-    const layoutTick = () => {
+    if (componentSourceRef.current !== "backend") {
+      const layoutTick = () => {
+        layoutRafId = requestAnimationFrame(layoutTick);
+        if (graph.order < 2) return;
+        stepPerComponentLayout(
+          graph,
+          componentsRef.current,
+          nodeToCommunityRef.current,
+        );
+      };
       layoutRafId = requestAnimationFrame(layoutTick);
-      if (graph.order < 2) return;
-      stepPerComponentLayout(
-        graph,
-        componentsRef.current,
-        nodeToCommunityRef.current,
-      );
-    };
-    layoutRafId = requestAnimationFrame(layoutTick);
+    }
 
-    // Louvain + MPC scoring on a throttle. Runs on the main thread
-    // because graphology-communities-louvain doesn't ship a worker; on
-    // a 5k-node graph it's still <50ms so the dropped frame is
-    // acceptable given the 3s cadence.
+    // Louvain + MPC scoring on a throttle.
     const detectInterval = window.setInterval(() => {
       if (graph.order < 10) return;
       const { nodeToCommunity, mpcCommunities, communityStats } =
         detectMpcClusters(graph);
       nodeToCommunityRef.current = nodeToCommunity;
       if (mpcCommunities.size > 0) {
-        // Sort by totalVolume rather than size: a 30-wallet cluster
-        // moving 2,800 SOL is the interesting story, not a 200-wallet
-        // dust loop holding 0.18 SOL. Volume is the fraud-relevant
-        // signal once a community is already flagged by the heuristic.
         const flagged = [...mpcCommunities]
           .map((c) => ({ c, ...communityStats.get(c) }))
           .sort((a, b) => (b.totalVolume ?? 0) - (a.totalVolume ?? 0));
@@ -178,12 +343,6 @@ export function useRawStream() {
         );
       }
 
-      // Top wallets by degree and volume. Used to diagnose the
-      // "everything is one giant component" pattern  if one wallet
-      // has >1000 edges it's almost certainly a DEX/exchange hot
-      // wallet that's pulling thousands of unrelated counterparties
-      // into a single Union-Find component, and we may want to let
-      // the user filter it out.
       const allNodes: { id: string; degree: number; volume: number }[] = [];
       graph.forEachNode((id) => {
         allNodes.push({
@@ -205,15 +364,6 @@ export function useRawStream() {
       // eslint-disable-next-line no-console
       console.log("[hubs] top by volume " + JSON.stringify(topByVolume));
 
-      // Per-cluster centrality diagnostic. For each connected
-      // component above a minimum size, find the node with the
-      // highest degree (the "biggest party") and the runner-up. The
-      // ratio tells us whether the cluster has a clear center
-      // (ratio >> 1 = star shape, biggest is unambiguous) or no
-      // clear center (ratio ~= 1 = multi-hub or mesh, biggest is a
-      // tie). We also report the biggest node's distance from the
-      // cluster centroid so we can see whether force balance is
-      // already placing it there or not.
       const clusters: Array<{
         size: number;
         top: string;
@@ -262,17 +412,6 @@ export function useRawStream() {
         "[clusters] centrality " + JSON.stringify(clusters.slice(0, 10)),
       );
 
-      // Tip-account behavior profile. Jito tip accounts (and any
-      // similar router/fee receivers) self-identify as: high degree,
-      // tiny avg per-tx volume. We pick the top-N matching that
-      // signature, then look at every wallet connected to at least
-      // one of them: how many tips does it touch, what's its
-      // in/out/bidir volume. This tells us the MEV-searcher
-      // population shape without filtering anything out.
-      // Tip-style signature: high degree + dust avg per edge. Loosened
-      // from 0.001 to 0.01 SOL/edge after the data showed mega-routers
-      // like 3dDx5... at degree 329 with 0.006 SOL/edge (memecoin
-      // platform fee accounts and the like) were being missed.
       const tipCandidates = allNodes
         .filter((n) => {
           if (n.degree < 50) return false;
@@ -298,11 +437,6 @@ export function useRawStream() {
           searcherProfile.set(other, cur);
         });
       }
-      // Bucket searchers by how many tip accounts they touch.
-      // 1   = one-off bundle, occasional MEV
-      // 2-3 = part-time searcher
-      // 4-6 = regular searcher
-      // 7-8 = heavy MEV bot, paying every shift
       const buckets = { "1": 0, "2-3": 0, "4-6": 0, "7-8": 0 };
       for (const [, p] of searcherProfile) {
         if (p.tipsTouched === 1) buckets["1"]++;
@@ -310,12 +444,6 @@ export function useRawStream() {
         else if (p.tipsTouched <= 6) buckets["4-6"]++;
         else buckets["7-8"]++;
       }
-      // Heavy searchers: those touching >=4 tip accounts. For each,
-      // show in/out/bidir balance + their non-tip counterparty count.
-      // Heavy + balanced in/out + many non-tip neighbors = active
-      // searcher cycling SOL through the system.
-      // Heavy + outVol-only = paying tips, profits hidden in SPL
-      // tokens we don't capture.
       const heavySearchers: Array<{
         id: string;
         tips: number;
@@ -354,11 +482,6 @@ export function useRawStream() {
         "[mev] heavy searchers " + JSON.stringify(heavySearchers.slice(0, 15)),
       );
 
-      // Classify every node into one of six roles using the data we
-      // already have on the graph. The raw graph stays raw; we just
-      // tag it. Future UIs (wallet profile, MPC explorer, live MEV
-      // dashboard) read the `role` attribute directly without
-      // recomputing.
       const mpcMembers = new Set<string>();
       for (const [id, c] of nodeToCommunity) {
         if (mpcCommunities.has(c)) mpcMembers.add(id);
@@ -406,32 +529,30 @@ export function useRawStream() {
     }, MPC_DETECT_INTERVAL_MS);
 
     return () => {
-      unsubscribe();
+      es.close();
       if (rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
       window.clearInterval(detectInterval);
       if (layoutRafId !== null) cancelAnimationFrame(layoutRafId);
+      setStatus((s) => ({ ...s, connected: false }));
     };
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetTick]);
 
-  // graph is a stable singleton (created once on first render, never
-  // reassigned). The two ref objects are also stable. Returning them
-  // is intentional: callers read .current on demand outside render.
-  // eslint-disable-next-line react-hooks/refs
   return {
-    // eslint-disable-next-line react-hooks/refs
     graph: graphRef.current,
     status,
     roleSummary,
     rolesRef,
     componentStatsRef,
+    reset,
   };
 }
 
 /**
- * Deterministic hash → [0, 1). Used for jitter angles so a wallet id
+ * Deterministic hash -> [0, 1). Used for jitter angles so a wallet id
  * always spawns at the same relative position given the same partner.
  */
 function hash01(s: string): number {
@@ -447,8 +568,6 @@ function hash01(s: string): number {
 // their partner so FA2 doesn't have to pull them across the canvas  it
 // only has to separate two stacked points, which it does in a frame or
 // two.
-// Tiny jitter so a new node lands right on top of its partner and FA2
-// just separates them  no cross-canvas travel.
 const SPAWN_RADIUS = 1.5;
 // Orphans scatter across a huge box so brand-new components start out
 // far from every other component and don't have to push through the
@@ -471,11 +590,7 @@ function placeNear(
     };
   }
   // Brand-new orphan: scatter randomly (but deterministically per id)
-  // across a large area. FA2 will compact each component locally; what
-  // we want to avoid is two components spawning on top of each other.
-  // Prepend the axis tag so the differing byte is mixed through every
-  // subsequent FNV step. Appending (id + ":x") barely changes the
-  // output and lands every orphan on the y=x diagonal.
+  // across a large area.
   const hx = hash01("x:" + newId);
   const hy = hash01("y:" + newId);
   return {
@@ -485,8 +600,13 @@ function placeNear(
 }
 
 function nodeLabel(id: string): string {
-  return `${id.slice(0, 4)}…${id.slice(-4)}`;
+  return `${id.slice(0, 4)}...${id.slice(-4)}`;
 }
+
+// Minimum number of component members already in the graph before we
+// prefer a component centroid over a partner position. Below this
+// threshold the centroid is too noisy to be useful.
+const CENTROID_THRESHOLD = 4;
 
 function ensureNode(
   graph: Graph,
@@ -495,6 +615,58 @@ function ensureNode(
   components: ComponentState,
 ): void {
   if (graph.hasNode(id)) return;
+
+  // If this node was already assigned to a component (e.g. via
+  // ComponentAssigned in backend mode, or via a prior union in
+  // frontend mode), and that component already has enough members
+  // placed in the graph, spawn near the component centroid instead
+  // of the raw partner position. This avoids orphan-scatter coords
+  // (random ±5000) propagating through the giant component when the
+  // layout skips pairwise repulsion for large components.
+  const compId = components.parent.get(id);
+  if (compId !== undefined) {
+    const members = components.members.get(
+      // parent points directly at the root in setMembership; use
+      // findRoot to handle the frontend-UF case where path may not
+      // be compressed yet.
+      compId,
+    );
+    if (members && members.size > CENTROID_THRESHOLD) {
+      let sx = 0, sy = 0, n = 0;
+      for (const m of members) {
+        if (m === id) continue;
+        if (!graph.hasNode(m)) continue;
+        sx += graph.getNodeAttribute(m, "x") as number;
+        sy += graph.getNodeAttribute(m, "y") as number;
+        n++;
+      }
+      if (n > 0) {
+        const cx = sx / n;
+        const cy = sy / n;
+        const angle = hash01(id) * Math.PI * 2;
+        addToComponent(components, id);
+        graph.addNode(id, {
+          x: cx + SPAWN_RADIUS * 2 * Math.cos(angle),
+          y: cy + SPAWN_RADIUS * 2 * Math.sin(angle),
+          size: 0.8,
+          color: ROLE_PALETTE.normal.rgb,
+          label: nodeLabel(id),
+          degree: 0,
+          solDegree: 0,
+          splDegree: 0,
+          volume: 0,
+          selfLoops: 0,
+          inVol: 0,
+          outVol: 0,
+          role: "normal" as NodeRole,
+          bidirVol: 0,
+        });
+        return;
+      }
+    }
+  }
+
+  // Fallback: partner-aware placement or orphan scatter.
   const { x, y } = placeNear(graph, id, partnerId);
   addToComponent(components, id);
   graph.addNode(id, {
@@ -504,22 +676,12 @@ function ensureNode(
     color: ROLE_PALETTE.normal.rgb,
     label: nodeLabel(id),
     degree: 0,
-    // Per-node "have we ever seen a SOL/SPL edge to this counterparty"
-    // counts. Drive the sol-hub / spl-hub / multi-hub split. Pure
-    // connectivity signals  no amounts involved.
     solDegree: 0,
     splDegree: 0,
     volume: 0,
     selfLoops: 0,
-    // MPC signal inputs. inVol/outVol feed the balanced-flow ratio;
-    // bidirVol counts volume on edges that have been observed in both
-    // directions. These sit unused in the layout today and are read by
-    // the (upcoming) MPC detection pass.
     inVol: 0,
     outVol: 0,
-    // Derived classification, set every detect tick by classifyNodes.
-    // Default "normal" so reads before the first detect run don't
-    // crash on undefined.
     role: "normal" as NodeRole,
     bidirVol: 0,
   });
@@ -528,26 +690,19 @@ function ensureNode(
 // SPL/Token-2022 edges arrive with `volume_sol == 0` and `mint`
 // set. Every volume increment below uses `e.volume_sol` directly,
 // so SPL edges contribute zero to all SOL-denominated signals
-// (`volume`, `inVol`, `outVol`, `volAB/volBA`, `bidirVol`) while
-// still bumping `degree`, `txCount`, and `txAB/txBA`. This keeps
-// tip/whale/MPC/flow-hub detection accurate for the SOL slice and
-// lets SPL transfers add only to graph topology.
+// while still bumping `degree`, `txCount`, etc.
 function applyEdge(
   graph: Graph,
   e: RawEdge,
   components: ComponentState,
   mintAddrs: Set<string>,
+  componentSource: ComponentSource,
 ): void {
-  // Mint pubkey discovery. For "mint" edges the synthetic source is
-  // the mint account; for "burn" edges it's the destination. Recording
-  // it here means the next detect tick can override the classifier.
   if (e.kind === "mint") {
     mintAddrs.add(e.from);
   } else if (e.kind === "burn") {
     mintAddrs.add(e.to);
   }
-  // Self-loops: no geometric meaning, but surface them on the node so
-  // bot/spam wallets still show up.
   if (e.from === e.to) {
     ensureNode(graph, e.from, null, components);
     const cur = (graph.getNodeAttribute(e.from, "selfLoops") as number) + 1;
@@ -567,17 +722,12 @@ function applyEdge(
     ensureNode(graph, e.to, e.from, components);
   }
 
-  // Node volume accounting, split by direction so we can compute a
-  // balanced-flow ratio per wallet. MPC hot wallets keep in~=out;
-  // accumulators skew heavily one way.
   incAttr(graph, e.from, "volume", e.volume_sol);
   incAttr(graph, e.to, "volume", e.volume_sol);
   incAttr(graph, e.from, "outVol", e.volume_sol);
   incAttr(graph, e.to, "inVol", e.volume_sol);
 
   const isSpl = !!e.mint;
-  // Edge: thicken on repeats. graphology is undirected + simple, so
-  // hasEdge handles both directions.
   if (graph.hasEdge(e.from, e.to)) {
     const eid = graph.edge(e.from, e.to)!;
     incAttr(graph, eid, "volume", e.volume_sol, "edge");
@@ -589,9 +739,6 @@ function applyEdge(
       edgeWidth(graph.getEdgeAttribute(eid, "volume") as number, graph, e.from, e.to),
     );
     graph.setEdgeAttribute(eid, "weight", graph.getEdgeAttribute(eid, "txCount") as number);
-    // Promote the edge if this is the first time we've seen the
-    // other token-class on this pair, and bump the node-level
-    // sol/spl-degree counters once.
     if (isSpl && !graph.getEdgeAttribute(eid, "hasSpl")) {
       graph.setEdgeAttribute(eid, "hasSpl", true);
       incAttr(graph, e.from, "splDegree", 1);
@@ -602,9 +749,7 @@ function applyEdge(
       incAttr(graph, e.to, "solDegree", 1);
     }
   } else {
-    // Canonical direction = the "from" of the very first observation.
-    // Later txs are classified as AB (matches canonical) or BA (reverse).
-    graph.addEdge(e.from, e.to, {
+    graph.addEdgeWithKey(e.signature, e.from, e.to, {
       volume: e.volume_sol,
       txCount: 1,
       weight: 1,
@@ -628,14 +773,10 @@ function applyEdge(
       incAttr(graph, e.from, "solDegree", 1);
       incAttr(graph, e.to, "solDegree", 1);
     }
-    commitEdge(graph, components, e.from, e.to);
+    commitEdge(graph, components, e.from, e.to, componentSource);
   }
 }
 
-// Record the tx against the canonical direction of the edge and promote
-// the edge to "bidirectional" the first time we see traffic both ways.
-// Flipping an edge to bidir shifts its volume into the bidirVol counter
-// on both endpoints, which the MPC detector weighs heavily.
 function bumpDirection(graph: Graph, eid: string, e: RawEdge): void {
   const canonicalFrom = graph.getEdgeAttribute(eid, "canonicalFrom") as string;
   const wasBidir =
@@ -652,56 +793,43 @@ function bumpDirection(graph: Graph, eid: string, e: RawEdge): void {
     (graph.getEdgeAttribute(eid, "txAB") as number) > 0 &&
     (graph.getEdgeAttribute(eid, "txBA") as number) > 0;
   if (!wasBidir && isBidir) {
-    // Just crossed the bidirectional threshold. Back-credit the edge's
-    // full volume to both endpoints' loop-volume pots  every tx on this
-    // edge now counts as closed-loop.
     const v = graph.getEdgeAttribute(eid, "volume") as number;
     incAttr(graph, e.from, "bidirVol", v);
     incAttr(graph, e.to, "bidirVol", v);
   } else if (isBidir) {
-    // Ongoing bidirectional edge: just this tx's volume flows into the
-    // loop pot.
     incAttr(graph, e.from, "bidirVol", e.volume_sol);
     incAttr(graph, e.to, "bidirVol", e.volume_sol);
   }
 }
 
-// Uniform per-edge alpha. Floor chosen so a single isolated edge
-// reads as unambiguously present; density emerges from compositing
-// where edges overlap. Tune by eye if margin singletons read as
-// faint or megacore reads as featureless.
 const EDGE_COLOR = "rgba(200,210,235,0.25)";
 
-// Single point where a new edge becomes part of the graph: union the
-// components, migrate the loser's members onto the winner's anchor,
-// and refresh sizes. Color is set uniformly at addEdge time, no
-// per-edge label needed.
 function commitEdge(
   graph: Graph,
   components: ComponentState,
   fromId: string,
   toId: string,
+  componentSource: ComponentSource,
 ): void {
-  const rootA = findRoot(components, fromId);
-  const rootB = findRoot(components, toId);
-  if (rootA !== rootB) {
-    const merge = union(components, fromId, toId);
-    if (merge.merged) {
-      const anchor = merge.winner === rootA ? fromId : toId;
-      migrateMembersToAnchor(graph, merge.migrated, anchor);
+  if (componentSource === "frontend") {
+    const rootA = findRoot(components, fromId);
+    const rootB = findRoot(components, toId);
+    if (rootA !== rootB) {
+      const merge = union(components, fromId, toId);
+      if (merge.merged) {
+        const anchor = merge.winner === rootA ? fromId : toId;
+        migrateMembersToAnchor(graph, merge.migrated, anchor);
+      }
     }
   }
+  // In backend mode: union() is intentionally skipped. ComponentAssigned
+  // deltas drive setMembership() directly; no teleport-on-merge here.
   graph.setNodeAttribute(fromId, "size", nodeSize(graph, fromId));
   graph.setNodeAttribute(toId, "size", nodeSize(graph, toId));
   refreshEdgeSizes(graph, fromId);
   refreshEdgeSizes(graph, toId);
 }
 
-// Teleport every member of a just-merged component to the vicinity of
-// the anchor node (which lives in the surviving component). Each
-// member gets a tiny deterministic offset so they don't all stack on
-// exactly the same point  FA2 would then waste its time untangling a
-// degenerate overlap.
 function migrateMembersToAnchor(
   graph: Graph,
   members: string[],
@@ -718,8 +846,6 @@ function migrateMembersToAnchor(
   }
 }
 
-// When a node crosses from degree 1 to 2, its previously-lonely edge
-// is now hub-adjacent and should be free to scale with volume.
 function refreshEdgeSizes(graph: Graph, nodeId: string): void {
   graph.forEachEdge(nodeId, (eid, attrs, source, target) => {
     const vol = attrs.volume as number;
@@ -743,10 +869,6 @@ function incAttr(
   }
 }
 
-// Min-max normalization with a hard cap. Keeps hubs clearly the
-// largest nodes on screen without letting them grow so big they
-// occlude their neighbors. Reference degree = where a node hits max
-// size; anything higher is clamped.
 const NODE_SIZE_MIN_PX = 1.5;
 const NODE_SIZE_MAX_PX = 10;
 const NODE_SIZE_REF_DEGREE = 60;

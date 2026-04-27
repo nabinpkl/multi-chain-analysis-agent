@@ -5,10 +5,11 @@ use futures_util::StreamExt;
 use parking_lot::RwLock;
 use rdkafka::{Message, Offset, TopicPartitionList};
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use tokio::time::{Instant, sleep};
 use tracing::{debug, error, info, warn};
 
+use crate::graph::delta::GraphDelta;
 use crate::stream::topics::Envelope;
 use super::GraphState;
 
@@ -18,6 +19,7 @@ const COMMIT_EVERY: Duration = Duration::from_secs(2);
 pub async fn run(
     consumer: StreamConsumer,
     graph: Arc<RwLock<GraphState>>,
+    delta_tx: broadcast::Sender<Arc<Vec<GraphDelta>>>,
     mut shutdown: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let mut stream = consumer.stream();
@@ -46,10 +48,13 @@ pub async fn run(
                         };
                         match serde_json::from_slice::<Envelope>(payload) {
                             Ok(env) => {
-                                {
+                                let deltas = {
                                     let mut g = graph.write();
-                                    let _deltas = g.ingest(&env.edge);
-                                    // Slice 1: deltas discarded  no broadcast yet
+                                    g.ingest(&env.edge)
+                                };
+                                if !deltas.is_empty() {
+                                    // Ignore send errors: no active subscribers is fine.
+                                    let _ = delta_tx.send(Arc::new(deltas));
                                 }
                                 last_tpl = Some((
                                     msg.topic().to_string(),

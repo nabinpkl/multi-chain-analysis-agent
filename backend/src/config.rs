@@ -13,7 +13,6 @@ pub struct Config {
     pub rpc_min_interval: Duration,
     pub kafka_brokers: String,
     pub kafka_topic_raw_edges: String,
-    pub kafka_group_live_state: String,
     pub kafka_group_ch_sink: String,
     pub kafka_group_graph: String,
     pub kafka_auto_offset_reset: String,
@@ -42,8 +41,6 @@ impl Config {
                 .unwrap_or_else(|_| "redpanda:9092".into()),
             kafka_topic_raw_edges: env::var("KAFKA_TOPIC_RAW_EDGES")
                 .unwrap_or_else(|_| "solana.raw-edges".into()),
-            kafka_group_live_state: env::var("KAFKA_GROUP_LIVE_STATE")
-                .unwrap_or_else(|_| "live-state".into()),
             kafka_group_ch_sink: env::var("KAFKA_GROUP_CH_SINK")
                 .unwrap_or_else(|_| "ch-sink".into()),
             kafka_group_graph: env::var("KAFKA_GROUP_GRAPH")

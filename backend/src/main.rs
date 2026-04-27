@@ -1,9 +1,15 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
 
-use tokio::sync::watch;
+use parking_lot::RwLock;
+use tokio::sync::{broadcast, watch};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
+
+use crate::graph::delta::GraphDelta;
+use crate::graph::GraphState;
 
 mod api;
 mod config;
@@ -20,7 +26,6 @@ mod tip;
 use config::Config;
 use rpc::RpcClient;
 use sinks::ch_sink::{self, ChSinkConfig};
-use sinks::state_sink;
 use state::AppState;
 use stream::{EdgeProducer, consumer::build_consumer};
 
@@ -53,24 +58,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut bg_handles = Vec::new();
 
-    let state_sink_handle = {
-        let consumer = build_consumer(
-            &config.kafka_brokers,
-            &config.kafka_group_live_state,
-            &config.kafka_topic_raw_edges,
-            &config.kafka_auto_offset_reset,
-        )?;
-        info!(group = %config.kafka_group_live_state, topic = %config.kafka_topic_raw_edges, "state-sink consumer ready");
-        let raw_tx = state.raw_tx.clone();
-        let rx = shutdown_rx.clone();
-        tokio::spawn(async move {
-            if let Err(e) = state_sink::run(consumer, raw_tx, rx).await {
-                error!(error = %e, "state-sink exited with error");
-            }
-        })
-    };
-    bg_handles.push(state_sink_handle);
-
+    // ch-sink: persists edges to ClickHouse. Separate consumer group.
     let ch_sink_handle = {
         let consumer = build_consumer(
             &config.kafka_brokers,
@@ -93,6 +81,8 @@ async fn main() -> anyhow::Result<()> {
     };
     bg_handles.push(ch_sink_handle);
 
+    // graph-engine: sole live ingest path. Builds in-memory graph and
+    // broadcasts GraphDelta batches to /graph/stream SSE subscribers.
     let graph_consumer_handle = {
         let consumer = build_consumer(
             &config.kafka_brokers,
@@ -102,14 +92,27 @@ async fn main() -> anyhow::Result<()> {
         )?;
         info!(group = %config.kafka_group_graph, topic = %config.kafka_topic_raw_edges, "graph-engine consumer ready");
         let graph = state.graph.clone();
+        let delta_tx = state.delta_tx.clone();
         let rx = shutdown_rx.clone();
         tokio::spawn(async move {
-            if let Err(e) = graph::consumer::run(consumer, graph, rx).await {
+            if let Err(e) = graph::consumer::run(consumer, graph, delta_tx, rx).await {
                 error!(error = %e, "graph-consumer exited with error");
             }
         })
     };
     bg_handles.push(graph_consumer_handle);
+
+    // layout-tick: 30 Hz physics step. Reads adj + components, writes
+    // pos/vel slabs, broadcasts a `PositionsBatch` delta when any node
+    // moved. Same broadcast channel as ingest, so SSE subscribers see
+    // a unified stream.
+    let layout_tick_handle = {
+        let graph = state.graph.clone();
+        let delta_tx = state.delta_tx.clone();
+        let rx = shutdown_rx.clone();
+        tokio::spawn(layout_tick_loop(graph, delta_tx, rx))
+    };
+    bg_handles.push(layout_tick_handle);
 
     if config.solana_rpc_url.is_empty() {
         warn!("SOLANA_RPC_URL not set  ingester and tip tracker disabled");
@@ -158,6 +161,44 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// 30 Hz physics step. Acquires the graph write lock, calls `step_layout`,
+/// broadcasts the resulting position diff. Empty diffs (graph at
+/// equilibrium) are skipped so subscribers don't see noise events.
+async fn layout_tick_loop(
+    graph: Arc<RwLock<GraphState>>,
+    delta_tx: broadcast::Sender<Arc<Vec<GraphDelta>>>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    // 60 Hz to match the frontend's RAF cadence; same constants are
+    // tuned per-tick, so matching tick rate matches convergence rate.
+    let mut ticker = tokio::time::interval(Duration::from_millis(16));
+    info!("layout-tick: started (60 Hz)");
+    loop {
+        tokio::select! {
+            _ = shutdown.changed() => {
+                info!("layout-tick: shutdown received");
+                return;
+            }
+            _ = ticker.tick() => {
+                let maybe_delta = {
+                    let mut g = graph.write();
+                    let positions = g.step_layout();
+                    if positions.is_empty() {
+                        None
+                    } else {
+                        let seq = g.alloc_seq();
+                        Some(GraphDelta::PositionsBatch { seq, positions })
+                    }
+                };
+                let Some(delta) = maybe_delta else { continue };
+                if delta_tx.send(Arc::new(vec![delta])).is_err() {
+                    debug!("layout-tick: no SSE subscribers");
+                }
+            }
+        }
+    }
 }
 
 fn init_tracing() {
