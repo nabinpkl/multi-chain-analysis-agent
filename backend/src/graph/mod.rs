@@ -6,8 +6,7 @@ pub mod initial_position;
 pub mod interner;
 pub mod layout;
 pub mod union_find;
-
-use std::collections::VecDeque;
+pub mod window;
 
 use rustc_hash::FxHashSet;
 
@@ -16,8 +15,54 @@ use delta::{EdgeKind, GraphDelta};
 use expiry::EdgesByTime;
 use interner::{NodeIdx, NodeInterner};
 use union_find::{ComponentId, UnionFind};
+use window::{NUM_WINDOWS, MAX_WINDOW_IDX, WINDOWS};
 
 pub use delta::PositionUpdate;
+
+/// Result of a single ingest call. `common` events fan out to every
+/// per-window broadcast channel; `per_window[w]` events fan out only to
+/// channel `w` (window-specific edge/node expiry).
+#[derive(Default)]
+pub struct IngestDeltas {
+    pub common: Vec<GraphDelta>,
+    pub per_window: [Vec<GraphDelta>; NUM_WINDOWS],
+}
+
+impl IngestDeltas {
+    pub fn is_empty(&self) -> bool {
+        self.common.is_empty() && self.per_window.iter().all(|v| v.is_empty())
+    }
+
+    /// Iterate every delta produced by an ingest, regardless of channel.
+    /// Order: common first, then per-window in window-index order. Useful
+    /// for tests; production code dispatches per channel.
+    pub fn iter_all(&self) -> impl Iterator<Item = &GraphDelta> {
+        self.common
+            .iter()
+            .chain(self.per_window.iter().flat_map(|v| v.iter()))
+    }
+}
+
+/// Per-window state. The `MAX_WINDOW_IDX` slot is the source of truth for
+/// global expiry  whatever falls off its front is also tombstoned in the
+/// global slab. Smaller windows merely emit deltas; the underlying edge
+/// stays live in the slab until the largest window expires it.
+pub(super) struct WindowState {
+    /// Edge indices ordered by `block_time`. Front = oldest.
+    pub(super) edges_by_time: EdgesByTime,
+    /// Per-node count of live edges incident to this node in this window.
+    /// Used to drive per-window NodeAdded / NodeExpired transitions.
+    pub(super) edge_count_per_node: Vec<u32>,
+}
+
+impl WindowState {
+    pub(super) fn new() -> Self {
+        Self {
+            edges_by_time: EdgesByTime::new(),
+            edge_count_per_node: Vec::new(),
+        }
+    }
+}
 
 /// Mirrors `nodeSize()` in `frontend/src/hooks/use-raw-stream.ts`.
 /// degree<=1 -> 0.8; else 1.5 + sqrt(min(1,(d-1)/59)) * 8.5.
@@ -67,11 +112,14 @@ pub struct GraphState {
     /// Monotonic delta sequence counter.
     seq_counter: u64,
 
-    /// Latest block_time seen so far. Cutoff = latest_block_time - 3600.
+    /// Latest block_time seen so far. Per-window cutoff = latest - WINDOWS[w].
     latest_block_time: u64,
 
-    /// Time-sorted index of live edge indices (by block_time).
-    edges_by_time: EdgesByTime,
+    /// Five overlapping views over the same global state, ordered by
+    /// `WINDOWS` (60s, 300s, 900s, 1800s, 3600s). Index 4 (3600s) is the
+    /// global retention boundary  edges falling off its front are
+    /// tombstoned from the slab.
+    pub(super) windows: [WindowState; NUM_WINDOWS],
 
     last_ingested_slot: Option<u64>,
 
@@ -106,7 +154,7 @@ impl Default for GraphState {
             component_id_seq: 0,
             seq_counter: 0,
             latest_block_time: 0,
-            edges_by_time: EdgesByTime::new(),
+            windows: std::array::from_fn(|_| WindowState::new()),
             last_ingested_slot: None,
             pos_x: Vec::new(),
             pos_y: Vec::new(),
@@ -171,6 +219,12 @@ impl GraphState {
                 self.unique_degree.push(0);
                 self.size.push(node_size_for_degree(0));
             }
+            for w in 0..NUM_WINDOWS {
+                while self.windows[w].edge_count_per_node.len() <= idx as usize {
+                    self.windows[w].edge_count_per_node.push(0);
+                }
+                self.windows[w].edge_count_per_node[idx as usize] = 0;
+            }
             // Reset pos/vel/degree/size on reuse (free-list path).
             self.pos_x[idx as usize] = 0.0;
             self.pos_y[idx as usize] = 0.0;
@@ -188,87 +242,104 @@ impl GraphState {
         (idx, newly_inserted)
     }
 
-    /// Core ingest: advances cutoff, drains expired edges, adds new edge,
-    /// settles splits. Returns all deltas in chronological order.
-    pub fn ingest(&mut self, edge: &Edge) -> Vec<GraphDelta> {
-        let mut deltas = Vec::new();
+    /// Core ingest: advances cutoff, drains expired edges per window,
+    /// adds new edge, settles splits. Returns deltas split into:
+    ///   - `common`: events that fan out to every window's channel
+    ///     (NodeAdded, EdgeAdded, ComponentAssigned).
+    ///   - `per_window[w]`: events scoped to a single window's channel
+    ///     (window-boundary EdgeExpired and NodeExpired).
+    pub fn ingest(&mut self, edge: &Edge) -> IngestDeltas {
+        let mut out = IngestDeltas::default();
 
         // 1. Advance block_time cutoff.
         let bt = edge.block_time as u64;
         self.latest_block_time = self.latest_block_time.max(bt);
-        let cutoff = self.latest_block_time.saturating_sub(3600);
 
-        // 2. Drain expired edges from the front of the time-sorted index.
+        // 2. Drain expired edges per window. The largest window (index
+        //    MAX_WINDOW_IDX) also tombstones from the global slab.
         let mut dirty_components: FxHashSet<ComponentId> = FxHashSet::default();
-        loop {
-            let Some(front_idx) = self.edges_by_time.front() else {
-                break;
-            };
-            let front_bt = match &self.edges[front_idx as usize] {
-                Some(e) => e.block_time,
-                None => {
-                    // Tombstoned entry still in the deque  pop and skip.
-                    self.edges_by_time.pop_front();
-                    continue;
+        for w in 0..NUM_WINDOWS {
+            let cutoff = self.latest_block_time.saturating_sub(WINDOWS[w]);
+            let is_global = w == MAX_WINDOW_IDX;
+            loop {
+                let Some(front_idx) = self.windows[w].edges_by_time.front() else {
+                    break;
+                };
+                let front_bt = match &self.edges[front_idx as usize] {
+                    Some(e) => e.block_time,
+                    None => {
+                        // Tombstoned entry still in this window's deque  drop.
+                        self.windows[w].edges_by_time.pop_front();
+                        continue;
+                    }
+                };
+                if front_bt >= cutoff {
+                    break;
                 }
-            };
-            if front_bt >= cutoff {
-                break;
+                self.windows[w].edges_by_time.pop_front();
+
+                if is_global {
+                    // Track dirty component before tombstoning so split
+                    // detection runs after global expiry.
+                    let cid = {
+                        let e = self.edges[front_idx as usize].as_ref().unwrap();
+                        self.node_to_component
+                            .get(e.src as usize)
+                            .copied()
+                            .unwrap_or(u64::MAX)
+                    };
+                    if cid != u64::MAX {
+                        dirty_components.insert(cid);
+                    }
+                    // Drive global tombstoning + emit window-local expiry.
+                    let expired = self.tombstone_edge_for_window(front_idx, w, true);
+                    out.per_window[w].extend(expired);
+                } else {
+                    // Smaller-than-global window: edge stays alive in slab,
+                    // we only emit the window-scoped expiry deltas.
+                    let expired = self.tombstone_edge_for_window(front_idx, w, false);
+                    out.per_window[w].extend(expired);
+                }
             }
-            self.edges_by_time.pop_front();
-            // Record dirty component before tombstoning.
-            let cid = {
-                let e = self.edges[front_idx as usize].as_ref().unwrap();
-                let src = e.src;
-                self.node_to_component
-                    .get(src as usize)
-                    .copied()
-                    .unwrap_or(u64::MAX)
-            };
-            if cid != u64::MAX {
-                dirty_components.insert(cid);
-            }
-            let expired_deltas = self.tombstone_edge(front_idx);
-            deltas.extend(expired_deltas);
         }
 
-        // 3. Add new edge (may emit NodeAdded × 0/1/2, EdgeAdded,
-        //    ComponentAssigned on union).
-        let add_deltas = self.add_edge(edge);
-        deltas.extend(add_deltas);
+        // 3. Add new edge. Common deltas (NodeAdded, EdgeAdded,
+        //    ComponentAssigned) fan out to all channels.
+        self.add_edge(edge, &mut out);
 
-        // 4. Settle splits for dirty components via rayon BFS.
+        // 4. Settle splits for dirty components via rayon BFS. These
+        //    ComponentAssigned events are global so they go on `common`.
         let settle_deltas = self.settle_components(dirty_components);
-        deltas.extend(settle_deltas);
+        out.common.extend(settle_deltas);
 
         self.last_ingested_slot = Some(edge.slot);
-        deltas
+        out
     }
 
     /// Add a single edge (sub-routine of ingest). Handles node interning,
     /// edge slab allocation, adjacency update, UF union, and component
-    /// assignment events.
-    fn add_edge(&mut self, edge: &Edge) -> Vec<GraphDelta> {
-        let mut deltas = Vec::new();
+    /// assignment events. All produced deltas are common (every window
+    /// channel sees them) since a freshly-arriving edge sits at the tip
+    /// of every window.
+    fn add_edge(&mut self, edge: &Edge, out: &mut IngestDeltas) {
+        let bt = edge.block_time as u64;
 
         let (src_idx, src_new) = self.intern_node(&edge.from_wallet, edge.slot);
         if src_new {
-            // Position src: if dst already exists, place near dst; else orphan scatter.
             let dst_known = self.interner.lookup_idx(&edge.to_wallet);
             let (x, y) = initial_position::compute(self, &edge.from_wallet, dst_known);
             self.pos_x[src_idx as usize] = x;
             self.pos_y[src_idx as usize] = y;
 
             let seq = self.next_seq();
-            deltas.push(GraphDelta::NodeAdded {
+            out.common.push(GraphDelta::NodeAdded {
                 seq,
                 idx: src_idx,
                 pubkey: edge.from_wallet.clone(),
             });
-            // Emit initial ComponentAssigned for new singleton.
             let cid = self.node_to_component[src_idx as usize];
             let seq2 = self.next_seq();
-            deltas.push(GraphDelta::ComponentAssigned {
+            out.common.push(GraphDelta::ComponentAssigned {
                 seq: seq2,
                 node: src_idx,
                 component_id: cid,
@@ -277,20 +348,19 @@ impl GraphState {
 
         let (dst_idx, dst_new) = self.intern_node(&edge.to_wallet, edge.slot);
         if dst_new {
-            // Position dst: src is now interned (just above), so partner = src.
             let (x, y) = initial_position::compute(self, &edge.to_wallet, Some(src_idx));
             self.pos_x[dst_idx as usize] = x;
             self.pos_y[dst_idx as usize] = y;
 
             let seq = self.next_seq();
-            deltas.push(GraphDelta::NodeAdded {
+            out.common.push(GraphDelta::NodeAdded {
                 seq,
                 idx: dst_idx,
                 pubkey: edge.to_wallet.clone(),
             });
             let cid = self.node_to_component[dst_idx as usize];
             let seq2 = self.next_seq();
-            deltas.push(GraphDelta::ComponentAssigned {
+            out.common.push(GraphDelta::ComponentAssigned {
                 seq: seq2,
                 node: dst_idx,
                 component_id: cid,
@@ -315,27 +385,34 @@ impl GraphState {
             amount: edge.amount,
             mint: mint_idx,
             slot: edge.slot,
-            block_time: edge.block_time as u64,
+            block_time: bt,
             kind,
         };
 
-        // Detect first edge between (src_idx, dst_idx) BEFORE pushing
-        // the new edge into adjacency. Used to bump unique_degree only
-        // on the first edge of a pair (matches frontend semantics).
-        let pair_already_connected =
-            self.has_edge_between(src_idx, dst_idx);
-
+        let pair_already_connected = self.has_edge_between(src_idx, dst_idx);
         let edge_idx = self.alloc_edge_slot(graph_edge);
 
-        // Insert into time-sorted index.
-        self.edges_by_time
-            .insert(edge_idx, edge.block_time as u64, &self.edges);
+        // Insert into every window whose cutoff this edge satisfies.
+        // For monotone arrivals this is all 5; for slightly-late edges
+        // a smaller window may already be past cutoff and skip.
+        for w in 0..NUM_WINDOWS {
+            let cutoff = self.latest_block_time.saturating_sub(WINDOWS[w]);
+            if bt < cutoff {
+                continue;
+            }
+            self.windows[w].edges_by_time.insert(edge_idx, bt, &self.edges);
+            // Bump per-window edge count for both endpoints.
+            self.windows[w].edge_count_per_node[src_idx as usize] =
+                self.windows[w].edge_count_per_node[src_idx as usize].saturating_add(1);
+            if dst_idx != src_idx {
+                self.windows[w].edge_count_per_node[dst_idx as usize] =
+                    self.windows[w].edge_count_per_node[dst_idx as usize].saturating_add(1);
+            }
+        }
 
         self.out_adj[src_idx as usize].push(edge_idx);
         self.in_adj[dst_idx as usize].push(edge_idx);
 
-        // Bump unique-degree + recompute size for both endpoints when
-        // the pair is newly connected (or self-loop edge case below).
         if !pair_already_connected && src_idx != dst_idx {
             self.unique_degree[src_idx as usize] =
                 self.unique_degree[src_idx as usize].saturating_add(1);
@@ -352,7 +429,7 @@ impl GraphState {
             .mint
             .map(|midx| self.mint_interner.lookup(midx).unwrap_or("").to_string());
         let seq = self.next_seq();
-        deltas.push(GraphDelta::EdgeAdded {
+        out.common.push(GraphDelta::EdgeAdded {
             seq,
             idx: edge_idx,
             src: src_idx,
@@ -371,7 +448,6 @@ impl GraphState {
         let ra = self.uf.find(src_idx);
         let rb = self.uf.find(dst_idx);
         if ra != rb {
-            // Identify the smaller side before union to enumerate its nodes.
             let size_a = self.uf.size_of_root(ra);
             let size_b = self.uf.size_of_root(rb);
             let (smaller_root, larger_cid) = if size_a <= size_b {
@@ -383,16 +459,14 @@ impl GraphState {
             };
             let smaller_cid = self.uf.component_id_of_root(smaller_root);
 
-            // Actually perform the union.
             self.uf.union(src_idx, dst_idx);
 
-            // Update node_to_component for nodes on the smaller side.
-            // O(N) scan  acceptable per locked decision #7.
+            // O(N) scan over node_to_component.
             for i in 0..self.node_to_component.len() {
                 if self.node_to_component[i] == smaller_cid {
                     self.node_to_component[i] = larger_cid;
                     let seq = self.next_seq();
-                    deltas.push(GraphDelta::ComponentAssigned {
+                    out.common.push(GraphDelta::ComponentAssigned {
                         seq,
                         node: i as NodeIdx,
                         component_id: larger_cid,
@@ -400,8 +474,6 @@ impl GraphState {
                 }
             }
         }
-
-        deltas
     }
 
     pub fn total_nodes(&self) -> u32 {
@@ -449,6 +521,12 @@ impl GraphState {
 
     pub fn last_ingested_slot(&self) -> Option<u64> {
         self.last_ingested_slot
+    }
+
+    /// Tip of the ingest stream, in `block_time` (seconds since epoch).
+    /// Per-window cutoff = `latest_block_time() - WINDOWS[w]`.
+    pub fn latest_block_time(&self) -> u64 {
+        self.latest_block_time
     }
 
     /// Is there at least one live edge in either direction between
@@ -520,17 +598,16 @@ mod tests {
         let deltas1 = gs.ingest(&e1);
 
         assert!(deltas1
-            .iter()
+            .iter_all()
             .any(|d| matches!(d, GraphDelta::NodeAdded { pubkey, .. } if pubkey == "AAA")));
         assert!(deltas1
-            .iter()
+            .iter_all()
             .any(|d| matches!(d, GraphDelta::NodeAdded { pubkey, .. } if pubkey == "BBB")));
         assert!(deltas1
-            .iter()
+            .iter_all()
             .any(|d| matches!(d, GraphDelta::EdgeAdded { .. })));
-        // After union, ComponentAssigned should be emitted for the smaller-side nodes.
         assert!(deltas1
-            .iter()
+            .iter_all()
             .any(|d| matches!(d, GraphDelta::ComponentAssigned { .. })));
 
         assert_eq!(gs.total_nodes(), 2);
@@ -561,10 +638,11 @@ mod tests {
         let e1 = make_edge("AAA", "BBB", 1, 1000);
         gs.ingest(&e1);
 
-        // Edge at block_time=5000  advances cutoff to 5000-3600=1400
-        // so e1 (block_time=1000) should expire
+        // Edge at block_time=5000  advances 3600s cutoff to 1400
+        // so e1 (block_time=1000) expires from every window.
         let e2 = make_edge("CCC", "DDD", 2, 5000);
         let deltas = gs.ingest(&e2);
+        let deltas: Vec<_> = deltas.iter_all().cloned().collect();
 
         let edge_expired = deltas
             .iter()
@@ -575,7 +653,9 @@ mod tests {
             .filter(|d| matches!(d, GraphDelta::NodeExpired { .. }))
             .count();
 
-        assert_eq!(edge_expired, 1, "one edge should expire");
-        assert_eq!(node_expired, 2, "AAA and BBB become orphans");
+        // e1 lies below every window's cutoff at bt=5000, so each of the
+        // 5 windows emits its own EdgeExpired and pair of NodeExpired.
+        assert_eq!(edge_expired, NUM_WINDOWS, "one EdgeExpired per window");
+        assert_eq!(node_expired, NUM_WINDOWS * 2, "AAA+BBB orphan in each window");
     }
 }

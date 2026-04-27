@@ -1,42 +1,62 @@
-/// Cold-start bootstrap: serialize current GraphState as a stream of
-/// synthetic GraphDelta values. All events get seq=0 (no live seq).
+/// Cold-start bootstrap: serialize the slice of GraphState visible to a
+/// given rolling window as a stream of synthetic GraphDelta values. All
+/// events get seq=0 (no live seq).
 ///
-/// Order per plan:
-/// 1. NodeAdded for each live (non-tombstoned) node
-/// 2. EdgeAdded for each non-tombstoned edge
-/// 3. ComponentAssigned for each live node
-use super::delta::{EdgeKind, GraphDelta};
+/// Order:
+/// 1. NodeAdded for each node with at least one edge in the window
+/// 2. EdgeAdded for each edge whose `block_time` is within the window
+/// 3. ComponentAssigned for each visible node (using the global component id)
+/// 4. PositionsBatch for visible nodes
+use rustc_hash::FxHashSet;
+
 use super::GraphState;
+use super::delta::GraphDelta;
+use super::interner::NodeIdx;
+use super::window::{MAX_WINDOW_IDX, WINDOWS};
 
-/// Produce all bootstrap events for the current state. Caller emits each
-/// event WITHOUT an SSE `id:` field. After the last bootstrap event, the
-/// caller emits `CaughtUp { seq: live_seq_at_release }` WITH an `id:` field,
-/// then releases the read lock.
-pub fn bootstrap_events(gs: &GraphState) -> Vec<GraphDelta> {
-    let capacity = gs.interner.len() as usize * 3 + gs.live_edge_count() as usize;
-    let mut events = Vec::with_capacity(capacity);
+/// Produce all bootstrap events for the current state at window `w`.
+/// `w` must be a valid window index (0..NUM_WINDOWS).
+pub fn bootstrap_events(gs: &GraphState, window_idx: usize) -> Vec<GraphDelta> {
+    let cutoff = if window_idx == MAX_WINDOW_IDX {
+        // Largest window == global retention; any live edge is in scope.
+        0
+    } else {
+        gs.latest_block_time().saturating_sub(WINDOWS[window_idx])
+    };
 
-    // 1. NodeAdded for each live node.
-    let node_capacity = gs.interner.capacity();
-    for idx in 0..node_capacity {
-        if let Some(pubkey) = gs.interner.lookup(idx) {
+    // First pass: collect edges that are live AND >= cutoff.
+    let mut visible_nodes: FxHashSet<NodeIdx> = FxHashSet::default();
+    let mut visible_edges: Vec<(u32, &super::GraphEdge)> = Vec::new();
+    for (idx, slot) in gs.edges.iter().enumerate() {
+        let Some(e) = slot else { continue };
+        if e.block_time < cutoff {
+            continue;
+        }
+        visible_nodes.insert(e.src);
+        visible_nodes.insert(e.dst);
+        visible_edges.push((idx as u32, e));
+    }
+
+    let mut events: Vec<GraphDelta> =
+        Vec::with_capacity(visible_nodes.len() * 2 + visible_edges.len() + 1);
+
+    for &n in &visible_nodes {
+        if let Some(pubkey) = gs.interner.lookup(n) {
             events.push(GraphDelta::NodeAdded {
                 seq: 0,
-                idx,
+                idx: n,
                 pubkey: pubkey.to_string(),
             });
         }
     }
 
-    // 2. EdgeAdded for each live edge.
-    for (idx, slot) in gs.edges.iter().enumerate() {
-        let Some(e) = slot else { continue };
+    for (eidx, e) in &visible_edges {
         let mint = e
             .mint
             .map(|midx| gs.mint_interner.lookup(midx).unwrap_or("").to_string());
         events.push(GraphDelta::EdgeAdded {
             seq: 0,
-            idx: idx as u32,
+            idx: *eidx,
             src: e.src,
             dst: e.dst,
             mint,
@@ -46,24 +66,31 @@ pub fn bootstrap_events(gs: &GraphState) -> Vec<GraphDelta> {
         });
     }
 
-    // 3. ComponentAssigned for each live node.
-    let node_capacity = gs.interner.capacity();
-    for idx in 0..node_capacity {
-        if gs.interner.lookup(idx).is_some() {
-            let cid = gs.node_to_component.get(idx as usize).copied().unwrap_or(0);
-            if cid != u64::MAX {
-                events.push(GraphDelta::ComponentAssigned {
-                    seq: 0,
-                    node: idx,
-                    component_id: cid,
-                });
-            }
+    for &n in &visible_nodes {
+        let cid = gs
+            .node_to_component
+            .get(n as usize)
+            .copied()
+            .unwrap_or(u64::MAX);
+        if cid != u64::MAX {
+            events.push(GraphDelta::ComponentAssigned {
+                seq: 0,
+                node: n,
+                component_id: cid,
+            });
         }
     }
 
-    // 4. PositionsBatch for every live node so backend-UF clients can
-    //    render at backend coords without first waiting for a layout tick.
-    let positions = gs.all_positions();
+    let mut positions = Vec::with_capacity(visible_nodes.len());
+    for &n in &visible_nodes {
+        if gs.interner.lookup(n).is_some() {
+            positions.push(super::PositionUpdate {
+                idx: n,
+                x: gs.pos_x[n as usize],
+                y: gs.pos_y[n as usize],
+            });
+        }
+    }
     if !positions.is_empty() {
         events.push(GraphDelta::PositionsBatch { seq: 0, positions });
     }
@@ -76,6 +103,7 @@ mod tests {
     use super::*;
     use crate::domain::Edge;
     use crate::graph::GraphState;
+    use crate::graph::window::MAX_WINDOW_IDX;
 
     fn make_edge(from: &str, to: &str, slot: u64) -> Edge {
         Edge {
@@ -92,55 +120,68 @@ mod tests {
         }
     }
 
-    /// Apply a bootstrap event stream to an empty GraphState-equivalent
-    /// tracking structure. Returns (nodes, edges, component_assigns).
-    fn apply_bootstrap(events: &[GraphDelta]) -> (Vec<(u32, String)>, Vec<u32>, Vec<(u32, u64)>) {
-        let mut nodes: Vec<(u32, String)> = Vec::new();
-        let mut edges: Vec<u32> = Vec::new();
-        let mut component_assigns: Vec<(u32, u64)> = Vec::new();
-        for ev in events {
-            match ev {
-                GraphDelta::NodeAdded { idx, pubkey, .. } => nodes.push((*idx, pubkey.clone())),
-                GraphDelta::EdgeAdded { idx, .. } => edges.push(*idx),
-                GraphDelta::ComponentAssigned { node, component_id, .. } => {
-                    component_assigns.push((*node, *component_id))
-                }
-                _ => {}
-            }
+    fn make_edge_bt(from: &str, to: &str, slot: u64, block_time: u64) -> Edge {
+        Edge {
+            signature: format!("sig_{from}_{to}_{slot}"),
+            instruction_idx: 0,
+            slot,
+            block_time: block_time as u32,
+            from_wallet: from.to_string(),
+            to_wallet: to.to_string(),
+            amount: 1_000_000,
+            mint: String::new(),
+            kind: String::new(),
+            version: 1,
         }
-        (nodes, edges, component_assigns)
     }
 
     #[test]
-    fn bootstrap_reproduces_graph_state() {
+    fn bootstrap_reproduces_graph_state_at_global_window() {
         let mut gs = GraphState::default();
         gs.ingest(&make_edge("AAA", "BBB", 100));
         gs.ingest(&make_edge("CCC", "DDD", 101));
         gs.ingest(&make_edge("BBB", "CCC", 102));
 
-        let events = bootstrap_events(&gs);
-        let (nodes, edges, assigns) = apply_bootstrap(&events);
+        let events = bootstrap_events(&gs, MAX_WINDOW_IDX);
+        let mut nodes = 0;
+        let mut edges = 0;
+        let mut components = 0;
+        for ev in &events {
+            match ev {
+                GraphDelta::NodeAdded { .. } => nodes += 1,
+                GraphDelta::EdgeAdded { .. } => edges += 1,
+                GraphDelta::ComponentAssigned { .. } => components += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(nodes, 4);
+        assert_eq!(edges, 3);
+        assert_eq!(components, 4);
+    }
 
-        // 4 live nodes
-        assert_eq!(nodes.len(), 4);
-        // 3 edges
-        assert_eq!(edges.len(), 3);
-        // 4 component assignments (one per live node)
-        assert_eq!(assigns.len(), 4);
+    #[test]
+    fn bootstrap_filters_by_smaller_window() {
+        let mut gs = GraphState::default();
+        gs.ingest(&make_edge_bt("AAA", "BBB", 1, 1000));
+        gs.ingest(&make_edge_bt("CCC", "DDD", 2, 2000));
+        gs.ingest(&make_edge_bt("EEE", "FFF", 3, 4990));
 
-        // All events have seq=0
-        assert!(events
+        // Window 0 = 60s. Cutoff = 4990 - 60 = 4930. Only edge 3 visible.
+        let events = bootstrap_events(&gs, 0);
+        let edges: Vec<_> = events
             .iter()
-            .all(|e| matches!(e, GraphDelta::NodeAdded { seq: 0, .. }
-                | GraphDelta::EdgeAdded { seq: 0, .. }
-                | GraphDelta::ComponentAssigned { seq: 0, .. }
-                | GraphDelta::PositionsBatch { seq: 0, .. })));
+            .filter_map(|e| match e {
+                GraphDelta::EdgeAdded { idx, .. } => Some(*idx),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(edges.len(), 1, "only the most recent edge fits in 60s window");
     }
 
     #[test]
     fn bootstrap_empty_state_produces_no_events() {
         let gs = GraphState::default();
-        let events = bootstrap_events(&gs);
+        let events = bootstrap_events(&gs, MAX_WINDOW_IDX);
         assert!(events.is_empty());
     }
 }

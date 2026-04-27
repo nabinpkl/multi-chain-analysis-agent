@@ -7,7 +7,6 @@ import {
   addNode as addToComponent,
   createComponentState,
   findRoot,
-  setMembership,
   union,
   type ComponentState,
 } from "@/lib/components";
@@ -30,6 +29,11 @@ const MPC_DETECT_INTERVAL_MS = 3000;
 
 export type RoleSummary = Record<NodeRole, number>;
 
+/** Rolling-window sizes the backend supports on `/graph/stream?window=`. */
+export type WindowSeconds = 10 | 60 | 300 | 900 | 1800 | 3600;
+export const WINDOW_SECONDS: readonly WindowSeconds[] = [10, 60, 300, 900, 1800, 3600] as const;
+export const DEFAULT_WINDOW_SECONDS: WindowSeconds = 60;
+
 /**
  * Owns a live graphology graph fed by the /graph/stream SSE endpoint
  * (delta protocol). Consumes NodeAdded + EdgeAdded deltas, mapping
@@ -46,11 +50,9 @@ export type RoleSummary = Record<NodeRole, number>;
  * and mutate the shared Graph instance in place. React only re-renders the
  * status pill (`connected`, `edgeCount`), not the canvas.
  */
-export type ComponentSource = "frontend" | "backend";
-
 export function useRawStream({
-  componentSource = "frontend",
-}: { componentSource?: ComponentSource } = {}) {
+  windowSecs = DEFAULT_WINDOW_SECONDS,
+}: { windowSecs?: WindowSeconds } = {}) {
   const graphRef = useRef<Graph | null>(null);
   if (graphRef.current === null) {
     graphRef.current = new Graph({ multi: false, type: "undirected" });
@@ -72,21 +74,29 @@ export function useRawStream({
   const componentStatsRef = useRef<Map<string, ComponentStats>>(new Map());
   // NodeIdx (u32) -> pubkey map populated from NodeAdded deltas.
   const idxToPubkeyRef = useRef<Map<number, string>>(new Map());
-  // Trigger value to force EventSource reconnect on reset().
-  const resetTriggerRef = useRef<number>(0);
-  // Track current componentSource in a ref so effect callbacks see latest value.
-  const componentSourceRef = useRef<ComponentSource>(componentSource);
+  // True when the next reconnect should ask the backend to skip the
+  // bootstrap replay (only set by the explicit "Reset from now" button;
+  // window-change reconnects keep bootstrap on so the new window's
+  // historical edges populate the graph).
+  const skipBootstrapNextRef = useRef<boolean>(false);
+  // Tracks the windowSecs that the live EventSource was opened with,
+  // so we can detect changes from the prop and reconnect with a fresh
+  // ?window= param.
+  const windowSecsRef = useRef<WindowSeconds>(windowSecs);
 
   const [status, setStatus] = useState<{
     connected: boolean;
     edgeCount: number;
     nodeCount: number;
     lagged: number;
+    /** Latest ingested block_time (Unix seconds), or null until first poll. */
+    latestBlockTime: number | null;
   }>({
     connected: false,
     edgeCount: 0,
     nodeCount: 0,
     lagged: 0,
+    latestBlockTime: null,
   });
   const [roleSummary, setRoleSummary] = useState<RoleSummary>({
     "token-mint": 0,
@@ -102,19 +112,9 @@ export function useRawStream({
   // Increment to trigger useEffect re-run (new EventSource).
   const [resetTick, setResetTick] = useState(0);
 
-  // When componentSource changes, update ref and reset so stale UF state
-  // doesn't mix with the new source.
-  useEffect(() => {
-    if (componentSourceRef.current !== componentSource) {
-      componentSourceRef.current = componentSource;
-      reset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [componentSource]);
-
-  // reset(): clear all state, close current EventSource, open new one
-  // with ?skip_bootstrap=1 so only live edges arrive (no replay).
-  const reset = () => {
+  // Clear all locally-derived state. Shared between the explicit
+  // reset() click and the window-change reconnect path.
+  const clearLocalState = () => {
     const graph = graphRef.current!;
     graph.clear();
     componentsRef.current = createComponentState();
@@ -124,8 +124,13 @@ export function useRawStream({
     rolesRef.current = new Map();
     componentStatsRef.current = new Map();
     pendingRef.current = [];
-    resetTriggerRef.current += 1;
-    setStatus({ connected: false, edgeCount: 0, nodeCount: 0, lagged: 0 });
+    setStatus({
+      connected: false,
+      edgeCount: 0,
+      nodeCount: 0,
+      lagged: 0,
+      latestBlockTime: null,
+    });
     setRoleSummary({
       "token-mint": 0,
       "tip-account": 0,
@@ -137,13 +142,33 @@ export function useRawStream({
       "mpc-member": 0,
       normal: 0,
     });
+  };
+
+  // reset(): clear all state, close current EventSource, open new one
+  // with ?skip_bootstrap=1 so only live edges arrive (no replay).
+  const reset = () => {
+    clearLocalState();
+    skipBootstrapNextRef.current = true;
     setResetTick((n) => n + 1);
   };
+
+  // Window change: clear state and reconnect with bootstrap on, so the
+  // new window's prior edges (anything within latest_block_time - n)
+  // populate the graph.
+  useEffect(() => {
+    if (windowSecsRef.current === windowSecs) return;
+    windowSecsRef.current = windowSecs;
+    skipBootstrapNextRef.current = false;
+    clearLocalState();
+    setResetTick((n) => n + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [windowSecs]);
 
   useEffect(() => {
     const graph = graphRef.current!;
     const idxToPubkey = idxToPubkeyRef.current;
-    const isReset = resetTriggerRef.current > 0;
+    const skipBootstrap = skipBootstrapNextRef.current;
+    skipBootstrapNextRef.current = false;
 
     const flush = () => {
       rafRef.current = null;
@@ -156,7 +181,6 @@ export function useRawStream({
           e,
           componentsRef.current,
           mintAddrsRef.current,
-          componentSourceRef.current,
         );
       }
       setStatus((s) => ({
@@ -173,7 +197,8 @@ export function useRawStream({
 
     // Open SSE connection to the delta-protocol endpoint.
     const url = new URL("/graph/stream", apiUrl());
-    if (isReset) {
+    url.searchParams.set("window", String(windowSecsRef.current));
+    if (skipBootstrap) {
       url.searchParams.set("skip_bootstrap", "1");
     }
     const es = new EventSource(url.toString());
@@ -237,8 +262,8 @@ export function useRawStream({
           graph.updateNodeAttribute(dst, "degree", (n) => Math.max(0, (n ?? 1) - 1));
         }
         // Note: components UF isn't decremented (DSU doesn't support split).
-        // Frontend's component view becomes slightly stale on long
-        // window-slide events. Acceptable - backend is shadow, frontend owns visual.
+        // Component view becomes slightly stale on long window-slide
+        // events. Acceptable for the visual.
         setStatus((s) => ({ ...s, edgeCount: graph.size, nodeCount: graph.order }));
       } catch {
         // ignore malformed events
@@ -258,45 +283,6 @@ export function useRawStream({
       }
     });
 
-    if (componentSourceRef.current === "backend") {
-      es.addEventListener("ComponentAssigned", (ev) => {
-        try {
-          const d = JSON.parse((ev as MessageEvent).data) as {
-            node: number;
-            component_id: number;
-          };
-          const pubkey = idxToPubkey.get(d.node);
-          if (!pubkey) return; // node not yet seen
-          setMembership(
-            componentsRef.current,
-            pubkey,
-            String(d.component_id),
-          );
-        } catch {
-          // ignore malformed events
-        }
-      });
-
-      // Backend physics owns layout: every tick replays positions for
-      // every node that moved. Frontend RAF tick is suppressed below.
-      es.addEventListener("PositionsBatch", (ev) => {
-        try {
-          const d = JSON.parse((ev as MessageEvent).data) as {
-            positions: Array<{ idx: number; x: number; y: number }>;
-          };
-          for (const p of d.positions) {
-            const pubkey = idxToPubkey.get(p.idx);
-            if (!pubkey) continue;
-            if (!graph.hasNode(pubkey)) continue;
-            graph.setNodeAttribute(pubkey, "x", p.x);
-            graph.setNodeAttribute(pubkey, "y", p.y);
-          }
-        } catch {
-          // ignore malformed events
-        }
-      });
-    }
-
     es.addEventListener("CaughtUp", () => {
       // Bootstrap replay complete. Connected status is already true.
       // Could set a "loaded" flag here if needed.
@@ -306,22 +292,17 @@ export function useRawStream({
     // forces only apply within each connected component  different
     // components sit at their deterministic spawn positions and never
     // drift toward each other under Barnes-Hut repulsion.
-    //
-    // Backend mode: backend owns physics, so the frontend RAF tick is
-    // skipped; positions arrive via PositionsBatch deltas.
     let layoutRafId: number | null = null;
-    if (componentSourceRef.current !== "backend") {
-      const layoutTick = () => {
-        layoutRafId = requestAnimationFrame(layoutTick);
-        if (graph.order < 2) return;
-        stepPerComponentLayout(
-          graph,
-          componentsRef.current,
-          nodeToCommunityRef.current,
-        );
-      };
+    const layoutTick = () => {
       layoutRafId = requestAnimationFrame(layoutTick);
-    }
+      if (graph.order < 2) return;
+      stepPerComponentLayout(
+        graph,
+        componentsRef.current,
+        nodeToCommunityRef.current,
+      );
+    };
+    layoutRafId = requestAnimationFrame(layoutTick);
 
     // Louvain + MPC scoring on a throttle.
     const detectInterval = window.setInterval(() => {
@@ -541,6 +522,35 @@ export function useRawStream({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetTick]);
 
+  // Tip poll: hit /graph/stats every 3s for the latest ingested
+  // block_time. The SSE delta protocol doesn't carry block_time on
+  // EdgeAdded (it carries `slot` only), so polling is the simplest
+  // path to keep a chain-tip indicator current.
+  useEffect(() => {
+    let cancelled = false;
+    const fetchTip = async () => {
+      try {
+        const res = await fetch(`${apiUrl()}/graph/stats?window=3600`);
+        if (!res.ok) return;
+        const j = (await res.json()) as { latest_block_time?: number };
+        if (cancelled || typeof j.latest_block_time !== "number") return;
+        setStatus((s) =>
+          s.latestBlockTime === j.latest_block_time
+            ? s
+            : { ...s, latestBlockTime: j.latest_block_time! },
+        );
+      } catch {
+        // ignore network blips; next tick retries
+      }
+    };
+    fetchTip();
+    const id = window.setInterval(fetchTip, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
+
   return {
     graph: graphRef.current,
     status,
@@ -616,21 +626,15 @@ function ensureNode(
 ): void {
   if (graph.hasNode(id)) return;
 
-  // If this node was already assigned to a component (e.g. via
-  // ComponentAssigned in backend mode, or via a prior union in
-  // frontend mode), and that component already has enough members
-  // placed in the graph, spawn near the component centroid instead
-  // of the raw partner position. This avoids orphan-scatter coords
-  // (random ±5000) propagating through the giant component when the
-  // layout skips pairwise repulsion for large components.
+  // If this node was already assigned to a component via a prior
+  // union, and that component already has enough members placed in
+  // the graph, spawn near the component centroid instead of the raw
+  // partner position. This avoids orphan-scatter coords (random
+  // ±5000) propagating through the giant component when the layout
+  // skips pairwise repulsion for large components.
   const compId = components.parent.get(id);
   if (compId !== undefined) {
-    const members = components.members.get(
-      // parent points directly at the root in setMembership; use
-      // findRoot to handle the frontend-UF case where path may not
-      // be compressed yet.
-      compId,
-    );
+    const members = components.members.get(compId);
     if (members && members.size > CENTROID_THRESHOLD) {
       let sx = 0, sy = 0, n = 0;
       for (const m of members) {
@@ -696,7 +700,6 @@ function applyEdge(
   e: RawEdge,
   components: ComponentState,
   mintAddrs: Set<string>,
-  componentSource: ComponentSource,
 ): void {
   if (e.kind === "mint") {
     mintAddrs.add(e.from);
@@ -773,7 +776,7 @@ function applyEdge(
       incAttr(graph, e.from, "solDegree", 1);
       incAttr(graph, e.to, "solDegree", 1);
     }
-    commitEdge(graph, components, e.from, e.to, componentSource);
+    commitEdge(graph, components, e.from, e.to);
   }
 }
 
@@ -809,21 +812,16 @@ function commitEdge(
   components: ComponentState,
   fromId: string,
   toId: string,
-  componentSource: ComponentSource,
 ): void {
-  if (componentSource === "frontend") {
-    const rootA = findRoot(components, fromId);
-    const rootB = findRoot(components, toId);
-    if (rootA !== rootB) {
-      const merge = union(components, fromId, toId);
-      if (merge.merged) {
-        const anchor = merge.winner === rootA ? fromId : toId;
-        migrateMembersToAnchor(graph, merge.migrated, anchor);
-      }
+  const rootA = findRoot(components, fromId);
+  const rootB = findRoot(components, toId);
+  if (rootA !== rootB) {
+    const merge = union(components, fromId, toId);
+    if (merge.merged) {
+      const anchor = merge.winner === rootA ? fromId : toId;
+      migrateMembersToAnchor(graph, merge.migrated, anchor);
     }
   }
-  // In backend mode: union() is intentionally skipped. ComponentAssigned
-  // deltas drive setMembership() directly; no teleport-on-merge here.
   graph.setNodeAttribute(fromId, "size", nodeSize(graph, fromId));
   graph.setNodeAttribute(toId, "size", nodeSize(graph, toId));
   refreshEdgeSizes(graph, fromId);

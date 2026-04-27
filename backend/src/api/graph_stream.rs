@@ -1,61 +1,59 @@
-/// `GET /graph/stream`
+/// `GET /graph/stream?window={60|300|900|1800|3600}`
 ///
-/// SSE endpoint implementing the slice 2 differential rendering protocol.
+/// SSE endpoint implementing differential rendering. Each rolling window
+/// has its own broadcast channel; subscribers see only events relevant
+/// to their window. Defaults to 3600s when `window` is omitted.
 ///
 /// On every connect:
-/// 1. Acquire read lock on GraphState.
-/// 2. Snapshot `live_seq_at_release = graph.current_seq()`.
-/// 3. Subscribe to `delta_tx` broadcast BEFORE releasing the lock so no
-///    deltas are missed between bootstrap and live tail.
-/// 4. Iterate bootstrap events under read lock; emit each WITHOUT `id:`.
-///    (Skipped when `?skip_bootstrap=1` is set.)
-/// 5. Emit `CaughtUp { seq: live_seq_at_release }` WITH `id: live_seq_at_release`.
-/// 6. Release lock.
-/// 7. Forward live broadcast deltas with `id: <seq>`.
+/// 1. Validate `window` param.
+/// 2. Subscribe to that window's broadcast channel BEFORE acquiring the
+///    read lock so deltas between snapshot and live tail aren't dropped.
+/// 3. Snapshot bootstrap events restricted to the chosen window.
+/// 4. Snapshot `live_seq_at_release = graph.current_seq()`.
+/// 5. Emit bootstrap events without `id:`, then `CaughtUp` with `id`,
+///    then live tail with `id`.
 ///
-/// `?skip_bootstrap=1`: omit the NodeAdded/EdgeAdded/ComponentAssigned
-/// bootstrap phase and immediately emit CaughtUp, then tail live deltas.
-/// Default (no param) keeps full cold-start behavior unchanged.
-///
-/// No ring buffer, no `Last-Event-ID` resume. Always cold-start.
+/// `?skip_bootstrap=1` omits the cold-start phase.
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::time::Duration;
 
 use axum::extract::{Query, State};
-use axum::response::Sse;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response, Sse};
 use axum::response::sse::{Event, KeepAlive};
-use futures_util::stream::{Stream, StreamExt};
+use futures_util::stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 use crate::graph::bootstrap::bootstrap_events;
 use crate::graph::delta::GraphDelta;
+use crate::graph::window::parse_window_param;
 use crate::state::AppState;
 
 pub async fn stream(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+) -> Response {
+    let window_idx = match parse_window_param(params.get("window").map(|s| s.as_str())) {
+        Ok(w) => w,
+        Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+    };
     let skip_bootstrap = params.get("skip_bootstrap").map(|v| v == "1").unwrap_or(false);
 
-    // Subscribe to broadcast BEFORE acquiring read lock so we don't miss
-    // any deltas between the snapshot and the live tail.
-    let rx = state.delta_tx.subscribe();
+    let rx = state.deltas.sender(window_idx).subscribe();
 
-    // Snapshot bootstrap events + the seq at snapshot time.
     let (bootstrap, live_seq_at_release) = {
         let graph = state.graph.read();
         let live_seq = graph.current_seq();
         let events = if skip_bootstrap {
             vec![]
         } else {
-            bootstrap_events(&graph)
+            bootstrap_events(&graph, window_idx)
         };
         (events, live_seq)
     };
 
-    // Build the stream: bootstrap events first, then CaughtUp, then live.
     let bootstrap_stream = futures_util::stream::iter(
         bootstrap
             .into_iter()
@@ -67,7 +65,7 @@ pub async fn stream(
             &GraphDelta::CaughtUp {
                 seq: live_seq_at_release,
             },
-            true, // include id: field
+            true,
         );
         Ok::<Event, Infallible>(ev)
     });
@@ -76,14 +74,9 @@ pub async fn stream(
         let items: Vec<Result<Event, Infallible>> = match res {
             Ok(batch) => batch
                 .iter()
-                .map(|delta| {
-                    let ev = delta_to_sse_event(delta, true);
-                    Ok(ev)
-                })
+                .map(|delta| Ok(delta_to_sse_event(delta, true)))
                 .collect(),
             Err(BroadcastStreamRecvError::Lagged(n)) => {
-                // Slow subscriber missed deltas. Log and continue  the
-                // client will reconnect and get a fresh cold-start.
                 tracing::warn!(missed = n, "graph/stream: subscriber lagged, missed deltas");
                 vec![]
             }
@@ -95,12 +88,11 @@ pub async fn stream(
         .chain(caught_up_event)
         .chain(live_stream);
 
-    Sse::new(combined).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+    Sse::new(combined)
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+        .into_response()
 }
 
-/// Serialize a GraphDelta as an SSE Event. Bootstrap events (`with_id=false`)
-/// omit the `id:` field so browsers don't use them as resume points.
-/// Live events (`with_id=true`) include `id: <seq>`.
 fn delta_to_sse_event(delta: &GraphDelta, with_id: bool) -> Event {
     let event_type = match delta {
         GraphDelta::NodeAdded { .. } => "NodeAdded",
@@ -127,3 +119,4 @@ fn delta_to_sse_event(delta: &GraphDelta, with_id: bool) -> Event {
         ev
     }
 }
+

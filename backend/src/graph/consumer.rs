@@ -5,11 +5,11 @@ use futures_util::StreamExt;
 use parking_lot::RwLock;
 use rdkafka::{Message, Offset, TopicPartitionList};
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 use tokio::time::{Instant, sleep};
 use tracing::{debug, error, info, warn};
 
-use crate::graph::delta::GraphDelta;
+use crate::state::WindowChannels;
 use crate::stream::topics::Envelope;
 use super::GraphState;
 
@@ -19,7 +19,7 @@ const COMMIT_EVERY: Duration = Duration::from_secs(2);
 pub async fn run(
     consumer: StreamConsumer,
     graph: Arc<RwLock<GraphState>>,
-    delta_tx: broadcast::Sender<Arc<Vec<GraphDelta>>>,
+    channels: WindowChannels,
     mut shutdown: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let mut stream = consumer.stream();
@@ -48,13 +48,12 @@ pub async fn run(
                         };
                         match serde_json::from_slice::<Envelope>(payload) {
                             Ok(env) => {
-                                let deltas = {
+                                let ingest = {
                                     let mut g = graph.write();
                                     g.ingest(&env.edge)
                                 };
-                                if !deltas.is_empty() {
-                                    // Ignore send errors: no active subscribers is fine.
-                                    let _ = delta_tx.send(Arc::new(deltas));
+                                if !ingest.is_empty() {
+                                    dispatch(&channels, ingest);
                                 }
                                 last_tpl = Some((
                                     msg.topic().to_string(),
@@ -87,6 +86,33 @@ pub async fn run(
                 }
             }
         }
+    }
+}
+
+/// Fan ingest output into per-window broadcast channels. `common` events
+/// go to every channel; `per_window[w]` only to channel `w`. Each window
+/// receives at most one Arc<Vec<GraphDelta>> per ingest call, preserving
+/// chronological order within that window's stream.
+fn dispatch(channels: &WindowChannels, ingest: super::IngestDeltas) {
+    let common = ingest.common;
+    let common_arc = if common.is_empty() {
+        None
+    } else {
+        Some(Arc::new(common))
+    };
+
+    let mut per_window = ingest.per_window;
+    for (w, tx) in channels.txs.iter().enumerate() {
+        let mut batch: Vec<crate::graph::delta::GraphDelta> = Vec::new();
+        if let Some(c) = &common_arc {
+            batch.extend_from_slice(c);
+        }
+        let win_specific = std::mem::take(&mut per_window[w]);
+        batch.extend(win_specific);
+        if batch.is_empty() {
+            continue;
+        }
+        let _ = tx.send(Arc::new(batch));
     }
 }
 

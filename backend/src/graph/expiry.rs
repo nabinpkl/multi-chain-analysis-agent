@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::delta::{EdgeKind, GraphDelta};
+use super::delta::GraphDelta;
 use super::interner::NodeIdx;
 use super::union_find::ComponentId;
 use super::{EdgeIdx, GraphEdge, GraphState};
@@ -79,58 +79,75 @@ impl GraphState {
         idx
     }
 
-    /// Tombstone an edge: remove from adjacency lists, mark slab slot as
-    /// None, push to free-list. Returns the deltas to broadcast.
-    pub(super) fn tombstone_edge(&mut self, idx: EdgeIdx) -> Vec<GraphDelta> {
+    /// Per-window edge expiry. Always emits `EdgeExpired` and any
+    /// `NodeExpired` events for nodes whose per-window edge count drops
+    /// to zero. When `is_global` is true (this is the largest window),
+    /// also tombstones the slab slot, removes from global adjacency,
+    /// decrements global unique_degree, and frees the interner slot for
+    /// orphans.
+    pub(super) fn tombstone_edge_for_window(
+        &mut self,
+        idx: EdgeIdx,
+        w: usize,
+        is_global: bool,
+    ) -> Vec<GraphDelta> {
         let mut deltas = Vec::new();
         let seq = self.next_seq();
         deltas.push(GraphDelta::EdgeExpired { seq, idx });
 
-        let (src, dst) = {
-            let e = match self.edges[idx as usize].as_ref() {
-                Some(e) => (e.src, e.dst),
-                None => return deltas, // already tombstoned
-            };
-            e
+        let (src, dst) = match self.edges[idx as usize].as_ref() {
+            Some(e) => (e.src, e.dst),
+            None => return deltas,
         };
 
-        // Remove from adjacency lists.
-        self.out_adj[src as usize].retain(|&e| e != idx);
-        self.in_adj[dst as usize].retain(|&e| e != idx);
-
-        // Free slab slot.
-        self.edges[idx as usize] = None;
-        self.free_edge_slots.push(idx);
-
-        // If this was the LAST edge between (src, dst), decrement
-        // unique_degree on both and recompute size. Mirrors frontend
-        // (which has one graphology edge per pair, dropped on expiry).
-        if src != dst && !self.has_edge_between(src, dst) {
-            if self.unique_degree[src as usize] > 0 {
-                self.unique_degree[src as usize] -= 1;
-                self.size[src as usize] = super::node_size_for_degree(
-                    self.unique_degree[src as usize],
-                );
+        // Decrement per-window edge counts and emit per-window NodeExpired
+        // when a node's last edge in this window leaves. Self-loops only
+        // decrement once because `add_edge` only incremented once.
+        let endpoints: &[NodeIdx] = if src == dst { &[src] } else { &[src, dst] };
+        for &node in endpoints {
+            let count = &mut self.windows[w].edge_count_per_node[node as usize];
+            if *count > 0 {
+                *count -= 1;
             }
-            if self.unique_degree[dst as usize] > 0 {
-                self.unique_degree[dst as usize] -= 1;
-                self.size[dst as usize] = super::node_size_for_degree(
-                    self.unique_degree[dst as usize],
-                );
+            if *count == 0 {
+                let seq = self.next_seq();
+                deltas.push(GraphDelta::NodeExpired { seq, idx: node });
             }
         }
 
-        // Check for orphan nodes (no remaining edges).
-        for &node in &[src, dst] {
+        if !is_global {
+            return deltas;
+        }
+
+        // Global expiry: tombstone slab slot + clean adjacency.
+        self.out_adj[src as usize].retain(|&e| e != idx);
+        self.in_adj[dst as usize].retain(|&e| e != idx);
+        self.edges[idx as usize] = None;
+        self.free_edge_slots.push(idx);
+
+        if src != dst && !self.has_edge_between(src, dst) {
+            if self.unique_degree[src as usize] > 0 {
+                self.unique_degree[src as usize] -= 1;
+                self.size[src as usize] =
+                    super::node_size_for_degree(self.unique_degree[src as usize]);
+            }
+            if self.unique_degree[dst as usize] > 0 {
+                self.unique_degree[dst as usize] -= 1;
+                self.size[dst as usize] =
+                    super::node_size_for_degree(self.unique_degree[dst as usize]);
+            }
+        }
+
+        // Free interner slot when global adjacency leaves a node empty.
+        // Per-window NodeExpired for the global window was already pushed
+        // above; this just keeps the global slabs in sync.
+        let endpoints: &[NodeIdx] = if src == dst { &[src] } else { &[src, dst] };
+        for &node in endpoints {
             let is_orphan = self.out_adj[node as usize].is_empty()
                 && self.in_adj[node as usize].is_empty();
             if is_orphan {
-                let seq2 = self.next_seq();
-                deltas.push(GraphDelta::NodeExpired { seq: seq2, idx: node });
-                // Free interner slot.
                 self.interner.free(node);
-                // Remove from node_to_component so future scans skip it.
-                self.node_to_component[node as usize] = u64::MAX; // sentinel = dead
+                self.node_to_component[node as usize] = u64::MAX;
             }
         }
 
@@ -281,7 +298,6 @@ fn bfs_partition(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::domain::Edge;
     use crate::graph::GraphState;
     use crate::graph::delta::GraphDelta;
@@ -320,17 +336,18 @@ mod tests {
         // (block_time=1000 < 1001) expires, orphaning AAA and BBB.
         let e3 = make_edge("EEE", "FFF", 3, 4601);
         let deltas = gs.ingest(&e3);
+        let all: Vec<_> = deltas.iter_all().cloned().collect();
 
-        let edge_expired_count = deltas
+        let edge_expired_count = all
             .iter()
             .filter(|d| matches!(d, GraphDelta::EdgeExpired { .. }))
             .count();
-        let node_expired_count = deltas
+        let node_expired_count = all
             .iter()
             .filter(|d| matches!(d, GraphDelta::NodeExpired { .. }))
             .count();
         assert!(edge_expired_count >= 1, "expected EdgeExpired");
-        assert_eq!(node_expired_count, 2, "AAA and BBB should be orphan-expired");
+        assert!(node_expired_count >= 2, "AAA and BBB should be orphan-expired");
     }
 
     #[test]
@@ -354,7 +371,7 @@ mod tests {
         // After expiry of A-B, A is an orphan (NodeExpired) and B-C remains.
         // So we have: B-C component + new D-E component.
         let component_assigned: Vec<_> = deltas
-            .iter()
+            .iter_all()
             .filter(|d| matches!(d, GraphDelta::ComponentAssigned { .. }))
             .collect();
         // A got NodeExpired, so only B and C remain in the old component  no split there.

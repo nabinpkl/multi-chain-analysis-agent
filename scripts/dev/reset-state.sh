@@ -45,7 +45,7 @@ rpk -X brokers="${REDPANDA_BROKERS}" topic create solana.raw-edges \
 # Seek both groups to the topic's end so the new api doesn't replay a
 # committed-offset backlog from a previous uptime. rpk rejects seek on a
 # non-empty group (active members), which happens when the old api
-# container hasn't fully unregistered yet — wait it out. We stop caring
+# container hasn't fully unregistered yet  wait it out. We stop caring
 # once the group is empty OR we've retried enough; any failure here just
 # means the next run will replay its backlog (ugly but not fatal).
 seek_group_to_end() {
@@ -54,7 +54,7 @@ seek_group_to_end() {
     while [ "$i" -lt 30 ]; do
         state=$(rpk -X brokers="${REDPANDA_BROKERS}" group describe "$group" 2>/dev/null \
             | awk '/^STATE/ {print $2}')
-        # Group doesn't exist yet — first boot or deleted. Nothing to seek.
+        # Group doesn't exist yet  first boot or deleted. Nothing to seek.
         if [ -z "$state" ]; then
             echo "[reset] $group: not yet created, skipping"
             return 0
@@ -74,7 +74,7 @@ seek_group_to_end() {
 }
 
 echo "[reset] seeking consumer groups to end..."
-seek_group_to_end live-state || true
-seek_group_to_end ch-sink    || true
+seek_group_to_end graph-engine || true
+seek_group_to_end ch-sink      || true
 
 echo "[reset] done"

@@ -3,13 +3,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::RwLock;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info, warn};
 
-use crate::graph::delta::GraphDelta;
 use crate::graph::GraphState;
+use crate::graph::delta::GraphDelta;
+use crate::state::WindowChannels;
 
 mod api;
 mod config;
@@ -82,7 +83,8 @@ async fn main() -> anyhow::Result<()> {
     bg_handles.push(ch_sink_handle);
 
     // graph-engine: sole live ingest path. Builds in-memory graph and
-    // broadcasts GraphDelta batches to /graph/stream SSE subscribers.
+    // dispatches GraphDelta batches per-window to /graph/stream
+    // subscribers.
     let graph_consumer_handle = {
         let consumer = build_consumer(
             &config.kafka_brokers,
@@ -92,25 +94,23 @@ async fn main() -> anyhow::Result<()> {
         )?;
         info!(group = %config.kafka_group_graph, topic = %config.kafka_topic_raw_edges, "graph-engine consumer ready");
         let graph = state.graph.clone();
-        let delta_tx = state.delta_tx.clone();
+        let channels = state.deltas.clone();
         let rx = shutdown_rx.clone();
         tokio::spawn(async move {
-            if let Err(e) = graph::consumer::run(consumer, graph, delta_tx, rx).await {
+            if let Err(e) = graph::consumer::run(consumer, graph, channels, rx).await {
                 error!(error = %e, "graph-consumer exited with error");
             }
         })
     };
     bg_handles.push(graph_consumer_handle);
 
-    // layout-tick: 30 Hz physics step. Reads adj + components, writes
-    // pos/vel slabs, broadcasts a `PositionsBatch` delta when any node
-    // moved. Same broadcast channel as ingest, so SSE subscribers see
-    // a unified stream.
+    // layout-tick: 60 Hz physics step. Broadcasts PositionsBatch to
+    // every window channel since positions are window-agnostic.
     let layout_tick_handle = {
         let graph = state.graph.clone();
-        let delta_tx = state.delta_tx.clone();
+        let channels = state.deltas.clone();
         let rx = shutdown_rx.clone();
-        tokio::spawn(layout_tick_loop(graph, delta_tx, rx))
+        tokio::spawn(layout_tick_loop(graph, channels, rx))
     };
     bg_handles.push(layout_tick_handle);
 
@@ -168,11 +168,10 @@ async fn main() -> anyhow::Result<()> {
 /// equilibrium) are skipped so subscribers don't see noise events.
 async fn layout_tick_loop(
     graph: Arc<RwLock<GraphState>>,
-    delta_tx: broadcast::Sender<Arc<Vec<GraphDelta>>>,
+    channels: WindowChannels,
     mut shutdown: watch::Receiver<bool>,
 ) {
-    // 60 Hz to match the frontend's RAF cadence; same constants are
-    // tuned per-tick, so matching tick rate matches convergence rate.
+    // 60 Hz to match the frontend's RAF cadence.
     let mut ticker = tokio::time::interval(Duration::from_millis(16));
     info!("layout-tick: started (60 Hz)");
     loop {
@@ -193,9 +192,13 @@ async fn layout_tick_loop(
                     }
                 };
                 let Some(delta) = maybe_delta else { continue };
-                if delta_tx.send(Arc::new(vec![delta])).is_err() {
+                let batch = Arc::new(vec![delta]);
+                let any_alive = channels.txs.iter().any(|tx| tx.receiver_count() > 0);
+                if !any_alive {
                     debug!("layout-tick: no SSE subscribers");
+                    continue;
                 }
+                channels.broadcast_all(batch);
             }
         }
     }

@@ -2,12 +2,53 @@
 
 import dynamic from "next/dynamic";
 import { useState } from "react";
-import { useRawStream, type RoleSummary, type ComponentSource } from "@/hooks/use-raw-stream";
+import {
+  DEFAULT_WINDOW_SECONDS,
+  WINDOW_SECONDS,
+  useRawStream,
+  type RoleSummary,
+  type WindowSeconds,
+} from "@/hooks/use-raw-stream";
 import { EDGE_PALETTE, ROLE_PALETTE } from "@/lib/role-colors";
 import type { NodeRole } from "@/lib/role-detect";
 import { formatInt } from "@/lib/format";
 import { LiveIndicator } from "@/components/flow/live-indicator";
 import { cn } from "@/lib/utils";
+
+const WINDOW_LABELS: Record<WindowSeconds, string> = {
+  10: "10s",
+  60: "1m",
+  300: "5m",
+  900: "15m",
+  1800: "30m",
+  3600: "1h",
+};
+
+/**
+ * Format the latest ingested chain `block_time` (Unix seconds) for the
+ * status bar. Shows local HH:MM:SS plus how far behind wall-clock the
+ * tip is, so the gap is visible at a glance even when the ingester
+ * lags. Returns "..." until the first poll resolves.
+ */
+function formatChainTip(blockTime: number | null): string {
+  if (blockTime === null) return "...";
+  const d = new Date(blockTime * 1000);
+  const hh = d.getHours().toString().padStart(2, "0");
+  const mm = d.getMinutes().toString().padStart(2, "0");
+  const ss = d.getSeconds().toString().padStart(2, "0");
+  const lagSecs = Math.max(0, Math.floor(Date.now() / 1000) - blockTime);
+  return `${hh}:${mm}:${ss} (${formatLag(lagSecs)} behind)`;
+}
+
+function formatLag(secs: number): string {
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  if (m < 60) return s === 0 ? `${m}m` : `${m}m ${s}s`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm === 0 ? `${h}h` : `${h}h ${rm}m`;
+}
 
 const RawGraphCanvas = dynamic(
   () =>
@@ -23,10 +64,8 @@ const RawGraphCanvas = dynamic(
 );
 
 export function GraphPage() {
-  const [source, setSource] = useState<ComponentSource>("frontend");
-  const { graph, status, roleSummary, reset } = useRawStream({
-    componentSource: source,
-  });
+  const [windowSecs, setWindowSecs] = useState<WindowSeconds>(DEFAULT_WINDOW_SECONDS);
+  const { graph, status, roleSummary, reset } = useRawStream({ windowSecs });
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)] min-h-[640px]">
@@ -45,12 +84,12 @@ export function GraphPage() {
         <aside className="w-[320px] shrink-0 border-l border-mca-border bg-mca-surface/40 overflow-y-auto">
           <div className="p-6 space-y-8">
             <RawPanel
-            status={status}
-            roleSummary={roleSummary}
-            onReset={reset}
-            source={source}
-            onSourceChange={setSource}
-          />
+              status={status}
+              roleSummary={roleSummary}
+              onReset={reset}
+              windowSecs={windowSecs}
+              onWindowChange={setWindowSecs}
+            />
           </div>
         </aside>
       </div>
@@ -72,19 +111,20 @@ function RawPanel({
   status,
   roleSummary,
   onReset,
-  source,
-  onSourceChange,
+  windowSecs,
+  onWindowChange,
 }: {
   status: {
     connected: boolean;
     edgeCount: number;
     nodeCount: number;
     lagged: number;
+    latestBlockTime: number | null;
   };
   roleSummary: RoleSummary;
   onReset: () => void;
-  source: ComponentSource;
-  onSourceChange: (s: ComponentSource) => void;
+  windowSecs: WindowSeconds;
+  onWindowChange: (w: WindowSeconds) => void;
 }) {
   return (
     <div className="space-y-4 text-sm">
@@ -105,35 +145,35 @@ function RawPanel({
         </button>
       </div>
       <div>
+        <div className="text-[0.65rem] uppercase tracking-[1.5px] text-mca-muted mb-1">
+          chain tip
+        </div>
+        <div className="tabular-nums text-mca-text text-xs">
+          {formatChainTip(status.latestBlockTime)}
+        </div>
+        <div className="text-[0.6rem] text-mca-dim mt-1 leading-relaxed">
+          window cuts back from this point, not from wall clock
+        </div>
+      </div>
+      <div>
         <div className="text-[0.65rem] uppercase tracking-[1.5px] text-mca-muted mb-2">
-          components source
+          window
         </div>
         <div className="flex gap-1 text-xs">
-          <button
-            onClick={() => onSourceChange("frontend")}
-            className={cn(
-              "px-2 py-1 border rounded text-[0.65rem] uppercase tracking-[1.5px] transition-colors",
-              source === "frontend"
-                ? "border-emerald-500 text-mca-text"
-                : "border-mca-border text-mca-muted hover:text-mca-text hover:border-mca-muted",
-            )}
-          >
-            Frontend UF
-          </button>
-          <button
-            onClick={() => onSourceChange("backend")}
-            className={cn(
-              "px-2 py-1 border rounded text-[0.65rem] uppercase tracking-[1.5px] transition-colors",
-              source === "backend"
-                ? "border-emerald-500 text-mca-text"
-                : "border-mca-border text-mca-muted hover:text-mca-text hover:border-mca-muted",
-            )}
-          >
-            Backend UF
-          </button>
-        </div>
-        <div className="text-[0.6rem] text-mca-dim mt-1">
-          components: {source}
+          {WINDOW_SECONDS.map((w) => (
+            <button
+              key={w}
+              onClick={() => onWindowChange(w)}
+              className={cn(
+                "px-2 py-1 border rounded text-[0.65rem] uppercase tracking-[1.5px] transition-colors",
+                windowSecs === w
+                  ? "border-emerald-500 text-mca-text"
+                  : "border-mca-border text-mca-muted hover:text-mca-text hover:border-mca-muted",
+              )}
+            >
+              {WINDOW_LABELS[w]}
+            </button>
+          ))}
         </div>
       </div>
       <div>
