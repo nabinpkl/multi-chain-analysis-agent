@@ -17,12 +17,9 @@ import {
 } from "@/lib/component-stats";
 import { detectMpcClusters } from "@/lib/mpc-detect";
 import {
-  createLayoutState,
-  resetLayoutState,
-  stepLayout,
-  type LayoutSnapshot,
-  type LayoutState,
-} from "@/lib/per-component-layout";
+  createWorkerLayoutClient,
+  type LayoutClient,
+} from "@/lib/layout-client";
 import { classifyNodes, type NodeRole } from "@/lib/role-detect";
 import { colorForEdgeKind, colorForRole, ROLE_PALETTE } from "@/lib/role-colors";
 
@@ -68,16 +65,20 @@ export function useRawStream({
 
   const pendingRef = useRef<RawEdge[]>([]);
   const rafRef = useRef<number | null>(null);
-  // Components touched by the most recently flushed edge batch. The
-  // layout tick reads then clears this so physics only runs on
-  // components that actually moved this frame. Lifetime = one frame;
-  // produced by flush, consumed by layoutTick.
-  const dirtyRootsRef = useRef<Set<string>>(new Set());
-  // Persistent state for the pure layout module: per-node velocities
-  // (Map keyed by pubkey) and reusable scratch force buffers. Owned
-  // here so a future worker move can hand it to the worker without
-  // reaching into module-level state.
-  const layoutStateRef = useRef<LayoutState>(createLayoutState());
+  // Worker-backed layout client. The worker owns positions
+  // authoritatively across frames; main sends deltas (addNode,
+  // addEdge, bumpEdgeWeight, removeNode, removeEdge, setRole,
+  // setCommunity) and consumes positions one-way via
+  // `applyLatestPositions`. Constructed in a client-only `useEffect`
+  // because Next.js renders client components on the server too,
+  // where `Worker` is undefined.
+  const layoutClientRef = useRef<LayoutClient | null>(null);
+  // Slot id assignment for the layout client. Slots are u32,
+  // monotonically increasing, never reused. At sustained 200 nodes/s
+  // wraparound is irrelevant.
+  const slotByPubkeyRef = useRef<Map<string, number>>(new Map());
+  const pubkeyBySlotRef = useRef<Map<number, string>>(new Map());
+  const nextSlotRef = useRef<number>(0);
   // Union-Find over connected components. Drives teleport-on-merge
   // so two components bridged by a new edge snap together immediately
   // instead of relying on FA2 to pull them across the canvas.
@@ -141,8 +142,10 @@ export function useRawStream({
     rolesRef.current = new Map();
     componentStatsRef.current = new Map();
     pendingRef.current = [];
-    dirtyRootsRef.current = new Set();
-    resetLayoutState(layoutStateRef.current);
+    slotByPubkeyRef.current = new Map();
+    pubkeyBySlotRef.current = new Map();
+    nextSlotRef.current = 0;
+    layoutClientRef.current?.reset();
     setStatus({
       connected: false,
       edgeCount: 0,
@@ -163,6 +166,18 @@ export function useRawStream({
       normal: 0,
     });
   };
+
+  // Construct the worker-backed layout client on mount; terminate
+  // the worker on unmount. Empty deps: re-mounts (StrictMode) build
+  // a fresh worker. Window-switch / reset don't recreate it; they
+  // call `.reset()` to drop the worker's internal state.
+  useEffect(() => {
+    layoutClientRef.current = createWorkerLayoutClient();
+    return () => {
+      layoutClientRef.current?.terminate?.();
+      layoutClientRef.current = null;
+    };
+  }, []);
 
   // reset(): bump the tick. The main effect below clears state and
   // opens a fresh SSE; with `skipBootstrapNextRef` set, the new
@@ -185,26 +200,49 @@ export function useRawStream({
     const skipBootstrap = skipBootstrapNextRef.current;
     skipBootstrapNextRef.current = false;
 
+    // Wallclock budget per frame instead of fixed edge count. Each
+    // `applyEdge` call cost varies (megahub bumps are cheap; new
+    // nodes hit `ensureNode`'s centroid-spawn path which iterates
+    // component members). Time-budgeting keeps every frame within
+    // FLUSH_BUDGET_MS of `applyEdge` work regardless of which edge
+    // mix lands, leaving the rest of the frame for Sigma's render
+    // and user events. Steady-state at 405 tx/sec is ~6.5 edges
+    // per RAF, far under the budget, so this never trips in normal
+    // flow.
+    const FLUSH_BUDGET_MS = 6;
     const flush = () => {
       rafRef.current = null;
-      const batch = pendingRef.current;
-      if (batch.length === 0) return;
-      pendingRef.current = [];
-      const dirty = dirtyRootsRef.current;
-      for (const e of batch) {
+      const queue = pendingRef.current;
+      if (queue.length === 0) return;
+      const dispatch: LayoutDispatch | null = layoutClientRef.current
+        ? {
+            client: layoutClientRef.current,
+            slotByPubkey: slotByPubkeyRef.current,
+            pubkeyBySlot: pubkeyBySlotRef.current,
+            nextSlot: nextSlotRef,
+          }
+        : null;
+      const start = performance.now();
+      let i = 0;
+      while (
+        i < queue.length &&
+        performance.now() - start < FLUSH_BUDGET_MS
+      ) {
         applyEdge(
           graph,
-          e,
+          queue[i],
           componentsRef.current,
           mintAddrsRef.current,
+          dispatch,
         );
-        // applyEdge has run and any union() merge has settled, so
-        // findRoot returns the post-merge root. O(α(n)) per call.
-        if (graph.hasNode(e.from)) {
-          dirty.add(findRoot(componentsRef.current, e.from));
-        }
-        if (e.from !== e.to && graph.hasNode(e.to)) {
-          dirty.add(findRoot(componentsRef.current, e.to));
+        i++;
+      }
+      if (i === queue.length) {
+        pendingRef.current = [];
+      } else {
+        pendingRef.current = queue.slice(i);
+        if (rafRef.current === null) {
+          rafRef.current = requestAnimationFrame(flush);
         }
       }
       setStatus((s) => ({
@@ -287,6 +325,16 @@ export function useRawStream({
         if (graph.hasNode(dst)) {
           graph.updateNodeAttribute(dst, "degree", (n) => Math.max(0, (n ?? 1) - 1));
         }
+        // Tell the layout client to drop the edge from its mirror.
+        const srcSlot = slotByPubkeyRef.current.get(src);
+        const dstSlot = slotByPubkeyRef.current.get(dst);
+        if (
+          srcSlot !== undefined &&
+          dstSlot !== undefined &&
+          layoutClientRef.current
+        ) {
+          layoutClientRef.current.removeEdge(srcSlot, dstSlot);
+        }
         // Note: components UF isn't decremented (DSU doesn't support split).
         // Component view becomes slightly stale on long window-slide
         // events. Acceptable for the visual.
@@ -320,6 +368,16 @@ export function useRawStream({
         mintAddrsRef.current.delete(pubkey);
         nodeToCommunityRef.current.delete(pubkey);
         rolesRef.current.delete(pubkey);
+        // Drop the layout client's mirror of this node and release
+        // its slot id (slot ids are not reused, but we clear the
+        // pubkey<->slot maps so future references to this pubkey
+        // get a fresh slot when the wallet re-appears).
+        const slot = slotByPubkeyRef.current.get(pubkey);
+        if (slot !== undefined) {
+          layoutClientRef.current?.removeNode(slot);
+          slotByPubkeyRef.current.delete(pubkey);
+          pubkeyBySlotRef.current.delete(slot);
+        }
         setStatus((s) => ({ ...s, edgeCount: graph.size, nodeCount: graph.order }));
       } catch {
         // ignore malformed events
@@ -331,39 +389,29 @@ export function useRawStream({
       // Could set a "loaded" flag here if needed.
     });
 
-    // Per-component layout tick. Materializes a `LayoutSnapshot` of
-    // typed arrays from the live graphology instance + ComponentState
-    // each frame, hands it to the pure layout module, and writes the
-    // mutated x/y back. Snapshot construction is the bridge between
-    // graphology (Sigma's source of truth) and the graphology-free
-    // physics module; tomorrow this same module runs in a worker and
-    // the snapshot will come from a transferred buffer.
+    // Once-per-RAF position applier. The layout client owns physics
+    // state (worker thread); main's job here is just to drain the
+    // most recent positions onto graphology so Sigma renders them.
+    //
+    // While the SSE flush queue is heavy (bootstrap), skip the
+    // writeback. Graphology positions stay at their initial spawn
+    // values; Sigma keeps painting those without the per-frame
+    // setNodeAttribute storm + render trigger that the worker's
+    // diff would cause. Positions converge once the queue drains
+    // under the threshold; nodes snap to physics-stable layout in
+    // one frame instead of jittering through bootstrap.
+    const POSITION_WRITEBACK_QUEUE_THRESHOLD = 200;
     let layoutRafId: number | null = null;
     const layoutTick = () => {
       layoutRafId = requestAnimationFrame(layoutTick);
-      if (graph.order < 2) return;
-      const dirty = dirtyRootsRef.current;
-      if (dirty.size === 0) return;
-      dirtyRootsRef.current = new Set();
-
-      const snap = buildLayoutSnapshot(
-        graph,
-        componentsRef.current,
-        nodeToCommunityRef.current,
-        dirty,
-      );
-      if (snap === null) return;
-      stepLayout(snap, layoutStateRef.current);
-
-      // Write final positions back to graphology so Sigma renders
-      // them on its next frame. Tight loop, no per-node allocations.
-      const ids = snap.ids;
-      const xs = snap.xs;
-      const ys = snap.ys;
-      for (let s = 0; s < ids.length; s++) {
-        graph.setNodeAttribute(ids[s], "x", xs[s]);
-        graph.setNodeAttribute(ids[s], "y", ys[s]);
+      const client = layoutClientRef.current;
+      if (client === null) return;
+      if (
+        pendingRef.current.length > POSITION_WRITEBACK_QUEUE_THRESHOLD
+      ) {
+        return;
       }
+      client.applyLatestPositions(graph, pubkeyBySlotRef.current);
     };
     layoutRafId = requestAnimationFrame(layoutTick);
 
@@ -552,11 +600,21 @@ export function useRawStream({
         "mpc-member": 0,
         normal: 0,
       };
+      const client = layoutClientRef.current;
+      const slotByPubkey = slotByPubkeyRef.current;
       graph.forEachNode((id) => {
         const role = roles.get(id) ?? "normal";
         graph.setNodeAttribute(id, "role", role);
         graph.setNodeAttribute(id, "color", colorForRole(role));
         summary[role] += 1;
+        if (client !== null) {
+          const slot = slotByPubkey.get(id);
+          if (slot !== undefined) {
+            client.setRole(slot, role);
+            const community = nodeToCommunity.get(id) ?? -1;
+            client.setCommunity(slot, community);
+          }
+        }
       });
       rolesRef.current = roles;
       setRoleSummary(summary);
@@ -631,143 +689,6 @@ export function useRawStream({
 }
 
 /**
- * Materialize a `LayoutSnapshot` from the live graphology graph and
- * the parallel `ComponentState`. Component-major slot ordering: every
- * member of component `c` occupies a contiguous slot range
- * `[memberOffsets[c], memberOffsets[c+1])`. Edges are emitted
- * intra-component, deduped to `slotI < slotJ` so each edge is
- * processed exactly once by the layout's attraction loop.
- *
- * Returns `null` if the graph is structurally inconsistent with the
- * `ComponentState` (no nodes to lay out). Otherwise returns a fully
- * populated snapshot whose `xs`/`ys` `stepLayout` will mutate in
- * place; the caller then writes the result back to graphology.
- *
- * Why this lives at the call site rather than inside the layout
- * module: the layout module is graphology-free by design (it will
- * move into a Web Worker). All graphology reads happen here, in one
- * pass, so step 2 of the migration can replace this function with a
- * `postMessage` to the worker without touching physics.
- */
-function buildLayoutSnapshot(
-  graph: Graph,
-  components: ComponentState,
-  nodeToCommunity: Map<string, number>,
-  dirtyRoots: ReadonlySet<string>,
-): LayoutSnapshot | null {
-  // Stable component ordering: roots in insertion order from the
-  // ComponentState Map.
-  const componentRoots: string[] = [];
-  for (const root of components.members.keys()) {
-    componentRoots.push(root);
-  }
-  const numComponents = componentRoots.length;
-  if (numComponents === 0) return null;
-
-  const upperBound = graph.order;
-  if (upperBound === 0) return null;
-  const ids: string[] = new Array(upperBound);
-  const xs = new Float64Array(upperBound);
-  const ys = new Float64Array(upperBound);
-  const sizes = new Float64Array(upperBound);
-  const degrees = new Int32Array(upperBound);
-  const isTip = new Uint8Array(upperBound);
-  const community = new Int32Array(upperBound);
-  const memberOffsets = new Int32Array(numComponents + 1);
-  const members = new Int32Array(upperBound);
-  // Reverse lookup so the edge pass can dedup by slot order.
-  const slotByNodeId = new Map<string, number>();
-
-  let slot = 0;
-  for (let c = 0; c < numComponents; c++) {
-    memberOffsets[c] = slot;
-    const root = componentRoots[c];
-    const memberSet = components.members.get(root);
-    if (!memberSet) continue;
-    for (const id of memberSet) {
-      // Defensive: a NodeExpired race could leave a member id in
-      // ComponentState whose graphology node is already dropped.
-      // Skip without burning a slot.
-      if (!graph.hasNode(id)) continue;
-      ids[slot] = id;
-      slotByNodeId.set(id, slot);
-      xs[slot] = graph.getNodeAttribute(id, "x") as number;
-      ys[slot] = graph.getNodeAttribute(id, "y") as number;
-      sizes[slot] = Math.max(
-        1,
-        (graph.getNodeAttribute(id, "size") as number) ?? 1,
-      );
-      degrees[slot] = (graph.getNodeAttribute(id, "degree") as number) ?? 0;
-      isTip[slot] =
-        graph.getNodeAttribute(id, "role") === "tip-account" ? 1 : 0;
-      community[slot] = nodeToCommunity.get(id) ?? -1;
-      members[slot] = slot;
-      slot++;
-    }
-  }
-  memberOffsets[numComponents] = slot;
-  const N = slot;
-  if (N === 0) return null;
-
-  // Edge pass. Walk each node's incident edges, keep only those
-  // whose other endpoint is also tracked, dedup by slot order. Sized
-  // to graph.size; an unused tail is trimmed via subarray. All edges
-  // are intra-component by ComponentState invariant.
-  const edgeOffsets = new Int32Array(numComponents + 1);
-  const edgeSrcRaw = new Int32Array(graph.size);
-  const edgeDstRaw = new Int32Array(graph.size);
-  const edgeWeightRaw = new Float32Array(graph.size);
-  let eIdx = 0;
-  for (let c = 0; c < numComponents; c++) {
-    edgeOffsets[c] = eIdx;
-    const memStart = memberOffsets[c];
-    const memEnd = memberOffsets[c + 1];
-    for (let mi = memStart; mi < memEnd; mi++) {
-      const slotI = members[mi];
-      const id = ids[slotI];
-      graph.forEachEdge(id, (_eid, attrs, source, target) => {
-        const other = source === id ? target : source;
-        const slotJ = slotByNodeId.get(other);
-        if (slotJ === undefined) return;
-        if (slotJ <= slotI) return;
-        edgeSrcRaw[eIdx] = slotI;
-        edgeDstRaw[eIdx] = slotJ;
-        edgeWeightRaw[eIdx] = ((attrs.weight as number) ?? 1);
-        eIdx++;
-      });
-    }
-  }
-  edgeOffsets[numComponents] = eIdx;
-
-  // Map dirty roots (string) to component indices (int).
-  const dirtyArr: number[] = [];
-  for (let c = 0; c < numComponents; c++) {
-    if (dirtyRoots.has(componentRoots[c])) {
-      dirtyArr.push(c);
-    }
-  }
-  const dirtyComponents = dirtyArr.length > 0 ? new Int32Array(dirtyArr) : null;
-
-  return {
-    ids: ids.length === N ? ids : ids.slice(0, N),
-    xs: N === upperBound ? xs : xs.subarray(0, N),
-    ys: N === upperBound ? ys : ys.subarray(0, N),
-    sizes: N === upperBound ? sizes : sizes.subarray(0, N),
-    degrees: N === upperBound ? degrees : degrees.subarray(0, N),
-    isTip: N === upperBound ? isTip : isTip.subarray(0, N),
-    community: N === upperBound ? community : community.subarray(0, N),
-    numComponents,
-    memberOffsets,
-    members: N === upperBound ? members : members.subarray(0, N),
-    edgeOffsets,
-    edgeSrc: edgeSrcRaw.subarray(0, eIdx),
-    edgeDst: edgeDstRaw.subarray(0, eIdx),
-    edgeWeight: edgeWeightRaw.subarray(0, eIdx),
-    dirtyComponents,
-  };
-}
-
-/**
  * Deterministic hash -> [0, 1). Used for jitter angles so a wallet id
  * always spawns at the same relative position given the same partner.
  */
@@ -824,11 +745,28 @@ function nodeLabel(id: string): string {
 // threshold the centroid is too noisy to be useful.
 const CENTROID_THRESHOLD = 4;
 
+interface LayoutDispatch {
+  client: LayoutClient;
+  slotByPubkey: Map<string, number>;
+  pubkeyBySlot: Map<number, string>;
+  nextSlot: { current: number };
+}
+
+function getOrAssignSlot(d: LayoutDispatch, pubkey: string): number {
+  const existing = d.slotByPubkey.get(pubkey);
+  if (existing !== undefined) return existing;
+  const slot = d.nextSlot.current++;
+  d.slotByPubkey.set(pubkey, slot);
+  d.pubkeyBySlot.set(slot, pubkey);
+  return slot;
+}
+
 function ensureNode(
   graph: Graph,
   id: string,
   partnerId: string | null,
   components: ComponentState,
+  dispatch: LayoutDispatch | null,
 ): void {
   if (graph.hasNode(id)) return;
 
@@ -854,10 +792,12 @@ function ensureNode(
         const cx = sx / n;
         const cy = sy / n;
         const angle = hash01(id) * Math.PI * 2;
+        const sxNew = cx + SPAWN_RADIUS * 2 * Math.cos(angle);
+        const syNew = cy + SPAWN_RADIUS * 2 * Math.sin(angle);
         addToComponent(components, id);
         graph.addNode(id, {
-          x: cx + SPAWN_RADIUS * 2 * Math.cos(angle),
-          y: cy + SPAWN_RADIUS * 2 * Math.sin(angle),
+          x: sxNew,
+          y: syNew,
           size: 0.8,
           color: ROLE_PALETTE.normal.rgb,
           label: nodeLabel(id),
@@ -871,6 +811,10 @@ function ensureNode(
           role: "normal" as NodeRole,
           bidirVol: 0,
         });
+        if (dispatch !== null) {
+          const slot = getOrAssignSlot(dispatch, id);
+          dispatch.client.addNode(slot, sxNew, syNew);
+        }
         return;
       }
     }
@@ -895,6 +839,10 @@ function ensureNode(
     role: "normal" as NodeRole,
     bidirVol: 0,
   });
+  if (dispatch !== null) {
+    const slot = getOrAssignSlot(dispatch, id);
+    dispatch.client.addNode(slot, x, y);
+  }
 }
 
 // SPL/Token-2022 edges arrive with `volume_sol == 0` and `mint`
@@ -906,6 +854,7 @@ function applyEdge(
   e: RawEdge,
   components: ComponentState,
   mintAddrs: Set<string>,
+  dispatch: LayoutDispatch | null,
 ): void {
   if (e.kind === "mint") {
     mintAddrs.add(e.from);
@@ -913,7 +862,7 @@ function applyEdge(
     mintAddrs.add(e.to);
   }
   if (e.from === e.to) {
-    ensureNode(graph, e.from, null, components);
+    ensureNode(graph, e.from, null, components, dispatch);
     const cur = (graph.getNodeAttribute(e.from, "selfLoops") as number) + 1;
     graph.setNodeAttribute(e.from, "selfLoops", cur);
     graph.setNodeAttribute(e.from, "size", nodeSize(graph, e.from));
@@ -923,12 +872,12 @@ function applyEdge(
   const fromExists = graph.hasNode(e.from);
   const toExists = graph.hasNode(e.to);
   if (!fromExists && !toExists) {
-    ensureNode(graph, e.from, null, components);
-    ensureNode(graph, e.to, e.from, components);
+    ensureNode(graph, e.from, null, components, dispatch);
+    ensureNode(graph, e.to, e.from, components, dispatch);
   } else if (!fromExists) {
-    ensureNode(graph, e.from, e.to, components);
+    ensureNode(graph, e.from, e.to, components, dispatch);
   } else if (!toExists) {
-    ensureNode(graph, e.to, e.from, components);
+    ensureNode(graph, e.to, e.from, components, dispatch);
   }
 
   incAttr(graph, e.from, "volume", e.volume_sol);
@@ -942,11 +891,6 @@ function applyEdge(
     incAttr(graph, eid, "volume", e.volume_sol, "edge");
     incAttr(graph, eid, "txCount", 1, "edge");
     bumpDirection(graph, eid, e);
-    graph.setEdgeAttribute(
-      eid,
-      "size",
-      edgeWidth(graph.getEdgeAttribute(eid, "volume") as number, graph, e.from, e.to),
-    );
     graph.setEdgeAttribute(eid, "weight", graph.getEdgeAttribute(eid, "txCount") as number);
     if (isSpl && !graph.getEdgeAttribute(eid, "hasSpl")) {
       graph.setEdgeAttribute(eid, "hasSpl", true);
@@ -956,6 +900,13 @@ function applyEdge(
       graph.setEdgeAttribute(eid, "hasSol", true);
       incAttr(graph, e.from, "solDegree", 1);
       incAttr(graph, e.to, "solDegree", 1);
+    }
+    if (dispatch !== null) {
+      const fs = dispatch.slotByPubkey.get(e.from);
+      const ts = dispatch.slotByPubkey.get(e.to);
+      if (fs !== undefined && ts !== undefined) {
+        dispatch.client.bumpEdgeWeight(fs, ts, 1);
+      }
     }
   } else {
     graph.addEdgeWithKey(e.signature, e.from, e.to, {
@@ -967,7 +918,7 @@ function applyEdge(
       volBA: 0,
       txAB: 1,
       txBA: 0,
-      size: edgeWidth(e.volume_sol, graph, e.from, e.to),
+      size: EDGE_DEFAULT_SIZE,
       color: e.kind ? colorForEdgeKind(e.kind) : EDGE_COLOR,
       kind: e.kind ?? "transfer",
       hasSol: !isSpl,
@@ -983,6 +934,13 @@ function applyEdge(
       incAttr(graph, e.to, "solDegree", 1);
     }
     commitEdge(graph, components, e.from, e.to);
+    if (dispatch !== null) {
+      const fs = dispatch.slotByPubkey.get(e.from);
+      const ts = dispatch.slotByPubkey.get(e.to);
+      if (fs !== undefined && ts !== undefined) {
+        dispatch.client.addEdge(fs, ts, 1);
+      }
+    }
   }
 }
 
@@ -1012,6 +970,12 @@ function bumpDirection(graph: Graph, eid: string, e: RawEdge): void {
 }
 
 const EDGE_COLOR = "rgba(200,210,235,0.25)";
+// Edge thickness is uniform  volume is expressed through node size
+// + color, not edge width. Constant avoids per-edge work that used
+// to call a `edgeWidth(vol, graph, from, to)` no-op (the old impl
+// always returned 0.6) and a `refreshEdgeSizes` loop on every edge
+// add that re-set the same constant on every incident edge.
+const EDGE_DEFAULT_SIZE = 0.6;
 
 function commitEdge(
   graph: Graph,
@@ -1030,8 +994,6 @@ function commitEdge(
   }
   graph.setNodeAttribute(fromId, "size", nodeSize(graph, fromId));
   graph.setNodeAttribute(toId, "size", nodeSize(graph, toId));
-  refreshEdgeSizes(graph, fromId);
-  refreshEdgeSizes(graph, toId);
 }
 
 function migrateMembersToAnchor(
@@ -1048,13 +1010,6 @@ function migrateMembersToAnchor(
     graph.setNodeAttribute(id, "x", ax + r * Math.cos(angle));
     graph.setNodeAttribute(id, "y", ay + r * Math.sin(angle));
   }
-}
-
-function refreshEdgeSizes(graph: Graph, nodeId: string): void {
-  graph.forEachEdge(nodeId, (eid, attrs, source, target) => {
-    const vol = attrs.volume as number;
-    graph.setEdgeAttribute(eid, "size", edgeWidth(vol, graph, source, target));
-  });
 }
 
 function incAttr(
@@ -1084,13 +1039,3 @@ function nodeSize(graph: Graph, id: string): number {
   return NODE_SIZE_MIN_PX + Math.sqrt(norm) * (NODE_SIZE_MAX_PX - NODE_SIZE_MIN_PX);
 }
 
-function edgeWidth(
-  _volumeSol: number,
-  _graph: Graph,
-  _from: string,
-  _to: string,
-): number {
-  // Uniform thickness  volume is expressed through node size + color,
-  // not edge width.
-  return 0.6;
-}
