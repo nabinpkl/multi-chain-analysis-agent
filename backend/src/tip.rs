@@ -21,6 +21,10 @@ impl TipTracker {
         if v == 0 { None } else { Some(v) }
     }
 
+    pub fn set(&self, slot: u64) {
+        self.slot.store(slot, Ordering::Relaxed);
+    }
+
     pub async fn run(self, rpc: RpcClient, mut shutdown_rx: watch::Receiver<bool>) {
         loop {
             match rpc.get_slot().await {

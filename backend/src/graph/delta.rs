@@ -43,21 +43,9 @@ pub enum GraphDelta {
         seq: u64,
         idx: u32,
     },
-    PositionsBatch {
-        seq: u64,
-        positions: Vec<PositionUpdate>,
-    },
     CaughtUp {
         seq: u64,
     },
-}
-
-#[derive(Serialize, TS, Clone, Debug)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
-pub struct PositionUpdate {
-    pub idx: u32,
-    pub x: f32,
-    pub y: f32,
 }
 
 impl GraphDelta {
@@ -68,28 +56,7 @@ impl GraphDelta {
             GraphDelta::ComponentAssigned { seq, .. } => *seq,
             GraphDelta::EdgeExpired { seq, .. } => *seq,
             GraphDelta::NodeExpired { seq, .. } => *seq,
-            GraphDelta::PositionsBatch { seq, .. } => *seq,
             GraphDelta::CaughtUp { seq } => *seq,
-        }
-    }
-
-    /// Produce a bootstrap copy with seq=0 (used during cold-start where
-    /// events are not tagged with live sequence numbers).
-    pub fn with_seq_zero(self) -> Self {
-        match self {
-            GraphDelta::NodeAdded { idx, pubkey, .. } => {
-                GraphDelta::NodeAdded { seq: 0, idx, pubkey }
-            }
-            GraphDelta::EdgeAdded { idx, src, dst, mint, amount, slot, kind, .. } => {
-                GraphDelta::EdgeAdded { seq: 0, idx, src, dst, mint, amount, slot, kind }
-            }
-            GraphDelta::ComponentAssigned { node, component_id, .. } => {
-                GraphDelta::ComponentAssigned { seq: 0, node, component_id }
-            }
-            GraphDelta::PositionsBatch { positions, .. } => {
-                GraphDelta::PositionsBatch { seq: 0, positions }
-            }
-            other => other,
         }
     }
 }

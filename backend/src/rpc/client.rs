@@ -7,6 +7,7 @@ use governor::state::{InMemoryState, NotKeyed};
 use governor::{Quota, RateLimiter};
 use reqwest::Client;
 use serde_json::{Value, json};
+use tracing::info;
 
 use super::error::RpcError;
 use super::types::{Block, JsonRpcResponse};
@@ -44,6 +45,7 @@ impl RpcClient {
         params: Value,
     ) -> Result<T, RpcError> {
         self.limiter.until_ready().await;
+        info!(method = method, url = %self.url, "rpc call");
 
         let body = json!({
             "jsonrpc": "2.0",

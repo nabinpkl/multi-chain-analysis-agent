@@ -1,16 +1,9 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
 
-use parking_lot::RwLock;
 use tokio::sync::watch;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
-use tracing::{debug, error, info, warn};
-
-use crate::graph::GraphState;
-use crate::graph::delta::GraphDelta;
-use crate::state::WindowChannels;
+use tracing::{error, info, warn};
 
 mod api;
 mod config;
@@ -104,16 +97,6 @@ async fn main() -> anyhow::Result<()> {
     };
     bg_handles.push(graph_consumer_handle);
 
-    // layout-tick: 60 Hz physics step. Broadcasts PositionsBatch to
-    // every window channel since positions are window-agnostic.
-    let layout_tick_handle = {
-        let graph = state.graph.clone();
-        let channels = state.deltas.clone();
-        let rx = shutdown_rx.clone();
-        tokio::spawn(layout_tick_loop(graph, channels, rx))
-    };
-    bg_handles.push(layout_tick_handle);
-
     if config.solana_rpc_url.is_empty() {
         warn!("SOLANA_RPC_URL not set  ingester and tip tracker disabled");
     } else {
@@ -161,47 +144,6 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-/// 30 Hz physics step. Acquires the graph write lock, calls `step_layout`,
-/// broadcasts the resulting position diff. Empty diffs (graph at
-/// equilibrium) are skipped so subscribers don't see noise events.
-async fn layout_tick_loop(
-    graph: Arc<RwLock<GraphState>>,
-    channels: WindowChannels,
-    mut shutdown: watch::Receiver<bool>,
-) {
-    // 60 Hz to match the frontend's RAF cadence.
-    let mut ticker = tokio::time::interval(Duration::from_millis(16));
-    info!("layout-tick: started (60 Hz)");
-    loop {
-        tokio::select! {
-            _ = shutdown.changed() => {
-                info!("layout-tick: shutdown received");
-                return;
-            }
-            _ = ticker.tick() => {
-                let maybe_delta = {
-                    let mut g = graph.write();
-                    let positions = g.step_layout();
-                    if positions.is_empty() {
-                        None
-                    } else {
-                        let seq = g.alloc_seq();
-                        Some(GraphDelta::PositionsBatch { seq, positions })
-                    }
-                };
-                let Some(delta) = maybe_delta else { continue };
-                let batch = Arc::new(vec![delta]);
-                let any_alive = channels.txs.iter().any(|tx| tx.receiver_count() > 0);
-                if !any_alive {
-                    debug!("layout-tick: no SSE subscribers");
-                    continue;
-                }
-                channels.broadcast_all(batch);
-            }
-        }
-    }
 }
 
 fn init_tracing() {

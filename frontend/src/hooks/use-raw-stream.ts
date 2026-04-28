@@ -7,6 +7,7 @@ import {
   addNode as addToComponent,
   createComponentState,
   findRoot,
+  removeNode as removeFromComponent,
   union,
   type ComponentState,
 } from "@/lib/components";
@@ -79,11 +80,6 @@ export function useRawStream({
   // window-change reconnects keep bootstrap on so the new window's
   // historical edges populate the graph).
   const skipBootstrapNextRef = useRef<boolean>(false);
-  // Tracks the windowSecs that the live EventSource was opened with,
-  // so we can detect changes from the prop and reconnect with a fresh
-  // ?window= param.
-  const windowSecsRef = useRef<WindowSeconds>(windowSecs);
-
   const [status, setStatus] = useState<{
     connected: boolean;
     edgeCount: number;
@@ -91,12 +87,16 @@ export function useRawStream({
     lagged: number;
     /** Latest ingested block_time (Unix seconds), or null until first poll. */
     latestBlockTime: number | null;
+    /** Block-time span (seconds) between oldest and newest live edge,
+     *  capped by the 3600s rolling buffer. Null until first poll. */
+    accumulatedSecs: number | null;
   }>({
     connected: false,
     edgeCount: 0,
     nodeCount: 0,
     lagged: 0,
     latestBlockTime: null,
+    accumulatedSecs: null,
   });
   const [roleSummary, setRoleSummary] = useState<RoleSummary>({
     "token-mint": 0,
@@ -130,6 +130,7 @@ export function useRawStream({
       nodeCount: 0,
       lagged: 0,
       latestBlockTime: null,
+      accumulatedSecs: null,
     });
     setRoleSummary({
       "token-mint": 0,
@@ -144,27 +145,22 @@ export function useRawStream({
     });
   };
 
-  // reset(): clear all state, close current EventSource, open new one
-  // with ?skip_bootstrap=1 so only live edges arrive (no replay).
+  // reset(): bump the tick. The main effect below clears state and
+  // opens a fresh SSE; with `skipBootstrapNextRef` set, the new
+  // connection asks the backend to skip cold-start replay so only live
+  // edges arrive.
   const reset = () => {
-    clearLocalState();
     skipBootstrapNextRef.current = true;
     setResetTick((n) => n + 1);
   };
 
-  // Window change: clear state and reconnect with bootstrap on, so the
-  // new window's prior edges (anything within latest_block_time - n)
-  // populate the graph.
   useEffect(() => {
-    if (windowSecsRef.current === windowSecs) return;
-    windowSecsRef.current = windowSecs;
-    skipBootstrapNextRef.current = false;
+    // Single effect for both window change and reset. Cleanup of the
+    // previous run closes the old SSE BEFORE the new body runs, so
+    // there's no gap where the old window's broadcast can leak events
+    // into the cleared graph.
     clearLocalState();
-    setResetTick((n) => n + 1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [windowSecs]);
 
-  useEffect(() => {
     const graph = graphRef.current!;
     const idxToPubkey = idxToPubkeyRef.current;
     const skipBootstrap = skipBootstrapNextRef.current;
@@ -197,7 +193,7 @@ export function useRawStream({
 
     // Open SSE connection to the delta-protocol endpoint.
     const url = new URL("/graph/stream", apiUrl());
-    url.searchParams.set("window", String(windowSecsRef.current));
+    url.searchParams.set("window", String(windowSecs));
     if (skipBootstrap) {
       url.searchParams.set("skip_bootstrap", "1");
     }
@@ -275,8 +271,25 @@ export function useRawStream({
         const d = JSON.parse((ev as MessageEvent).data);
         const pubkey = idxToPubkey.get(d.idx as number);
         if (!pubkey) return;
-        if (graph.hasNode(pubkey)) graph.dropNode(pubkey);
+        if (graph.hasNode(pubkey)) {
+          // Defensive: graphology's dropNode throws if the node still
+          // has incident edges. Backend orders EdgeExpired before
+          // NodeExpired, but a dropped/out-of-order delta would leave
+          // stragglers; clear them so dropNode can't fail.
+          for (const eid of graph.edges(pubkey)) {
+            graph.dropEdge(eid);
+          }
+          graph.dropNode(pubkey);
+        }
         idxToPubkey.delete(d.idx as number);
+        // Clean up every client-side ref that keyed off this pubkey,
+        // otherwise the layout, role legend, and ensureNode centroid
+        // path keep referencing a dead node and either crash or paint
+        // ghosts.
+        removeFromComponent(componentsRef.current, pubkey);
+        mintAddrsRef.current.delete(pubkey);
+        nodeToCommunityRef.current.delete(pubkey);
+        rolesRef.current.delete(pubkey);
         setStatus((s) => ({ ...s, edgeCount: graph.size, nodeCount: graph.order }));
       } catch {
         // ignore malformed events
@@ -520,7 +533,7 @@ export function useRawStream({
       setStatus((s) => ({ ...s, connected: false }));
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resetTick]);
+  }, [windowSecs, resetTick]);
 
   // Tip poll: hit /graph/stats every 3s for the latest ingested
   // block_time. The SSE delta protocol doesn't carry block_time on
@@ -532,12 +545,18 @@ export function useRawStream({
       try {
         const res = await fetch(`${apiUrl()}/graph/stats?window=3600`);
         if (!res.ok) return;
-        const j = (await res.json()) as { latest_block_time?: number };
+        const j = (await res.json()) as {
+          latest_block_time?: number;
+          accumulated_secs?: number;
+        };
         if (cancelled || typeof j.latest_block_time !== "number") return;
+        const nextLatest = j.latest_block_time;
+        const nextAccum =
+          typeof j.accumulated_secs === "number" ? j.accumulated_secs : null;
         setStatus((s) =>
-          s.latestBlockTime === j.latest_block_time
+          s.latestBlockTime === nextLatest && s.accumulatedSecs === nextAccum
             ? s
-            : { ...s, latestBlockTime: j.latest_block_time! },
+            : { ...s, latestBlockTime: nextLatest, accumulatedSecs: nextAccum },
         );
       } catch {
         // ignore network blips; next tick retries

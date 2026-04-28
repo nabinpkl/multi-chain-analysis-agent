@@ -4,4 +4,16 @@ export type GraphStatsResponse = {
 /**
  * Window the response was computed for, in seconds.
  */
-window_secs: bigint, total_nodes: number, total_edges: number, total_components: number, largest_component_size: number, last_ingested_slot?: bigint, };
+window_secs: bigint, total_nodes: number, total_edges: number, total_components: number, largest_component_size: number, last_ingested_slot?: bigint, 
+/**
+ * Tip of the ingest stream, in `block_time` (Unix seconds). The
+ * cutoff applied for this response was `latest_block_time -
+ * window_secs` (or 0 for the global window).
+ */
+latest_block_time: bigint, 
+/**
+ * `block_time` span, in seconds, between the oldest and newest live
+ * edge in the global slab. Grows from 0 toward `WINDOWS[MAX]`
+ * (3600s) as the rolling buffer fills, then stays pinned at it.
+ */
+accumulated_secs: bigint, };

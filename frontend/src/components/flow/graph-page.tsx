@@ -50,6 +50,11 @@ function formatLag(secs: number): string {
   return rm === 0 ? `${h}h` : `${h}h ${rm}m`;
 }
 
+function formatAccumulated(secs: number | null): string {
+  if (secs === null) return "...";
+  return formatLag(secs);
+}
+
 const RawGraphCanvas = dynamic(
   () =>
     import("@/components/flow/raw-graph-canvas").then((m) => m.RawGraphCanvas),
@@ -120,6 +125,7 @@ function RawPanel({
     nodeCount: number;
     lagged: number;
     latestBlockTime: number | null;
+    accumulatedSecs: number | null;
   };
   roleSummary: RoleSummary;
   onReset: () => void;
@@ -153,6 +159,17 @@ function RawPanel({
         </div>
         <div className="text-[0.6rem] text-mca-dim mt-1 leading-relaxed">
           window cuts back from this point, not from wall clock
+        </div>
+      </div>
+      <div>
+        <div className="text-[0.65rem] uppercase tracking-[1.5px] text-mca-muted mb-1">
+          buffered
+        </div>
+        <div className="tabular-nums text-mca-text">
+          {formatAccumulated(status.accumulatedSecs)}
+        </div>
+        <div className="text-[0.6rem] text-mca-dim mt-1 leading-relaxed">
+          block-time span between oldest and newest live edge, capped at 1h
         </div>
       </div>
       <div>

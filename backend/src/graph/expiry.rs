@@ -125,19 +125,6 @@ impl GraphState {
         self.edges[idx as usize] = None;
         self.free_edge_slots.push(idx);
 
-        if src != dst && !self.has_edge_between(src, dst) {
-            if self.unique_degree[src as usize] > 0 {
-                self.unique_degree[src as usize] -= 1;
-                self.size[src as usize] =
-                    super::node_size_for_degree(self.unique_degree[src as usize]);
-            }
-            if self.unique_degree[dst as usize] > 0 {
-                self.unique_degree[dst as usize] -= 1;
-                self.size[dst as usize] =
-                    super::node_size_for_degree(self.unique_degree[dst as usize]);
-            }
-        }
-
         // Free interner slot when global adjacency leaves a node empty.
         // Per-window NodeExpired for the global window was already pushed
         // above; this just keeps the global slabs in sync.

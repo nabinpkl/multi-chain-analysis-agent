@@ -27,6 +27,10 @@ pub struct GraphStatsResponse {
     /// cutoff applied for this response was `latest_block_time -
     /// window_secs` (or 0 for the global window).
     pub latest_block_time: u64,
+    /// `block_time` span, in seconds, between the oldest and newest live
+    /// edge in the global slab. Grows from 0 toward `WINDOWS[MAX]`
+    /// (3600s) as the rolling buffer fills, then stays pinned at it.
+    pub accumulated_secs: u64,
 }
 
 pub async fn stats(
@@ -52,8 +56,13 @@ pub async fn stats(
 
     let mut visible_nodes: FxHashSet<NodeIdx> = FxHashSet::default();
     let mut total_edges: u32 = 0;
+    let mut oldest_block_time: Option<u64> = None;
     for slot in graph.edges.iter() {
         let Some(e) = slot else { continue };
+        oldest_block_time = Some(match oldest_block_time {
+            Some(prev) => prev.min(e.block_time),
+            None => e.block_time,
+        });
         if e.block_time < cutoff {
             continue;
         }
@@ -61,6 +70,9 @@ pub async fn stats(
         visible_nodes.insert(e.src);
         visible_nodes.insert(e.dst);
     }
+    let accumulated_secs = oldest_block_time
+        .map(|oldest| graph.latest_block_time().saturating_sub(oldest))
+        .unwrap_or(0);
 
     let mut component_counts: FxHashMap<u64, u32> = FxHashMap::default();
     for &n in &visible_nodes {
@@ -83,6 +95,7 @@ pub async fn stats(
         largest_component_size: component_counts.values().copied().max().unwrap_or(0),
         last_ingested_slot: graph.last_ingested_slot(),
         latest_block_time: graph.latest_block_time(),
+        accumulated_secs,
     })
     .into_response()
 }

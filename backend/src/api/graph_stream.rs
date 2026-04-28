@@ -100,7 +100,6 @@ fn delta_to_sse_event(delta: &GraphDelta, with_id: bool) -> Event {
         GraphDelta::ComponentAssigned { .. } => "ComponentAssigned",
         GraphDelta::EdgeExpired { .. } => "EdgeExpired",
         GraphDelta::NodeExpired { .. } => "NodeExpired",
-        GraphDelta::PositionsBatch { .. } => "PositionsBatch",
         GraphDelta::CaughtUp { .. } => "CaughtUp",
     };
 

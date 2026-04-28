@@ -6,7 +6,6 @@
 /// 1. NodeAdded for each node with at least one edge in the window
 /// 2. EdgeAdded for each edge whose `block_time` is within the window
 /// 3. ComponentAssigned for each visible node (using the global component id)
-/// 4. PositionsBatch for visible nodes
 use rustc_hash::FxHashSet;
 
 use super::GraphState;
@@ -79,20 +78,6 @@ pub fn bootstrap_events(gs: &GraphState, window_idx: usize) -> Vec<GraphDelta> {
                 component_id: cid,
             });
         }
-    }
-
-    let mut positions = Vec::with_capacity(visible_nodes.len());
-    for &n in &visible_nodes {
-        if gs.interner.lookup(n).is_some() {
-            positions.push(super::PositionUpdate {
-                idx: n,
-                x: gs.pos_x[n as usize],
-                y: gs.pos_y[n as usize],
-            });
-        }
-    }
-    if !positions.is_empty() {
-        events.push(GraphDelta::PositionsBatch { seq: 0, positions });
     }
 
     events

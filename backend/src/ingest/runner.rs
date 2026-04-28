@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 use tokio::time::{Instant, sleep};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::rpc::{RpcClient, RpcError};
 use crate::store::EdgeStore;
@@ -11,7 +11,7 @@ use crate::stream::EdgeProducer;
 use crate::tip::TipTracker;
 
 const COMPONENT: &str = "solana_ingester";
-const NOT_AVAILABLE_DELAY_MS: u64 = 400;
+const SLOT_PRODUCTION_MS: u64 = 400;
 const RATE_LIMIT_INITIAL_MS: u64 = 500;
 const RATE_LIMIT_MAX_MS: u64 = 8_000;
 const TRANSIENT_INITIAL_MS: u64 = 500;
@@ -69,6 +69,20 @@ async fn fetcher_loop(
             return;
         }
 
+        // Pre-flight: skip getBlock if cached tip says the slot isn't produced yet.
+        // Prevents burning RPC budget on guaranteed-NotYetAvailable calls.
+        if let Some(tip_slot) = tip.current() {
+            if next > tip_slot {
+                let behind = next - tip_slot;
+                let wait = Duration::from_millis(behind * SLOT_PRODUCTION_MS);
+                tokio::select! {
+                    _ = shutdown_rx.changed() => return,
+                    _ = sleep(wait) => {}
+                }
+                continue;
+            }
+        }
+
         let result = tokio::select! {
             _ = shutdown_rx.changed() => {
                 info!("fetcher: shutdown received mid-fetch");
@@ -81,7 +95,7 @@ async fn fetcher_loop(
             Ok(block) => {
                 let version = epoch_ms();
                 let edges = crate::ingest::parser::parse_edges(&block, next, version);
-                debug!(slot = next, edges = edges.len(), "fetched block");
+                info!(slot = next, edges = edges.len(), "ingested block");
                 for edge in &edges {
                     if let Err(e) = producer.publish(edge).await {
                         warn!(slot = next, error = %e, "kafka publish failed; will retry block");
@@ -109,7 +123,16 @@ async fn fetcher_loop(
                 slots_since_checkpoint += 1;
             }
             Err(RpcError::NotYetAvailable) => {
-                sleep(Duration::from_millis(NOT_AVAILABLE_DELAY_MS)).await;
+                // Cached tip was stale and we hit a slot the network hasn't produced.
+                // Refresh tip once so subsequent iterations sleep instead of poking getBlock.
+                match rpc.get_slot().await {
+                    Ok(t) => {
+                        tip.set(t);
+                        let behind = next.saturating_sub(t).max(1);
+                        sleep(Duration::from_millis(behind * SLOT_PRODUCTION_MS)).await;
+                    }
+                    Err(_) => sleep(Duration::from_millis(SLOT_PRODUCTION_MS)).await,
+                }
             }
             Err(RpcError::RateLimited) => {
                 counters.rate_limits += 1;

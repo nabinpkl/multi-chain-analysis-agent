@@ -29,15 +29,6 @@ impl WindowChannels {
         Self { txs }
     }
 
-    /// Fan a batch of deltas to every window channel. Used for events
-    /// produced outside `graph::ingest` (e.g. layout-tick PositionsBatch)
-    /// that are relevant to subscribers regardless of window.
-    pub fn broadcast_all(&self, deltas: Arc<Vec<GraphDelta>>) {
-        for tx in &self.txs {
-            let _ = tx.send(deltas.clone());
-        }
-    }
-
     pub fn sender(&self, window_idx: usize) -> &broadcast::Sender<Arc<Vec<GraphDelta>>> {
         &self.txs[window_idx]
     }
