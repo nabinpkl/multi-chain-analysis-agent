@@ -81,7 +81,7 @@ export function RawGraphCanvas({ graph }: RawGraphCanvasProps) {
       renderEdgeLabels: false,
       defaultNodeColor: "#d9c8a9",
       zIndex: true,
-      hideEdgesOnMove: false,
+      hideEdgesOnMove: true,
     }),
     [],
   );
