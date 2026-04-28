@@ -22,7 +22,16 @@ pub enum GraphDelta {
     },
     EdgeAdded {
         seq: u64,
+        /// Slab slot index. Together with `gen`, uniquely identifies
+        /// a single edge across all reuses of the slot. Frontend keys
+        /// graphology by `${idx}:${gen}`.
         idx: u32,
+        /// Slab slot generation tag, bumped on every reuse. Wire name
+        /// is `gen`; the Rust field is renamed because `gen` is a
+        /// reserved keyword in Rust 2024.
+        #[serde(rename = "gen")]
+        #[ts(rename = "gen")]
+        generation: u32,
         src: u32,
         dst: u32,
         mint: Option<String>,
@@ -38,6 +47,13 @@ pub enum GraphDelta {
     EdgeExpired {
         seq: u64,
         idx: u32,
+        /// Generation of the edge being expired. Frontend uses
+        /// `${idx}:${gen}` to drop the exact graphology entry, so an
+        /// expiry for a long-gone generation can't accidentally drop
+        /// the current occupant of the same slot.
+        #[serde(rename = "gen")]
+        #[ts(rename = "gen")]
+        generation: u32,
     },
     NodeExpired {
         seq: u64,

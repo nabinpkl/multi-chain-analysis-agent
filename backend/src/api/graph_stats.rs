@@ -58,7 +58,7 @@ pub async fn stats(
     let mut total_edges: u32 = 0;
     let mut oldest_block_time: Option<u64> = None;
     for slot in graph.edges.iter() {
-        let Some(e) = slot else { continue };
+        let Some(e) = slot.edge.as_ref() else { continue };
         oldest_block_time = Some(match oldest_block_time {
             Some(prev) => prev.min(e.block_time),
             None => e.block_time,

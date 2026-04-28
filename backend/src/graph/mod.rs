@@ -67,6 +67,24 @@ impl WindowState {
 pub type EdgeIdx = u32;
 type MintIdx = u32;
 
+/// External edge handle. Pairs a slab slot index with the slot's
+/// generation tag so that handles to the same slot at different
+/// generations are distinct.
+///
+/// Lookup goes through the slab via `GraphState::get_edge(EdgeId)`,
+/// which validates the generation. A handle whose generation no
+/// longer matches the slot's current generation is stale and lookup
+/// returns `None`. This makes slot reuse safe under unbounded
+/// out-of-order delivery: a stale `EdgeAdded` for a recycled slot
+/// can never collide with the live edge that now occupies it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct EdgeId {
+    pub idx: EdgeIdx,
+    /// Slot generation tag. Field name avoids the `gen` reserved
+    /// keyword in Rust 2024; the wire format still uses "gen".
+    pub generation: u32,
+}
+
 pub struct GraphEdge {
     pub src: NodeIdx,
     pub dst: NodeIdx,
@@ -77,15 +95,27 @@ pub struct GraphEdge {
     pub kind: Option<EdgeKind>,
 }
 
+/// One slab entry. `generation` increments every time `edge` is
+/// reassigned (i.e. once per allocation that reuses the slot). Bare
+/// `Option<GraphEdge>` is not enough because adjacency lists, the
+/// time-ordered deque, and downstream consumers all carry handles
+/// that must distinguish "the edge that was here yesterday" from
+/// "the edge that is here now," even when the slot index is the
+/// same.
+pub struct EdgeSlot {
+    pub generation: u32,
+    pub edge: Option<GraphEdge>,
+}
+
 pub struct GraphState {
     pub(super) interner: NodeInterner,
     pub(super) mint_interner: NodeInterner,
 
-    pub edges: Vec<Option<GraphEdge>>,
+    pub edges: Vec<EdgeSlot>,
     pub(super) free_edge_slots: Vec<EdgeIdx>,
 
-    pub(super) out_adj: Vec<Vec<EdgeIdx>>,
-    pub(super) in_adj: Vec<Vec<EdgeIdx>>,
+    pub(super) out_adj: Vec<Vec<EdgeId>>,
+    pub(super) in_adj: Vec<Vec<EdgeId>>,
 
     pub(super) uf: UnionFind,
 
@@ -153,7 +183,19 @@ impl GraphState {
 
     /// Count live (non-tombstoned) edges.
     pub fn live_edge_count(&self) -> u32 {
-        self.edges.iter().filter(|s| s.is_some()).count() as u32
+        self.edges.iter().filter(|s| s.edge.is_some()).count() as u32
+    }
+
+    /// Validate `id` against the slab's current generation and return
+    /// the live edge if it matches. Returns `None` for stale handles
+    /// (slot reused under a newer generation), tombstoned slots, or
+    /// out-of-bounds indices.
+    pub(super) fn get_edge(&self, id: EdgeId) -> Option<&GraphEdge> {
+        let slot = self.edges.get(id.idx as usize)?;
+        if slot.generation != id.generation {
+            return None;
+        }
+        slot.edge.as_ref()
     }
 
     /// Intern a node if new. Grows adjacency lists and UF as needed.
@@ -208,13 +250,15 @@ impl GraphState {
             let cutoff = self.latest_block_time.saturating_sub(WINDOWS[w]);
             let is_global = w == MAX_WINDOW_IDX;
             loop {
-                let Some(front_idx) = self.windows[w].edges_by_time.front() else {
+                let Some(front_id) = self.windows[w].edges_by_time.front() else {
                     break;
                 };
-                let front_bt = match &self.edges[front_idx as usize] {
+                let front_bt = match self.get_edge(front_id) {
                     Some(e) => e.block_time,
                     None => {
-                        // Tombstoned entry still in this window's deque  drop.
+                        // Stale or tombstoned entry still in this
+                        // window's deque (generation no longer
+                        // matches): drop it.
                         self.windows[w].edges_by_time.pop_front();
                         continue;
                     }
@@ -228,7 +272,7 @@ impl GraphState {
                     // Track dirty component before tombstoning so split
                     // detection runs after global expiry.
                     let cid = {
-                        let e = self.edges[front_idx as usize].as_ref().unwrap();
+                        let e = self.get_edge(front_id).unwrap();
                         self.node_to_component
                             .get(e.src as usize)
                             .copied()
@@ -238,12 +282,12 @@ impl GraphState {
                         dirty_components.insert(cid);
                     }
                     // Drive global tombstoning + emit window-local expiry.
-                    let expired = self.tombstone_edge_for_window(front_idx, w, true);
+                    let expired = self.tombstone_edge_for_window(front_id, w, true);
                     out.per_window[w].extend(expired);
                 } else {
                     // Smaller-than-global window: edge stays alive in slab,
                     // we only emit the window-scoped expiry deltas.
-                    let expired = self.tombstone_edge_for_window(front_idx, w, false);
+                    let expired = self.tombstone_edge_for_window(front_id, w, false);
                     out.per_window[w].extend(expired);
                 }
             }
@@ -306,7 +350,7 @@ impl GraphState {
             kind: kind.clone(),
         };
 
-        let edge_idx = self.alloc_edge_slot(graph_edge);
+        let edge_id = self.alloc_edge_slot(graph_edge);
 
         let mint_str = mint_idx
             .map(|midx| self.mint_interner.lookup(midx).unwrap_or("").to_string());
@@ -319,7 +363,7 @@ impl GraphState {
             if bt < cutoff {
                 continue;
             }
-            self.windows[w].edges_by_time.insert(edge_idx, bt, &self.edges);
+            self.windows[w].edges_by_time.insert(edge_id, bt, &self.edges);
 
             let src_count = self.windows[w].edge_count_per_node[src_idx as usize];
             if src_count == 0 {
@@ -363,7 +407,8 @@ impl GraphState {
             let seq = self.next_seq();
             out.per_window[w].push(GraphDelta::EdgeAdded {
                 seq,
-                idx: edge_idx,
+                idx: edge_id.idx,
+                generation: edge_id.generation,
                 src: src_idx,
                 dst: dst_idx,
                 mint: mint_str.clone(),
@@ -373,8 +418,8 @@ impl GraphState {
             });
         }
 
-        self.out_adj[src_idx as usize].push(edge_idx);
-        self.in_adj[dst_idx as usize].push(edge_idx);
+        self.out_adj[src_idx as usize].push(edge_id);
+        self.in_adj[dst_idx as usize].push(edge_id);
 
         // Union-Find merge.
         let ra = self.uf.find(src_idx);
@@ -468,15 +513,15 @@ impl GraphState {
         if (a as usize) >= self.out_adj.len() || (b as usize) >= self.in_adj.len() {
             return false;
         }
-        for &eidx in &self.out_adj[a as usize] {
-            if let Some(e) = &self.edges[eidx as usize] {
+        for &id in &self.out_adj[a as usize] {
+            if let Some(e) = self.get_edge(id) {
                 if e.dst == b {
                     return true;
                 }
             }
         }
-        for &eidx in &self.in_adj[a as usize] {
-            if let Some(e) = &self.edges[eidx as usize] {
+        for &id in &self.in_adj[a as usize] {
+            if let Some(e) = self.get_edge(id) {
                 if e.src == b {
                     return true;
                 }

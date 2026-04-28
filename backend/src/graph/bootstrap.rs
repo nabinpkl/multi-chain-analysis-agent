@@ -23,17 +23,19 @@ pub fn bootstrap_events(gs: &GraphState, window_idx: usize) -> Vec<GraphDelta> {
         gs.latest_block_time().saturating_sub(WINDOWS[window_idx])
     };
 
-    // First pass: collect edges that are live AND >= cutoff.
+    // First pass: collect edges that are live AND >= cutoff. Each
+    // entry pairs the slot index with its generation so the wire
+    // event carries the full handle.
     let mut visible_nodes: FxHashSet<NodeIdx> = FxHashSet::default();
-    let mut visible_edges: Vec<(u32, &super::GraphEdge)> = Vec::new();
+    let mut visible_edges: Vec<(u32, u32, &super::GraphEdge)> = Vec::new();
     for (idx, slot) in gs.edges.iter().enumerate() {
-        let Some(e) = slot else { continue };
+        let Some(e) = slot.edge.as_ref() else { continue };
         if e.block_time < cutoff {
             continue;
         }
         visible_nodes.insert(e.src);
         visible_nodes.insert(e.dst);
-        visible_edges.push((idx as u32, e));
+        visible_edges.push((idx as u32, slot.generation, e));
     }
 
     let mut events: Vec<GraphDelta> =
@@ -49,13 +51,14 @@ pub fn bootstrap_events(gs: &GraphState, window_idx: usize) -> Vec<GraphDelta> {
         }
     }
 
-    for (eidx, e) in &visible_edges {
+    for (eidx, generation, e) in &visible_edges {
         let mint = e
             .mint
             .map(|midx| gs.mint_interner.lookup(midx).unwrap_or("").to_string());
         events.push(GraphDelta::EdgeAdded {
             seq: 0,
             idx: *eidx,
+            generation: *generation,
             src: e.src,
             dst: e.dst,
             mint,

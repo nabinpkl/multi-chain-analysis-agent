@@ -11,14 +11,16 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use super::delta::GraphDelta;
 use super::interner::NodeIdx;
 use super::union_find::ComponentId;
-use super::{EdgeIdx, GraphEdge, GraphState};
+use super::{EdgeId, EdgeSlot, GraphEdge, GraphState};
 
-/// Ordered index of live edges by `block_time`. Used for O(1) front-pop of
-/// oldest edges. Solana edges arrive roughly monotone by block_time so
-/// push_back is the common path; a stray older edge gets binary-search
-/// inserted.
+/// Ordered index of live edges by `block_time`. Holds full `EdgeId`
+/// handles (slot+generation), so a stale entry left over after slot
+/// reuse is detectable on lookup: the slab's current generation no
+/// longer matches and `slab_get` returns None. Solana edges arrive
+/// roughly monotone by `block_time`, so `push_back` is the common
+/// path; an out-of-order arrival takes the binary-search slow path.
 pub struct EdgesByTime {
-    inner: VecDeque<EdgeIdx>,
+    inner: VecDeque<EdgeId>,
 }
 
 impl EdgesByTime {
@@ -28,35 +30,32 @@ impl EdgesByTime {
         }
     }
 
-    /// Insert `idx` in sorted order by `block_time`. `get_block_time` is a
-    /// callback rather than storing block_time inline to avoid duplicating
-    /// data across slab and index.
-    pub fn insert(&mut self, idx: EdgeIdx, block_time: u64, slab: &[Option<GraphEdge>]) {
+    /// Insert `id` in sorted order by `block_time`. The slab is passed
+    /// in so the deque can read each existing entry's block_time
+    /// without duplicating it. Stale handles in `inner` (slot reused
+    /// under a newer generation) read as `block_time = 0` here, which
+    /// keeps them at the front so the next ingest's expiry sweep
+    /// drops them.
+    pub fn insert(&mut self, id: EdgeId, block_time: u64, slab: &[EdgeSlot]) {
         // Fast path: block_time >= last element (monotone arrival).
-        if self
-            .inner
-            .back()
-            .map_or(true, |&last| slab[last as usize].as_ref().map_or(true, |e| block_time >= e.block_time))
-        {
-            self.inner.push_back(idx);
+        if self.inner.back().map_or(true, |&last| {
+            slab_get(slab, last).map_or(true, |e| block_time >= e.block_time)
+        }) {
+            self.inner.push_back(id);
             return;
         }
         // Slow path: binary search on the deque by block_time.
-        // VecDeque is not contiguous so we collect positions manually.
-        let pos = self.inner.partition_point(|&eidx| {
-            slab[eidx as usize]
-                .as_ref()
-                .map_or(u64::MIN, |e| e.block_time)
-                <= block_time
+        let pos = self.inner.partition_point(|&id_in| {
+            slab_get(slab, id_in).map_or(u64::MIN, |e| e.block_time) <= block_time
         });
-        self.inner.insert(pos, idx);
+        self.inner.insert(pos, id);
     }
 
-    pub fn front(&self) -> Option<EdgeIdx> {
+    pub fn front(&self) -> Option<EdgeId> {
         self.inner.front().copied()
     }
 
-    pub fn pop_front(&mut self) -> Option<EdgeIdx> {
+    pub fn pop_front(&mut self) -> Option<EdgeId> {
         self.inner.pop_front()
     }
 
@@ -65,18 +64,44 @@ impl EdgesByTime {
     }
 }
 
+/// Generation-checking slab read used by `EdgesByTime`. Returns
+/// `None` if the slot is empty or its generation doesn't match `id`.
+fn slab_get(slab: &[EdgeSlot], id: EdgeId) -> Option<&GraphEdge> {
+    let slot = slab.get(id.idx as usize)?;
+    if slot.generation != id.generation {
+        return None;
+    }
+    slot.edge.as_ref()
+}
+
 // ---- GraphState expiry helpers (called from mod.rs) ----------------------
 
 impl GraphState {
-    /// Alloc a fresh edge slot. Reuses freed slots first.
-    pub(super) fn alloc_edge_slot(&mut self, edge: GraphEdge) -> EdgeIdx {
+    /// Alloc a fresh edge slot. Reuses freed slots first; in the reuse
+    /// path the slot's `generation` is bumped so the returned `EdgeId`
+    /// is distinct from every previous handle to the same slot. Stale
+    /// handles to the prior occupant fail validation in `get_edge`
+    /// without ambiguity.
+    pub(super) fn alloc_edge_slot(&mut self, edge: GraphEdge) -> EdgeId {
         if let Some(idx) = self.free_edge_slots.pop() {
-            self.edges[idx as usize] = Some(edge);
-            return idx;
+            let slot = &mut self.edges[idx as usize];
+            // Saturating add: `u32::MAX` reuses retire the slot
+            // (generation pinned, future allocations would alias the
+            // last live handle). At a few reuses/sec that bound is
+            // ~136 years, so this is purely defensive.
+            slot.generation = slot.generation.saturating_add(1);
+            slot.edge = Some(edge);
+            return EdgeId {
+                idx,
+                generation: slot.generation,
+            };
         }
-        let idx = self.edges.len() as EdgeIdx;
-        self.edges.push(Some(edge));
-        idx
+        let idx = self.edges.len() as super::EdgeIdx;
+        self.edges.push(EdgeSlot {
+            generation: 1,
+            edge: Some(edge),
+        });
+        EdgeId { idx, generation: 1 }
     }
 
     /// Per-window edge expiry. Always emits `EdgeExpired` and any
@@ -84,18 +109,23 @@ impl GraphState {
     /// to zero. When `is_global` is true (this is the largest window),
     /// also tombstones the slab slot, removes from global adjacency,
     /// decrements global unique_degree, and frees the interner slot for
-    /// orphans.
+    /// orphans. The handle's generation is *not* bumped here; the next
+    /// `alloc_edge_slot` for this slot will bump it.
     pub(super) fn tombstone_edge_for_window(
         &mut self,
-        idx: EdgeIdx,
+        id: EdgeId,
         w: usize,
         is_global: bool,
     ) -> Vec<GraphDelta> {
         let mut deltas = Vec::new();
         let seq = self.next_seq();
-        deltas.push(GraphDelta::EdgeExpired { seq, idx });
+        deltas.push(GraphDelta::EdgeExpired {
+            seq,
+            idx: id.idx,
+            generation: id.generation,
+        });
 
-        let (src, dst) = match self.edges[idx as usize].as_ref() {
+        let (src, dst) = match self.get_edge(id) {
             Some(e) => (e.src, e.dst),
             None => return deltas,
         };
@@ -119,11 +149,14 @@ impl GraphState {
             return deltas;
         }
 
-        // Global expiry: tombstone slab slot + clean adjacency.
-        self.out_adj[src as usize].retain(|&e| e != idx);
-        self.in_adj[dst as usize].retain(|&e| e != idx);
-        self.edges[idx as usize] = None;
-        self.free_edge_slots.push(idx);
+        // Global expiry: tombstone slab slot + clean adjacency. We
+        // compare full `EdgeId`s so adjacency entries pointing at a
+        // different generation of the same slot are left intact (they
+        // belong to a different edge).
+        self.out_adj[src as usize].retain(|&e| e != id);
+        self.in_adj[dst as usize].retain(|&e| e != id);
+        self.edges[id.idx as usize].edge = None;
+        self.free_edge_slots.push(id.idx);
 
         // Free interner slot when global adjacency leaves a node empty.
         // Per-window NodeExpired for the global window was already pushed
@@ -173,13 +206,13 @@ impl GraphState {
         for nodes in per_component.values() {
             for &node in nodes {
                 let entry = adj_snapshot.entry(node).or_default();
-                for &eidx in &self.out_adj[node as usize] {
-                    if let Some(e) = &self.edges[eidx as usize] {
+                for &id in &self.out_adj[node as usize] {
+                    if let Some(e) = self.get_edge(id) {
                         entry.push(e.dst);
                     }
                 }
-                for &eidx in &self.in_adj[node as usize] {
-                    if let Some(e) = &self.edges[eidx as usize] {
+                for &id in &self.in_adj[node as usize] {
+                    if let Some(e) = self.get_edge(id) {
                         entry.push(e.src);
                     }
                 }

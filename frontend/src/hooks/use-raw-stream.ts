@@ -16,7 +16,13 @@ import {
   type ComponentStats,
 } from "@/lib/component-stats";
 import { detectMpcClusters } from "@/lib/mpc-detect";
-import { stepPerComponentLayout } from "@/lib/per-component-layout";
+import {
+  createLayoutState,
+  resetLayoutState,
+  stepLayout,
+  type LayoutSnapshot,
+  type LayoutState,
+} from "@/lib/per-component-layout";
 import { classifyNodes, type NodeRole } from "@/lib/role-detect";
 import { colorForEdgeKind, colorForRole, ROLE_PALETTE } from "@/lib/role-colors";
 
@@ -26,6 +32,7 @@ function apiUrl(): string {
   return process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_URL;
 }
 
+// Detection interval for the Louvain + role-classification pass.
 const MPC_DETECT_INTERVAL_MS = 3000;
 
 export type RoleSummary = Record<NodeRole, number>;
@@ -61,6 +68,16 @@ export function useRawStream({
 
   const pendingRef = useRef<RawEdge[]>([]);
   const rafRef = useRef<number | null>(null);
+  // Components touched by the most recently flushed edge batch. The
+  // layout tick reads then clears this so physics only runs on
+  // components that actually moved this frame. Lifetime = one frame;
+  // produced by flush, consumed by layoutTick.
+  const dirtyRootsRef = useRef<Set<string>>(new Set());
+  // Persistent state for the pure layout module: per-node velocities
+  // (Map keyed by pubkey) and reusable scratch force buffers. Owned
+  // here so a future worker move can hand it to the worker without
+  // reaching into module-level state.
+  const layoutStateRef = useRef<LayoutState>(createLayoutState());
   // Union-Find over connected components. Drives teleport-on-merge
   // so two components bridged by a new edge snap together immediately
   // instead of relying on FA2 to pull them across the canvas.
@@ -124,6 +141,8 @@ export function useRawStream({
     rolesRef.current = new Map();
     componentStatsRef.current = new Map();
     pendingRef.current = [];
+    dirtyRootsRef.current = new Set();
+    resetLayoutState(layoutStateRef.current);
     setStatus({
       connected: false,
       edgeCount: 0,
@@ -171,6 +190,7 @@ export function useRawStream({
       const batch = pendingRef.current;
       if (batch.length === 0) return;
       pendingRef.current = [];
+      const dirty = dirtyRootsRef.current;
       for (const e of batch) {
         applyEdge(
           graph,
@@ -178,6 +198,14 @@ export function useRawStream({
           componentsRef.current,
           mintAddrsRef.current,
         );
+        // applyEdge has run and any union() merge has settled, so
+        // findRoot returns the post-merge root. O(α(n)) per call.
+        if (graph.hasNode(e.from)) {
+          dirty.add(findRoot(componentsRef.current, e.from));
+        }
+        if (e.from !== e.to && graph.hasNode(e.to)) {
+          dirty.add(findRoot(componentsRef.current, e.to));
+        }
       }
       setStatus((s) => ({
         ...s,
@@ -224,10 +252,12 @@ export function useRawStream({
         const from = idxToPubkey.get(d.src as number);
         const to = idxToPubkey.get(d.dst as number);
         if (!from || !to) return;
-        // Build a RawEdge-shaped object. The god-hook's applyEdge
-        // consumer handles the rest exactly as in slice 1.
+        // Build a RawEdge-shaped object. The signature is the full
+        // backend handle: `${slotIdx}:${gen}`. Generation is bumped
+        // every time the slot is reused, so two edges that happen to
+        // share an idx never share a signature.
         const edge: RawEdge = {
-          signature: String(d.idx),       // EdgeIdx is a stable per-edge id
+          signature: `${d.idx}:${d.gen}`,
           block_time: Number(d.slot),      // slot as monotonic timestamp surrogate
           from,
           to,
@@ -245,7 +275,7 @@ export function useRawStream({
     es.addEventListener("EdgeExpired", (ev) => {
       try {
         const d = JSON.parse((ev as MessageEvent).data);
-        const edgeKey = String(d.idx);
+        const edgeKey = `${d.idx}:${d.gen}`;
         if (!graph.hasEdge(edgeKey)) return;
         const src = graph.source(edgeKey);
         const dst = graph.target(edgeKey);
@@ -301,19 +331,39 @@ export function useRawStream({
       // Could set a "loaded" flag here if needed.
     });
 
-    // Per-component layout tick. Replaces the global FA2 worker so
-    // forces only apply within each connected component  different
-    // components sit at their deterministic spawn positions and never
-    // drift toward each other under Barnes-Hut repulsion.
+    // Per-component layout tick. Materializes a `LayoutSnapshot` of
+    // typed arrays from the live graphology instance + ComponentState
+    // each frame, hands it to the pure layout module, and writes the
+    // mutated x/y back. Snapshot construction is the bridge between
+    // graphology (Sigma's source of truth) and the graphology-free
+    // physics module; tomorrow this same module runs in a worker and
+    // the snapshot will come from a transferred buffer.
     let layoutRafId: number | null = null;
     const layoutTick = () => {
       layoutRafId = requestAnimationFrame(layoutTick);
       if (graph.order < 2) return;
-      stepPerComponentLayout(
+      const dirty = dirtyRootsRef.current;
+      if (dirty.size === 0) return;
+      dirtyRootsRef.current = new Set();
+
+      const snap = buildLayoutSnapshot(
         graph,
         componentsRef.current,
         nodeToCommunityRef.current,
+        dirty,
       );
+      if (snap === null) return;
+      stepLayout(snap, layoutStateRef.current);
+
+      // Write final positions back to graphology so Sigma renders
+      // them on its next frame. Tight loop, no per-node allocations.
+      const ids = snap.ids;
+      const xs = snap.xs;
+      const ys = snap.ys;
+      for (let s = 0; s < ids.length; s++) {
+        graph.setNodeAttribute(ids[s], "x", xs[s]);
+        graph.setNodeAttribute(ids[s], "y", ys[s]);
+      }
     };
     layoutRafId = requestAnimationFrame(layoutTick);
 
@@ -577,6 +627,143 @@ export function useRawStream({
     rolesRef,
     componentStatsRef,
     reset,
+  };
+}
+
+/**
+ * Materialize a `LayoutSnapshot` from the live graphology graph and
+ * the parallel `ComponentState`. Component-major slot ordering: every
+ * member of component `c` occupies a contiguous slot range
+ * `[memberOffsets[c], memberOffsets[c+1])`. Edges are emitted
+ * intra-component, deduped to `slotI < slotJ` so each edge is
+ * processed exactly once by the layout's attraction loop.
+ *
+ * Returns `null` if the graph is structurally inconsistent with the
+ * `ComponentState` (no nodes to lay out). Otherwise returns a fully
+ * populated snapshot whose `xs`/`ys` `stepLayout` will mutate in
+ * place; the caller then writes the result back to graphology.
+ *
+ * Why this lives at the call site rather than inside the layout
+ * module: the layout module is graphology-free by design (it will
+ * move into a Web Worker). All graphology reads happen here, in one
+ * pass, so step 2 of the migration can replace this function with a
+ * `postMessage` to the worker without touching physics.
+ */
+function buildLayoutSnapshot(
+  graph: Graph,
+  components: ComponentState,
+  nodeToCommunity: Map<string, number>,
+  dirtyRoots: ReadonlySet<string>,
+): LayoutSnapshot | null {
+  // Stable component ordering: roots in insertion order from the
+  // ComponentState Map.
+  const componentRoots: string[] = [];
+  for (const root of components.members.keys()) {
+    componentRoots.push(root);
+  }
+  const numComponents = componentRoots.length;
+  if (numComponents === 0) return null;
+
+  const upperBound = graph.order;
+  if (upperBound === 0) return null;
+  const ids: string[] = new Array(upperBound);
+  const xs = new Float64Array(upperBound);
+  const ys = new Float64Array(upperBound);
+  const sizes = new Float64Array(upperBound);
+  const degrees = new Int32Array(upperBound);
+  const isTip = new Uint8Array(upperBound);
+  const community = new Int32Array(upperBound);
+  const memberOffsets = new Int32Array(numComponents + 1);
+  const members = new Int32Array(upperBound);
+  // Reverse lookup so the edge pass can dedup by slot order.
+  const slotByNodeId = new Map<string, number>();
+
+  let slot = 0;
+  for (let c = 0; c < numComponents; c++) {
+    memberOffsets[c] = slot;
+    const root = componentRoots[c];
+    const memberSet = components.members.get(root);
+    if (!memberSet) continue;
+    for (const id of memberSet) {
+      // Defensive: a NodeExpired race could leave a member id in
+      // ComponentState whose graphology node is already dropped.
+      // Skip without burning a slot.
+      if (!graph.hasNode(id)) continue;
+      ids[slot] = id;
+      slotByNodeId.set(id, slot);
+      xs[slot] = graph.getNodeAttribute(id, "x") as number;
+      ys[slot] = graph.getNodeAttribute(id, "y") as number;
+      sizes[slot] = Math.max(
+        1,
+        (graph.getNodeAttribute(id, "size") as number) ?? 1,
+      );
+      degrees[slot] = (graph.getNodeAttribute(id, "degree") as number) ?? 0;
+      isTip[slot] =
+        graph.getNodeAttribute(id, "role") === "tip-account" ? 1 : 0;
+      community[slot] = nodeToCommunity.get(id) ?? -1;
+      members[slot] = slot;
+      slot++;
+    }
+  }
+  memberOffsets[numComponents] = slot;
+  const N = slot;
+  if (N === 0) return null;
+
+  // Edge pass. Walk each node's incident edges, keep only those
+  // whose other endpoint is also tracked, dedup by slot order. Sized
+  // to graph.size; an unused tail is trimmed via subarray. All edges
+  // are intra-component by ComponentState invariant.
+  const edgeOffsets = new Int32Array(numComponents + 1);
+  const edgeSrcRaw = new Int32Array(graph.size);
+  const edgeDstRaw = new Int32Array(graph.size);
+  const edgeWeightRaw = new Float32Array(graph.size);
+  let eIdx = 0;
+  for (let c = 0; c < numComponents; c++) {
+    edgeOffsets[c] = eIdx;
+    const memStart = memberOffsets[c];
+    const memEnd = memberOffsets[c + 1];
+    for (let mi = memStart; mi < memEnd; mi++) {
+      const slotI = members[mi];
+      const id = ids[slotI];
+      graph.forEachEdge(id, (_eid, attrs, source, target) => {
+        const other = source === id ? target : source;
+        const slotJ = slotByNodeId.get(other);
+        if (slotJ === undefined) return;
+        if (slotJ <= slotI) return;
+        edgeSrcRaw[eIdx] = slotI;
+        edgeDstRaw[eIdx] = slotJ;
+        edgeWeightRaw[eIdx] = ((attrs.weight as number) ?? 1);
+        eIdx++;
+      });
+    }
+  }
+  edgeOffsets[numComponents] = eIdx;
+
+  // Map dirty roots (string) to component indices (int).
+  const dirtyArr: number[] = [];
+  for (let c = 0; c < numComponents; c++) {
+    if (dirtyRoots.has(componentRoots[c])) {
+      dirtyArr.push(c);
+    }
+  }
+  const dirtyComponents = dirtyArr.length > 0 ? new Int32Array(dirtyArr) : null;
+
+  return {
+    ids: ids.length === N ? ids : ids.slice(0, N),
+    xs: N === upperBound ? xs : xs.subarray(0, N),
+    ys: N === upperBound ? ys : ys.subarray(0, N),
+    sizes: N === upperBound ? sizes : sizes.subarray(0, N),
+    degrees: N === upperBound ? degrees : degrees.subarray(0, N),
+    isTip: N === upperBound ? isTip : isTip.subarray(0, N),
+    community: N === upperBound ? community : community.subarray(0, N),
+    numComponents,
+    memberOffsets,
+    members: N === upperBound ? members : members.subarray(0, N),
+    edgeOffsets,
+    edgeSrc: edgeSrcRaw.subarray(0, eIdx),
+    edgeDst: edgeDstRaw.subarray(0, eIdx),
+    edgeWeight: edgeWeightRaw.subarray(0, eIdx),
+    dirtyComponents,
   };
 }
 

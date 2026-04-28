@@ -1,19 +1,25 @@
-import type Graph from "graphology";
-import type { ComponentState } from "@/lib/components";
-
 /**
- * Per-component force simulation. Runs one step per animation frame
- * against each connected component's member set: pairwise repulsion
- * plus edge attraction, strictly within the component. No forces
- * cross component boundaries, which kills the cross-cluster drift we
- * saw with global FA2.
+ * Per-component force layout, graphology-free.
  *
- * Repulsion is O(N^2) per component, capped by a max-component-size
- * bail so a single giant hub doesn't stall the main thread. For
- * components above the cap we still do attraction (O(E)) but skip
- * pairwise repulsion  members stay roughly where edges drag them, and
- * the visual density remains acceptable because hub cores pack tight
- * anyway.
+ * Pure module: takes a `LayoutSnapshot` of typed arrays describing the
+ * graph, mutates `xs`/`ys` in place to step physics one frame, and
+ * persists per-node velocities in a caller-owned `LayoutState`. The
+ * caller (today: `use-raw-stream.ts`) materializes the snapshot from
+ * its graphology instance once per frame; tomorrow this same module
+ * runs inside a Web Worker and the snapshot comes from a transferred
+ * `Float32Array` instead.
+ *
+ * Forces per step (matches the prior in-place implementation
+ * bit-for-bit, only the data source changed):
+ *   1. Pairwise repulsion (gated by MAX_N2_COMPONENT_SIZE).
+ *   2. Edge attraction with megahub / large-component rest lengths.
+ *   3. Tip-vs-non-tip and tip-vs-tip repulsion.
+ *   4. Velocity integration with damping.
+ *   5. Hub collision pass (hard constraint).
+ * Then `pushComponentsApart` runs over all components as rigid
+ * centroid-based translations.
+ *
+ * No graphology imports. No DOM access. Safe to run in a worker.
  */
 
 const STEP_SCALE = 0.35;
@@ -64,9 +70,7 @@ const MAX_STEP = 30;
 // cluster sit inside its outer ring. No per-frame cap: component
 // translations are rigid (every member moves by the same delta), so
 // snapping them apart in one frame produces no jitter, only a clean
-// separation. The previous cap meant a satellite needing 500 units of
-// room would take 25+ frames to escape, and during that time the big
-// cluster's own radius could grow and re-trap it.
+// separation.
 const COMPONENT_PUSH_BUFFER = 400;
 const MIN_COMPONENT_SIZE_FOR_PUSH = 2;
 // Within a single connected component, two nodes that belong to
@@ -78,38 +82,289 @@ const MIN_COMPONENT_SIZE_FOR_PUSH = 2;
 // communities don't sit on top of each other").
 const CROSS_COMMUNITY_REPULSION_FACTOR = 20;
 // Tip-vs-tip repulsion. Always-active O(K^2) loop over the small
-// set of tips in each component (typically ≤8) so tips stay
-// angularly distributed without piling up. Standard 1/d² with a
-// large constant: only meaningful at short distances, harmless
-// when tips are far apart.
+// set of tips in each component (typically <=8) so tips stay
+// angularly distributed without piling up.
 const TIP_TIP_REPULSION = 80000;
 // A node with this many visible edges is a megahub: probably a
 // Jito tip account, DEX fee receiver, or other routing/aggregator
-// wallet. We don't filter it (we want to see it exists), but its
-// edges get a long rest length so its 100+ leaves spread out on a
-// wide ring around it instead of compressing into a tight knot.
-// The hub gets its own neighborhood within the connected component,
-// other sub-clusters in the same component stay readable.
+// wallet. Its edges get a long rest length so its 100+ leaves
+// spread out on a wide ring around it instead of compressing into
+// a tight knot.
 const MEGAHUB_VISIBLE_DEGREE = 50;
-// Rest length for megahub edges. The leaf wants to sit this many
-// world units from the hub, regardless of attraction strength.
-// Tuned against the existing leaf-vs-hub equilibrium (~30 world
-// units in normal star clusters) to give megahubs a roughly 8x
-// wider footprint.
 const MEGAHUB_EDGE_REST_LENGTH = 420;
 // Components above this size are treated as "large": every edge in
 // them gets a non-zero rest length so the searcher-to-searcher mesh
-// stops packing tightly. Without this, leaves attached to multiple
-// hubs or to other leaves collapse onto each other and the inner
-// space between tips reads as a uniform jam.
+// stops packing tightly.
 const LARGE_COMPONENT_SIZE = 100;
 const LARGE_COMPONENT_EDGE_REST_LENGTH = 90;
-// Per-node velocity, keyed by node id. Survives across ticks so
-// damping actually damps.
-const velocities = new Map<string, { vx: number; vy: number }>();
 
-export function resetLayoutVelocities(): void {
-  velocities.clear();
+/**
+ * Per-frame description of the graph in typed-array form. The caller
+ * materializes this from whatever its source of truth is (graphology
+ * today, a transferred buffer in the worker). Once built, every field
+ * is positionally indexed by a "slot" `0..N-1`. Slots are ordered
+ * component-major so members of one component occupy a contiguous
+ * range described by `memberOffsets`.
+ *
+ * `xs` and `ys` are mutated in place by `stepLayout`; everything else
+ * is read-only this tick.
+ */
+export interface LayoutSnapshot {
+  /** Stable node ids in slot order. Used to key `LayoutState.velocities`. */
+  ids: string[];
+  xs: Float64Array;
+  ys: Float64Array;
+  sizes: Float64Array;
+  degrees: Int32Array;
+  /** 1 iff role === "tip-account". */
+  isTip: Uint8Array;
+  /** Per-node Louvain community id, -1 if unknown. `null` disables the
+   *  cross-community repulsion boost (first ~3s before Louvain runs). */
+  community: Int32Array | null;
+
+  /** Component grouping, CSR-style.
+   *  Members of component `c` are `members[memberOffsets[c]..memberOffsets[c+1])`,
+   *  each entry being a slot index. */
+  numComponents: number;
+  memberOffsets: Int32Array;
+  members: Int32Array;
+
+  /** Intra-component edges, CSR-style. Each edge is listed once,
+   *  with `edgeSrc[k] < edgeDst[k]` (slot order). */
+  edgeOffsets: Int32Array;
+  edgeSrc: Int32Array;
+  edgeDst: Int32Array;
+  edgeWeight: Float32Array;
+
+  /** Components that received a new edge this frame. `null` means
+   *  step every component (used for first paint or non-streaming
+   *  callers). `pushComponentsApart` always runs over every component
+   *  regardless because a dirty cluster's growth can collide with a
+   *  stationary neighbor. */
+  dirtyComponents: Int32Array | null;
+}
+
+/**
+ * Persistent state across frames. Owned by the caller so the worker
+ * version can hold its own copy without crossing the postMessage
+ * boundary. `velocities` damps motion at equilibrium; `fx`/`fy` are
+ * scratch force buffers reused across frames to avoid per-frame
+ * allocation pressure (480KB at 30k nodes).
+ */
+export interface LayoutState {
+  velocities: Map<string, { vx: number; vy: number }>;
+  fx: Float64Array;
+  fy: Float64Array;
+}
+
+export function createLayoutState(): LayoutState {
+  return {
+    velocities: new Map(),
+    fx: new Float64Array(0),
+    fy: new Float64Array(0),
+  };
+}
+
+export function resetLayoutState(state: LayoutState): void {
+  state.velocities.clear();
+}
+
+/** Keep a stable Int32Array of `[0, 1, ..., k-1]` for the
+ *  no-dirty-set fallback path. Reused across frames. */
+let _allComponentsScratch: Int32Array = new Int32Array(0);
+function allComponents(k: number): Int32Array {
+  if (_allComponentsScratch.length < k) {
+    _allComponentsScratch = new Int32Array(k);
+    for (let i = 0; i < k; i++) _allComponentsScratch[i] = i;
+  } else {
+    // Already filled with [0,1,...,len-1] from prior call; reuse the
+    // first k entries as long as the prefix is still correct.
+    if (_allComponentsScratch[k - 1] !== k - 1) {
+      for (let i = 0; i < k; i++) _allComponentsScratch[i] = i;
+    }
+  }
+  return _allComponentsScratch.subarray(0, k);
+}
+
+/**
+ * Step physics one frame. Mutates `snap.xs`, `snap.ys`, and
+ * `state.velocities` in place. Force arrays in `state` are zeroed
+ * and reused.
+ */
+export function stepLayout(snap: LayoutSnapshot, state: LayoutState): void {
+  const N = snap.ids.length;
+  if (state.fx.length < N) {
+    state.fx = new Float64Array(N);
+    state.fy = new Float64Array(N);
+  }
+  state.fx.fill(0, 0, N);
+  state.fy.fill(0, 0, N);
+  const fx = state.fx;
+  const fy = state.fy;
+
+  const xs = snap.xs;
+  const ys = snap.ys;
+  const sizes = snap.sizes;
+  const degrees = snap.degrees;
+  const isTip = snap.isTip;
+  const community = snap.community;
+
+  const components = snap.dirtyComponents ?? allComponents(snap.numComponents);
+
+  for (let dIdx = 0; dIdx < components.length; dIdx++) {
+    const c = components[dIdx];
+    const memStart = snap.memberOffsets[c];
+    const memEnd = snap.memberOffsets[c + 1];
+    const n = memEnd - memStart;
+    if (n < MIN_ACTIVE_SIZE) continue;
+
+    // (1) Pairwise repulsion within the component.
+    if (n <= MAX_N2_COMPONENT_SIZE) {
+      for (let ii = 0; ii < n; ii++) {
+        const si = snap.members[memStart + ii];
+        for (let jj = ii + 1; jj < n; jj++) {
+          const sj = snap.members[memStart + jj];
+          const dx = xs[sj] - xs[si];
+          const dy = ys[sj] - ys[si];
+          const d2 = dx * dx + dy * dy + 0.01;
+          const d = Math.sqrt(d2);
+          const sizeFactor = Math.pow(sizes[si] * sizes[sj], SIZE_POW);
+          const cI = community ? community[si] : -1;
+          const cJ = community ? community[sj] : -1;
+          const crossCommunity = cI !== -1 && cJ !== -1 && cI !== cJ;
+          const communityFactor = crossCommunity
+            ? CROSS_COMMUNITY_REPULSION_FACTOR
+            : 1;
+          const f = (REPULSION * sizeFactor * communityFactor) / d2;
+          const ux = dx / d;
+          const uy = dy / d;
+          fx[si] -= f * ux;
+          fy[si] -= f * uy;
+          fx[sj] += f * ux;
+          fy[sj] += f * uy;
+        }
+      }
+    }
+
+    // (2) Attraction along intra-component edges.
+    const eStart = snap.edgeOffsets[c];
+    const eEnd = snap.edgeOffsets[c + 1];
+    for (let k = eStart; k < eEnd; k++) {
+      const si = snap.edgeSrc[k];
+      const sj = snap.edgeDst[k];
+      const dx = xs[sj] - xs[si];
+      const dy = ys[sj] - ys[si];
+      const d = Math.sqrt(dx * dx + dy * dy) + 0.01;
+      const w = snap.edgeWeight[k];
+      const isMegahubEdge =
+        degrees[si] >= MEGAHUB_VISIBLE_DEGREE ||
+        degrees[sj] >= MEGAHUB_VISIBLE_DEGREE;
+      const restLength = isMegahubEdge
+        ? MEGAHUB_EDGE_REST_LENGTH
+        : n >= LARGE_COMPONENT_SIZE
+          ? LARGE_COMPONENT_EDGE_REST_LENGTH
+          : 0;
+      const stretch = d - restLength;
+      if (stretch <= 0) continue;
+      const f = ATTRACTION * w * stretch;
+      const ux = dx / d;
+      const uy = dy / d;
+      fx[si] += f * ux;
+      fy[si] += f * uy;
+      fx[sj] -= f * ux;
+      fy[sj] -= f * uy;
+    }
+
+    // (3) Tip forces. Collect tip slots within this component, then
+    // run tip-vs-non-tip and tip-vs-tip in O(K*n + K^2). K is
+    // typically <=8 so both loops are cheap regardless of n.
+    const tipSlots: number[] = [];
+    for (let ii = 0; ii < n; ii++) {
+      const s = snap.members[memStart + ii];
+      if (isTip[s]) tipSlots.push(s);
+    }
+    if (tipSlots.length >= 1) {
+      for (const si of tipSlots) {
+        for (let ii = 0; ii < n; ii++) {
+          const sj = snap.members[memStart + ii];
+          if (sj === si || isTip[sj]) continue;
+          const dx = xs[sj] - xs[si];
+          const dy = ys[sj] - ys[si];
+          const d2 = dx * dx + dy * dy + 0.01;
+          const d = Math.sqrt(d2);
+          const sizeFactor = Math.pow(sizes[si] * sizes[sj], SIZE_POW);
+          const f = (REPULSION * sizeFactor) / d2;
+          const ux = dx / d;
+          const uy = dy / d;
+          fx[si] -= f * ux;
+          fy[si] -= f * uy;
+          fx[sj] += f * ux;
+          fy[sj] += f * uy;
+        }
+      }
+      const numTips = tipSlots.length;
+      for (let a = 0; a < numTips; a++) {
+        const si = tipSlots[a];
+        for (let b = a + 1; b < numTips; b++) {
+          const sj = tipSlots[b];
+          const dx = xs[sj] - xs[si];
+          const dy = ys[sj] - ys[si];
+          const d2 = dx * dx + dy * dy + 0.01;
+          const d = Math.sqrt(d2);
+          const f = TIP_TIP_REPULSION / d2;
+          const ux = dx / d;
+          const uy = dy / d;
+          fx[si] -= f * ux;
+          fy[si] -= f * uy;
+          fx[sj] += f * ux;
+          fy[sj] += f * uy;
+        }
+      }
+    }
+
+    // (4) Velocity integration. Each node keeps a velocity across
+    // frames; new force adds, damping bleeds off. At equilibrium,
+    // velocity asymptotes to zero and the node stops moving.
+    for (let ii = 0; ii < n; ii++) {
+      const s = snap.members[memStart + ii];
+      const id = snap.ids[s];
+      let v = state.velocities.get(id);
+      if (!v) {
+        v = { vx: 0, vy: 0 };
+        state.velocities.set(id, v);
+      }
+      v.vx = v.vx * VELOCITY_DAMPING + fx[s] * STEP_SCALE;
+      v.vy = v.vy * VELOCITY_DAMPING + fy[s] * STEP_SCALE;
+      const speed = Math.hypot(v.vx, v.vy);
+      if (speed > MAX_STEP) {
+        const sc = MAX_STEP / speed;
+        v.vx *= sc;
+        v.vy *= sc;
+      }
+      xs[s] += v.vx;
+      ys[s] += v.vy;
+    }
+
+    // (5) Hub collision. A constraint, not a force: hubs check
+    // against everything in the component and push out by exactly
+    // the overlap. Two passes converge tighter than one.
+    const hubSlots: number[] = [];
+    for (let ii = 0; ii < n; ii++) {
+      const s = snap.members[memStart + ii];
+      if (sizes[s] >= COLLISION_HUB_SIZE) hubSlots.push(s);
+    }
+    for (let pass = 0; pass < 2; pass++) {
+      for (const si of hubSlots) {
+        for (let ii = 0; ii < n; ii++) {
+          const sj = snap.members[memStart + ii];
+          if (sj === si) continue;
+          resolveOverlap(si, sj, xs, ys, sizes);
+        }
+      }
+    }
+  }
+
+  pushComponentsApart(snap);
 }
 
 function resolveOverlap(
@@ -138,326 +393,88 @@ function resolveOverlap(
   ys[j] += uy * overlap * shareJ;
 }
 
-export function stepPerComponentLayout(
-  graph: Graph,
-  components: ComponentState,
-  nodeToCommunity?: Map<string, number>,
-): void {
-  for (const [, members] of components.members) {
-    const n = members.size;
-    if (n < MIN_ACTIVE_SIZE) continue;
+/**
+ * Inter-component repulsion. Computes a centroid + radius per
+ * component, then resolves any overlap as a rigid translation
+ * applied to every member of the affected component(s). Always
+ * iterates every component (not just dirty) because a dirty
+ * cluster's growth can push a stationary neighbor away.
+ */
+function pushComponentsApart(snap: LayoutSnapshot): void {
+  const numComponents = snap.numComponents;
+  // Per-component centroid + radius. Allocated fresh each step;
+  // numComponents is small (thousands) so this is cheap.
+  const cx = new Float64Array(numComponents);
+  const cy = new Float64Array(numComponents);
+  const radius = new Float64Array(numComponents);
+  const compSize = new Int32Array(numComponents);
+  // 0 means "skipped" (size below MIN_COMPONENT_SIZE_FOR_PUSH); we
+  // mark these with sentinel size = 0 so the pair loop skips them.
 
-    const ids = [...members];
-    const xs = new Float64Array(n);
-    const ys = new Float64Array(n);
-    const sizes = new Float64Array(n);
-    const fx = new Float64Array(n);
-    const fy = new Float64Array(n);
-    // Per-node community id, -1 if no community map is available yet
-    // (first ~3s before Louvain runs). All -1 collapses to "everyone in
-    // the same community" which means no cross-community boost, which
-    // is the right fallback.
-    const communities = new Int32Array(n);
-    // Per-node degree, used to flag megahubs so their edges get a
-    // long rest length and their leaves spread out.
-    const degrees = new Int32Array(n);
-    const idIndex = new Map<string, number>();
-    // Indices of nodes in this component whose role is "tip-account".
-    // Tips get extra forces below: tip-vs-non-tip repulsion (pushes
-    // them outward against the searcher mass) and tip-vs-tip
-    // repulsion (keeps them angularly distributed). No fixed angular
-    // targets  positions emerge from force balance.
-    const tipIndices: number[] = [];
-    const isTip = new Uint8Array(n);
-
-    for (let i = 0; i < n; i++) {
-      const id = ids[i];
-      idIndex.set(id, i);
-      xs[i] = graph.getNodeAttribute(id, "x") as number;
-      ys[i] = graph.getNodeAttribute(id, "y") as number;
-      sizes[i] = Math.max(1, (graph.getNodeAttribute(id, "size") as number) ?? 1);
-      communities[i] = nodeToCommunity?.get(id) ?? -1;
-      degrees[i] = (graph.getNodeAttribute(id, "degree") as number) ?? 0;
-      if (graph.getNodeAttribute(id, "role") === "tip-account") {
-        tipIndices.push(i);
-        isTip[i] = 1;
-      }
+  for (let c = 0; c < numComponents; c++) {
+    const memStart = snap.memberOffsets[c];
+    const memEnd = snap.memberOffsets[c + 1];
+    const n = memEnd - memStart;
+    if (n < MIN_COMPONENT_SIZE_FOR_PUSH) continue;
+    compSize[c] = n;
+    let sx = 0;
+    let sy = 0;
+    for (let ii = 0; ii < n; ii++) {
+      const s = snap.members[memStart + ii];
+      sx += snap.xs[s];
+      sy += snap.ys[s];
     }
-
-    // Pairwise repulsion, size-weighted so hubs claim their own space
-    // and leaves orbit at an equilibrium proportional to the hub.
-    // Cross-community pairs (within same connected component) get a
-    // boost so visually-distinct Louvain sub-clusters peel apart even
-    // when a bridging edge keeps them in the same component.
-    // Skipped for giant components where O(N^2) would be too heavy.
-    if (n <= MAX_N2_COMPONENT_SIZE) {
-      for (let i = 0; i < n; i++) {
-        for (let j = i + 1; j < n; j++) {
-          const dx = xs[j] - xs[i];
-          const dy = ys[j] - ys[i];
-          const d2 = dx * dx + dy * dy + 0.01;
-          const d = Math.sqrt(d2);
-          const sizeFactor = Math.pow(sizes[i] * sizes[j], SIZE_POW);
-          const crossCommunity =
-            communities[i] !== -1 &&
-            communities[j] !== -1 &&
-            communities[i] !== communities[j];
-          const communityFactor = crossCommunity
-            ? CROSS_COMMUNITY_REPULSION_FACTOR
-            : 1;
-          const f = (REPULSION * sizeFactor * communityFactor) / d2;
-          const ux = dx / d;
-          const uy = dy / d;
-          fx[i] -= f * ux;
-          fy[i] -= f * uy;
-          fx[j] += f * ux;
-          fy[j] += f * uy;
-        }
-      }
+    cx[c] = sx / n;
+    cy[c] = sy / n;
+    let r = 0;
+    for (let ii = 0; ii < n; ii++) {
+      const s = snap.members[memStart + ii];
+      const x = snap.xs[s];
+      const y = snap.ys[s];
+      const sz = snap.sizes[s];
+      const d = Math.hypot(x - cx[c], y - cy[c]) + sz * SIZE_TO_WORLD;
+      if (d > r) r = d;
     }
-
-    // Attraction over edges inside this component. We only iterate
-    // edges incident on the first endpoint we encounter in each pair
-    // (index ordering) to avoid double-counting.
-    for (let i = 0; i < n; i++) {
-      const srcId = ids[i];
-      graph.forEachEdge(srcId, (_eid, attrs, source, target) => {
-        const other = source === srcId ? target : source;
-        const j = idIndex.get(other);
-        if (j === undefined || j <= i) return;
-        const dx = xs[j] - xs[i];
-        const dy = ys[j] - ys[i];
-        const d = Math.sqrt(dx * dx + dy * dy) + 0.01;
-        const weight = ((attrs.weight as number) ?? 1);
-        // Megahub edges (either endpoint has 50+ counterparties) get
-        // a non-zero rest length: they want distance d == REST, not
-        // d == 0. If they're already inside the rest length, attraction
-        // is zero and pairwise repulsion alone pushes them outward. If
-        // they're stretched past it, normal attraction pulls them back.
-        // Net effect: megahubs sit at the center of a wide leaf ring
-        // instead of compressing all leaves into a tight knot.
-        const isMegahubEdge =
-          degrees[i] >= MEGAHUB_VISIBLE_DEGREE ||
-          degrees[j] >= MEGAHUB_VISIBLE_DEGREE;
-        const restLength = isMegahubEdge
-          ? MEGAHUB_EDGE_REST_LENGTH
-          : n >= LARGE_COMPONENT_SIZE
-            ? LARGE_COMPONENT_EDGE_REST_LENGTH
-            : 0;
-        const stretch = d - restLength;
-        if (stretch <= 0) return;
-        const f = ATTRACTION * weight * stretch;
-        const ux = dx / d;
-        const uy = dy / d;
-        fx[i] += f * ux;
-        fy[i] += f * uy;
-        fx[j] -= f * ux;
-        fy[j] -= f * uy;
-      });
-    }
-
-    // Tip-account positioning: organic, not ad-hoc. Two always-on
-    // forces, no fixed angular targets or radii.
-    //
-    //  - Tip-vs-non-tip repulsion: every non-tip member of the
-    //    component pushes each tip outward via standard 1/d². As the
-    //    searcher mass grows, its outward pressure on tips grows
-    //    with it, so tips drift to the cluster perimeter without us
-    //    declaring a perimeter.
-    //
-    //  - Tip-vs-tip repulsion: small O(K^2) loop keeps tips
-    //    angularly distributed without any of them piling on top of
-    //    each other.
-    //
-    // Both run regardless of component size (the standard pairwise
-    // loop above is gated by MAX_N2_COMPONENT_SIZE and skips for the
-    // megacore). Equilibrium emerges from force balance with edge
-    // attraction; nothing tells the tips where to be.
-    if (tipIndices.length >= 1) {
-      // Tip-vs-non-tip repulsion. O(tips * n) per component.
-      // Reciprocal: also pushes the non-tip out, which keeps leaves
-      // from packing too tightly against tip nodes.
-      for (const i of tipIndices) {
-        for (let j = 0; j < n; j++) {
-          if (j === i || isTip[j]) continue;
-          const dx = xs[j] - xs[i];
-          const dy = ys[j] - ys[i];
-          const d2 = dx * dx + dy * dy + 0.01;
-          const d = Math.sqrt(d2);
-          const sizeFactor = Math.pow(sizes[i] * sizes[j], SIZE_POW);
-          const f = (REPULSION * sizeFactor) / d2;
-          const ux = dx / d;
-          const uy = dy / d;
-          fx[i] -= f * ux;
-          fy[i] -= f * uy;
-          fx[j] += f * ux;
-          fy[j] += f * uy;
-        }
-      }
-
-      // Tip-vs-tip repulsion.
-      const numTips = tipIndices.length;
-      for (let a = 0; a < numTips; a++) {
-        const i = tipIndices[a];
-        for (let b = a + 1; b < numTips; b++) {
-          const j = tipIndices[b];
-          const dx = xs[j] - xs[i];
-          const dy = ys[j] - ys[i];
-          const d2 = dx * dx + dy * dy + 0.01;
-          const d = Math.sqrt(d2);
-          const f = TIP_TIP_REPULSION / d2;
-          const ux = dx / d;
-          const uy = dy / d;
-          fx[i] -= f * ux;
-          fy[i] -= f * uy;
-          fx[j] += f * ux;
-          fy[j] += f * uy;
-        }
-      }
-    }
-
-    // Integrate with velocity + damping. Each node keeps a velocity
-    // across frames; new force adds to it, damping bleeds it off. At
-    // equilibrium, velocity asymptotes to zero and the node stops
-    // moving  no more jitter.
-    for (let i = 0; i < n; i++) {
-      const id = ids[i];
-      let v = velocities.get(id);
-      if (!v) {
-        v = { vx: 0, vy: 0 };
-        velocities.set(id, v);
-      }
-      v.vx = v.vx * VELOCITY_DAMPING + fx[i] * STEP_SCALE;
-      v.vy = v.vy * VELOCITY_DAMPING + fy[i] * STEP_SCALE;
-      const speed = Math.hypot(v.vx, v.vy);
-      if (speed > MAX_STEP) {
-        const scale = MAX_STEP / speed;
-        v.vx *= scale;
-        v.vy *= scale;
-      }
-      xs[i] += v.vx;
-      ys[i] += v.vy;
-    }
-
-    // Hard position-correction pass: any overlapping pair gets pushed
-    // apart to exactly touchDistance. Not a force  a constraint, so
-    // attraction and the MAX_STEP cap can't override it. Runs even on
-    // huge components because we skip leaf-vs-leaf pairs (most of the
-    // N^2 in a dense component is leaves).
-    const hubIndices: number[] = [];
-    for (let i = 0; i < n; i++) {
-      if (sizes[i] >= COLLISION_HUB_SIZE) hubIndices.push(i);
-    }
-    for (let pass = 0; pass < 2; pass++) {
-      // Hub vs everything: every hub checks against every node so it
-      // can't have anything on top of it.
-      for (const i of hubIndices) {
-        for (let j = 0; j < n; j++) {
-          if (j === i) continue;
-          resolveOverlap(i, j, xs, ys, sizes);
-        }
-      }
-    }
-
-    // Flush final positions to the graph.
-    for (let i = 0; i < n; i++) {
-      graph.setNodeAttribute(ids[i], "x", xs[i]);
-      graph.setNodeAttribute(ids[i], "y", ys[i]);
-    }
+    radius[c] = r;
   }
 
-  pushComponentsApart(graph, components);
-}
+  // Translation accumulator per component.
+  const tx = new Float64Array(numComponents);
+  const ty = new Float64Array(numComponents);
 
-// Inter-component repulsion. Computes a centroid per component, then
-// pushes nearby component centroids apart as rigid-body translations
-// applied to every member. Keeps distinct clusters from stacking up
-// in the same neighborhood even when their deterministic spawn
-// positions happened to land close.
-function pushComponentsApart(
-  graph: Graph,
-  components: ComponentState,
-): void {
-  interface Centroid {
-    root: string;
-    x: number;
-    y: number;
-    size: number;
-    radius: number;
-  }
-  const centroids: Centroid[] = [];
-  for (const [root, members] of components.members) {
-    const size = members.size;
-    if (size < MIN_COMPONENT_SIZE_FOR_PUSH) continue;
-    let cx = 0;
-    let cy = 0;
-    for (const id of members) {
-      cx += graph.getNodeAttribute(id, "x") as number;
-      cy += graph.getNodeAttribute(id, "y") as number;
-    }
-    cx /= size;
-    cy /= size;
-    // Cluster radius is the boundary of the farthest member, not its
-    // centerpoint. A hub with render size 10 extends 50 world units
-    // (size * SIZE_TO_WORLD) past its center, so without this a
-    // satellite can sit right against the visible edge of a fat hub
-    // while we technically say there's "buffer" between centroids.
-    let radius = 0;
-    for (const id of members) {
-      const x = graph.getNodeAttribute(id, "x") as number;
-      const y = graph.getNodeAttribute(id, "y") as number;
-      const nodeSize = (graph.getNodeAttribute(id, "size") as number) ?? 1;
-      const d = Math.hypot(x - cx, y - cy) + nodeSize * SIZE_TO_WORLD;
-      if (d > radius) radius = d;
-    }
-    centroids.push({ root, x: cx, y: cy, size, radius });
-  }
-
-  const translations = new Map<string, { dx: number; dy: number }>();
-  for (let i = 0; i < centroids.length; i++) {
-    for (let j = i + 1; j < centroids.length; j++) {
-      const a = centroids[i];
-      const b = centroids[j];
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
+  for (let a = 0; a < numComponents; a++) {
+    if (compSize[a] === 0) continue;
+    for (let b = a + 1; b < numComponents; b++) {
+      if (compSize[b] === 0) continue;
+      const dx = cx[b] - cx[a];
+      const dy = cy[b] - cy[a];
       const d = Math.hypot(dx, dy) + 0.0001;
-      const required = a.radius + b.radius + COMPONENT_PUSH_BUFFER;
+      const required = radius[a] + radius[b] + COMPONENT_PUSH_BUFFER;
       if (d >= required) continue;
-      // Resolve the full violation in one frame, not half. With size
-      // splitting (shareA + shareB = 1), a push of (required - d)
-      // distributes exactly the deficit across the two components, so
-      // post-translation distance equals required. Halving it meant
-      // the gap closed geometrically and never actually reached the
-      // target while the bigger cluster's radius was still shifting.
+      // Resolve in one frame (rigid translation, no jitter).
       const push = required - d;
       const ux = dx / d;
       const uy = dy / d;
-      // Split the translation by relative size: smaller component
-      // yields more ground. Sticks big clusters in place.
-      const total = a.size + b.size;
-      const shareA = b.size / total;
-      const shareB = a.size / total;
-      const ta = translations.get(a.root) ?? { dx: 0, dy: 0 };
-      const tb = translations.get(b.root) ?? { dx: 0, dy: 0 };
-      ta.dx -= ux * push * shareA;
-      ta.dy -= uy * push * shareA;
-      tb.dx += ux * push * shareB;
-      tb.dy += uy * push * shareB;
-      translations.set(a.root, ta);
-      translations.set(b.root, tb);
+      const total = compSize[a] + compSize[b];
+      const shareA = compSize[b] / total;
+      const shareB = compSize[a] / total;
+      tx[a] -= ux * push * shareA;
+      ty[a] -= uy * push * shareA;
+      tx[b] += ux * push * shareB;
+      ty[b] += uy * push * shareB;
     }
   }
 
-  // Apply translations directly. No cap: rigid component shifts don't
-  // jitter, and uncapped resolution kills the slow-creep problem where
-  // a satellite is still escaping while the big cluster expands around
-  // it.
-  for (const [root, t] of translations) {
-    const members = components.members.get(root);
-    if (!members) continue;
-    for (const id of members) {
-      graph.setNodeAttribute(id, "x", (graph.getNodeAttribute(id, "x") as number) + t.dx);
-      graph.setNodeAttribute(id, "y", (graph.getNodeAttribute(id, "y") as number) + t.dy);
+  for (let c = 0; c < numComponents; c++) {
+    if (tx[c] === 0 && ty[c] === 0) continue;
+    const memStart = snap.memberOffsets[c];
+    const memEnd = snap.memberOffsets[c + 1];
+    const dxC = tx[c];
+    const dyC = ty[c];
+    for (let ii = memStart; ii < memEnd; ii++) {
+      const s = snap.members[ii];
+      snap.xs[s] += dxC;
+      snap.ys[s] += dyC;
     }
   }
 }
