@@ -497,6 +497,31 @@ impl GraphState {
         self.latest_block_time
     }
 
+    /// Iterate `(src, dst, amount, kind)` tuples for every live edge in
+    /// window `window_idx`. Walks the window's `edges_by_time` deque,
+    /// filtering out stale slab handles (slot reused under a newer
+    /// generation). Used by analytics snapshotting; callers hold the
+    /// read lock for the duration of the iterator so the deque cannot
+    /// mutate.
+    pub fn iter_window_edges(
+        &self,
+        window_idx: usize,
+    ) -> impl Iterator<Item = (NodeIdx, NodeIdx, u64, Option<EdgeKind>)> + '_ {
+        self.windows[window_idx]
+            .edges_by_time
+            .iter()
+            .filter_map(|id| {
+                self.get_edge(id)
+                    .map(|e| (e.src, e.dst, e.amount, e.kind.clone()))
+            })
+    }
+
+    /// Lookup pubkey for a NodeIdx. Wrapper over the interner so callers
+    /// outside `graph::` (e.g. analytics) don't need access to internals.
+    pub fn lookup_pubkey(&self, idx: NodeIdx) -> Option<&str> {
+        self.interner.lookup(idx)
+    }
+
     /// Is there at least one live edge in either direction between
     /// `a` and `b`? Used to detect first-edge-for-this-pair so we can
     /// bump unique_degree only when the pair becomes connected.

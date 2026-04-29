@@ -5,6 +5,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 
+mod analytics;
 mod api;
 mod config;
 mod domain;
@@ -30,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env();
     info!(?config.clickhouse_url, ?config.clickhouse_db, "loaded config");
 
-    let state = AppState::new(&config);
+    let (state, analytics_senders) = AppState::new(&config);
 
     store::schema::bootstrap(&state.clickhouse).await?;
     info!("clickhouse schema bootstrapped");
@@ -96,6 +97,22 @@ async fn main() -> anyhow::Result<()> {
         })
     };
     bg_handles.push(graph_consumer_handle);
+
+    // analytics: per-window community-detection tasks. One task per
+    // rolling window, each on a 3s tick. Snapshot pattern: brief read
+    // lock on `GraphState`, copy the per-window edge view, release,
+    // run Louvain off-lock, broadcast the diff.
+    {
+        let analytics_handles =
+            analytics::spawn_all(state.clone(), analytics_senders, shutdown_rx.clone());
+        info!(
+            count = analytics_handles.len(),
+            "analytics tasks spawned (one per window)"
+        );
+        for h in analytics_handles {
+            bg_handles.push(h);
+        }
+    }
 
     if config.solana_rpc_url.is_empty() {
         warn!("SOLANA_RPC_URL not set  ingester and tip tracker disabled");

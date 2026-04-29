@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use clickhouse::Client;
 use parking_lot::RwLock;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
+use crate::analytics::{AnalyticsChannels, AnalyticsSnapshot};
 use crate::config::Config;
 use crate::graph::GraphState;
 use crate::graph::delta::GraphDelta;
@@ -48,12 +49,25 @@ pub struct AppState {
     /// Per-window delta broadcast. Subscribers bind to one window's
     /// channel based on the `?window=` query param.
     pub deltas: WindowChannels,
+    /// Per-window analytics broadcast + latest snapshot watch. Read-side
+    /// only; the corresponding `watch::Sender` array is owned by the
+    /// analytics tasks (see `analytics::spawn_all`).
+    pub analytics: AnalyticsChannels,
     /// In-memory graph engine: node interner + adjacency + Union-Find.
     pub graph: Arc<RwLock<GraphState>>,
 }
 
 impl AppState {
-    pub fn new(config: &Config) -> Self {
+    /// Build the read-side state plus the per-window analytics
+    /// `watch::Sender` array. The senders are consumed by
+    /// `analytics::spawn_all` so each window-task owns its push side
+    /// and `AppState` only carries the receiver side.
+    pub fn new(
+        config: &Config,
+    ) -> (
+        Self,
+        [watch::Sender<Arc<AnalyticsSnapshot>>; NUM_WINDOWS],
+    ) {
         let clickhouse = Client::default()
             .with_url(&config.clickhouse_url)
             .with_user(&config.clickhouse_user)
@@ -61,13 +75,16 @@ impl AppState {
             .with_database(&config.clickhouse_db);
 
         let ch_store = Arc::new(ClickHouseEdgeStore::new(clickhouse.clone()));
+        let (analytics, analytics_senders) = AnalyticsChannels::new();
 
-        Self {
+        let state = Self {
             clickhouse,
             store: ch_store,
             tip: TipTracker::default(),
             deltas: WindowChannels::new(),
+            analytics,
             graph: Arc::new(RwLock::new(GraphState::default())),
-        }
+        };
+        (state, analytics_senders)
     }
 }

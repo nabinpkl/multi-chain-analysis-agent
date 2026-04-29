@@ -17,13 +17,15 @@ import {
   computeComponentStats,
   type ComponentStats,
 } from "@/lib/component-stats";
-import { detectMpcClusters } from "@/lib/mpc-detect";
+import { detectMpcClusters, runFrontendLouvain } from "@/lib/mpc-detect";
 import {
   createWorkerLayoutClient,
   type LayoutClient,
 } from "@/lib/layout-client";
 import { classifyNodes, type NodeRole } from "@/lib/role-detect";
 import { colorForEdgeKind, colorForRole, ROLE_PALETTE } from "@/lib/role-colors";
+import { useAnalyticsStore } from "@/stores/analytics";
+import type { AnalyticsBatch } from "@/lib/generated/AnalyticsBatch";
 
 const DEFAULT_API_URL = "http://localhost:8002";
 
@@ -87,6 +89,10 @@ export function useRawStream({
   const componentsRef = useRef<ComponentState>(createComponentState());
   // Latest Louvain assignment, refreshed on the detect interval.
   const nodeToCommunityRef = useRef<Map<string, number>>(new Map());
+  // Backend-mode role labels keyed by pubkey. Populated by the
+  // AnalyticsBatch SSE handler in `backend` mode; ignored in `frontend`
+  // mode (which recomputes via classifyNodes locally each detect tick).
+  const nodeToRoleRef = useRef<Map<string, NodeRole>>(new Map());
   // Latest per-node role classification, recomputed each detect tick.
   const rolesRef = useRef<Map<string, NodeRole>>(new Map());
   // Set of pubkeys observed as the synthetic peer on a mint or burn edge.
@@ -95,6 +101,19 @@ export function useRawStream({
   const componentStatsRef = useRef<Map<string, ComponentStats>>(new Map());
   // NodeIdx (u32) -> pubkey map populated from NodeAdded deltas.
   const idxToPubkeyRef = useRef<Map<number, string>>(new Map());
+  // Last accepted AnalyticsBatch epoch per window. Strict-monotonic
+  // gate so re-delivered (or late-arriving) batches are ignored.
+  // Resets on window change / reset alongside other per-stream state.
+  const lastAnalyticsEpochRef = useRef<number>(0);
+  // Source of community labels: `frontend` (run local Louvain) or
+  // `backend` (consume AnalyticsBatch SSE). Read via a ref so the
+  // event listener registered once per `windowSecs` always sees the
+  // current value without forcing an SSE rebootstrap on toggle.
+  const louvainSource = useAnalyticsStore((s) => s.louvainSource);
+  const louvainSourceRef = useRef(louvainSource);
+  useEffect(() => {
+    louvainSourceRef.current = louvainSource;
+  }, [louvainSource]);
   // True when the next reconnect should ask the backend to skip the
   // bootstrap replay (only set by the explicit "Reset from now" button;
   // window-change reconnects keep bootstrap on so the new window's
@@ -141,12 +160,14 @@ export function useRawStream({
     mintAddrsRef.current = new Set();
     idxToPubkeyRef.current = new Map();
     nodeToCommunityRef.current = new Map();
+    nodeToRoleRef.current = new Map();
     rolesRef.current = new Map();
     componentStatsRef.current = new Map();
     pendingRef.current = [];
     slotByPubkeyRef.current = new Map();
     pubkeyBySlotRef.current = new Map();
     nextSlotRef.current = 0;
+    lastAnalyticsEpochRef.current = 0;
     layoutClientRef.current?.reset();
     setStatus({
       connected: false,
@@ -397,6 +418,72 @@ export function useRawStream({
       // Could set a "loaded" flag here if needed.
     });
 
+    // Backend Louvain stream. Always subscribed (the toggle decides
+    // whether to *use* the labels), so flipping to backend mode picks
+    // up the current state from the next batch without an SSE
+    // rebootstrap.
+    es.addEventListener("AnalyticsBatch", (ev) => {
+      if (louvainSourceRef.current !== "backend") return;
+      let batch: AnalyticsBatch;
+      try {
+        batch = JSON.parse((ev as MessageEvent).data) as AnalyticsBatch;
+      } catch {
+        return;
+      }
+      if (batch.epoch <= lastAnalyticsEpochRef.current) return;
+      lastAnalyticsEpochRef.current = batch.epoch;
+
+      const idxToPubkeyMap = idxToPubkeyRef.current;
+      const slotByPubkey = slotByPubkeyRef.current;
+      const client = layoutClientRef.current;
+      const nodeToCommunity = nodeToCommunityRef.current;
+      const nodeToRole = nodeToRoleRef.current;
+      const graphRefLocal = graphRef.current;
+
+      for (const [idx, communityId] of batch.community_changes) {
+        const pubkey = idxToPubkeyMap.get(idx);
+        if (pubkey === undefined) continue;
+        nodeToCommunity.set(pubkey, communityId);
+        if (client !== null) {
+          const slot = slotByPubkey.get(pubkey);
+          if (slot !== undefined) {
+            client.setCommunity(slot, communityId);
+          }
+        }
+      }
+      for (const idx of batch.community_removals) {
+        const pubkey = idxToPubkeyMap.get(idx);
+        if (pubkey === undefined) continue;
+        nodeToCommunity.delete(pubkey);
+      }
+
+      // Role labels: paint them straight onto the graph + layout
+      // worker so node colors update at SSE arrival, not at the next
+      // detect tick. The detect tick still sweeps for the legend
+      // summary and componentStats but won't overwrite anything in
+      // backend mode (it just reads from nodeToRoleRef).
+      for (const [idx, role] of batch.role_changes) {
+        const pubkey = idxToPubkeyMap.get(idx);
+        if (pubkey === undefined) continue;
+        nodeToRole.set(pubkey, role);
+        if (graphRefLocal !== null && graphRefLocal.hasNode(pubkey)) {
+          graphRefLocal.setNodeAttribute(pubkey, "role", role);
+          graphRefLocal.setNodeAttribute(pubkey, "color", colorForRole(role));
+        }
+        if (client !== null) {
+          const slot = slotByPubkey.get(pubkey);
+          if (slot !== undefined) {
+            client.setRole(slot, role);
+          }
+        }
+      }
+      for (const idx of batch.role_removals) {
+        const pubkey = idxToPubkeyMap.get(idx);
+        if (pubkey === undefined) continue;
+        nodeToRole.delete(pubkey);
+      }
+    });
+
     // Once-per-RAF position applier. The layout client owns physics
     // state (worker thread); main's job here is just to drain the
     // most recent positions onto graphology so Sigma renders them.
@@ -423,15 +510,33 @@ export function useRawStream({
     };
     layoutRafId = requestAnimationFrame(layoutTick);
 
-    // Louvain + MPC scoring on a throttle.
+    // Louvain + MPC scoring on a throttle. Louvain source is mode-
+    // aware: in `frontend` mode we run graphology-louvain locally
+    // (original behavior); in `backend` mode we reuse the labels
+    // populated by the AnalyticsBatch SSE handler. Either way, MPC
+    // scoring runs locally on the resulting partition.
     const detectInterval = window.setInterval(() => {
       if (graph.order < 10) return;
-      const { nodeToCommunity, mpcCommunities, communityStats } =
-        detectMpcClusters(graph);
-      nodeToCommunityRef.current = nodeToCommunity;
-      if (mpcCommunities.size > 0) {
-        const flagged = [...mpcCommunities]
-          .map((c) => ({ c, ...communityStats.get(c) }))
+      const isBackendMode = louvainSourceRef.current === "backend";
+      let nodeToCommunity: Map<string, number>;
+      if (isBackendMode) {
+        nodeToCommunity = nodeToCommunityRef.current;
+      } else {
+        nodeToCommunity = runFrontendLouvain(graph);
+        nodeToCommunityRef.current = nodeToCommunity;
+      }
+      // MPC scoring runs only in frontend mode. In backend mode the
+      // analytics task scored MPC server-side; the resulting role
+      // labels (mpc-member tag included) arrive via AnalyticsBatch and
+      // overwrite nodeToRoleRef. Frontend's only consumers of
+      // mpcCommunities here are the console log and the mpcMembers
+      // input to classifyNodes; both are unused in backend mode.
+      const mpc = isBackendMode
+        ? null
+        : detectMpcClusters(graph, nodeToCommunity);
+      if (mpc !== null && mpc.mpcCommunities.size > 0) {
+        const flagged = [...mpc.mpcCommunities]
+          .map((c) => ({ c, ...mpc.communityStats.get(c) }))
           .sort((a, b) => (b.totalVolume ?? 0) - (a.totalVolume ?? 0));
         // eslint-disable-next-line no-console
         console.log(
@@ -512,91 +617,103 @@ export function useRawStream({
         "[clusters] centrality " + JSON.stringify(clusters.slice(0, 10)),
       );
 
-      const tipCandidates = allNodes
-        .filter((n) => {
-          if (n.degree < 50) return false;
-          const avgPerEdge = n.degree > 0 ? n.volume / n.degree : 0;
-          return avgPerEdge < 0.01;
-        })
-        .sort((a, b) => b.degree - a.degree)
-        .slice(0, 8)
-        .map((n) => n.id);
-      const tipSet = new Set(tipCandidates);
-      const searcherProfile = new Map<
-        string,
-        { tipsTouched: number; otherDegree: number }
-      >();
-      for (const tipId of tipCandidates) {
-        if (!graph.hasNode(tipId)) continue;
-        graph.forEachNeighbor(tipId, (other) => {
-          const cur = searcherProfile.get(other) ?? {
-            tipsTouched: 0,
-            otherDegree: 0,
-          };
-          cur.tipsTouched += 1;
-          searcherProfile.set(other, cur);
-        });
-      }
-      const buckets = { "1": 0, "2-3": 0, "4-6": 0, "7-8": 0 };
-      for (const [, p] of searcherProfile) {
-        if (p.tipsTouched === 1) buckets["1"]++;
-        else if (p.tipsTouched <= 3) buckets["2-3"]++;
-        else if (p.tipsTouched <= 6) buckets["4-6"]++;
-        else buckets["7-8"]++;
-      }
-      const heavySearchers: Array<{
-        id: string;
-        tips: number;
-        deg: number;
-        nonTipDeg: number;
-        inVol: string;
-        outVol: string;
-        bidirVol: string;
-      }> = [];
-      for (const [id, p] of searcherProfile) {
-        if (p.tipsTouched < 4) continue;
-        const deg = (graph.getNodeAttribute(id, "degree") as number) ?? 0;
-        heavySearchers.push({
-          id: nodeLabel(id),
-          tips: p.tipsTouched,
-          deg,
-          nonTipDeg: deg - p.tipsTouched,
-          inVol: ((graph.getNodeAttribute(id, "inVol") as number) ?? 0).toFixed(3),
-          outVol: ((graph.getNodeAttribute(id, "outVol") as number) ?? 0).toFixed(3),
-          bidirVol: ((graph.getNodeAttribute(id, "bidirVol") as number) ?? 0).toFixed(3),
-        });
-      }
-      heavySearchers.sort((a, b) => b.tips - a.tips || b.deg - a.deg);
-      // eslint-disable-next-line no-console
-      console.log(
-        "[mev] tip-style accounts " +
-          JSON.stringify({
-            count: tipCandidates.length,
-            ids: tipCandidates.map(nodeLabel),
-            buckets,
-            uniqueSearchers: searcherProfile.size,
-          }),
-      );
-      // eslint-disable-next-line no-console
-      console.log(
-        "[mev] heavy searchers " + JSON.stringify(heavySearchers.slice(0, 15)),
-      );
+      // Tip detection, MEV searcher profiling, and per-node role
+      // classification all migrate to the backend analytics task in
+      // backend mode. Skip locally and read the result map from the
+      // ref the AnalyticsBatch handler populates. In frontend mode,
+      // run the original chain unchanged.
+      let roles: Map<string, NodeRole>;
+      if (isBackendMode) {
+        roles = nodeToRoleRef.current;
+      } else {
+        const tipCandidates = allNodes
+          .filter((n) => {
+            if (n.degree < 50) return false;
+            const avgPerEdge = n.degree > 0 ? n.volume / n.degree : 0;
+            return avgPerEdge < 0.01;
+          })
+          .sort((a, b) => b.degree - a.degree)
+          .slice(0, 8)
+          .map((n) => n.id);
+        const tipSet = new Set(tipCandidates);
+        const searcherProfile = new Map<
+          string,
+          { tipsTouched: number; otherDegree: number }
+        >();
+        for (const tipId of tipCandidates) {
+          if (!graph.hasNode(tipId)) continue;
+          graph.forEachNeighbor(tipId, (other) => {
+            const cur = searcherProfile.get(other) ?? {
+              tipsTouched: 0,
+              otherDegree: 0,
+            };
+            cur.tipsTouched += 1;
+            searcherProfile.set(other, cur);
+          });
+        }
+        const buckets = { "1": 0, "2-3": 0, "4-6": 0, "7-8": 0 };
+        for (const [, p] of searcherProfile) {
+          if (p.tipsTouched === 1) buckets["1"]++;
+          else if (p.tipsTouched <= 3) buckets["2-3"]++;
+          else if (p.tipsTouched <= 6) buckets["4-6"]++;
+          else buckets["7-8"]++;
+        }
+        const heavySearchers: Array<{
+          id: string;
+          tips: number;
+          deg: number;
+          nonTipDeg: number;
+          inVol: string;
+          outVol: string;
+          bidirVol: string;
+        }> = [];
+        for (const [id, p] of searcherProfile) {
+          if (p.tipsTouched < 4) continue;
+          const deg = (graph.getNodeAttribute(id, "degree") as number) ?? 0;
+          heavySearchers.push({
+            id: nodeLabel(id),
+            tips: p.tipsTouched,
+            deg,
+            nonTipDeg: deg - p.tipsTouched,
+            inVol: ((graph.getNodeAttribute(id, "inVol") as number) ?? 0).toFixed(3),
+            outVol: ((graph.getNodeAttribute(id, "outVol") as number) ?? 0).toFixed(3),
+            bidirVol: ((graph.getNodeAttribute(id, "bidirVol") as number) ?? 0).toFixed(3),
+          });
+        }
+        heavySearchers.sort((a, b) => b.tips - a.tips || b.deg - a.deg);
+        // eslint-disable-next-line no-console
+        console.log(
+          "[mev] tip-style accounts " +
+            JSON.stringify({
+              count: tipCandidates.length,
+              ids: tipCandidates.map(nodeLabel),
+              buckets,
+              uniqueSearchers: searcherProfile.size,
+            }),
+        );
+        // eslint-disable-next-line no-console
+        console.log(
+          "[mev] heavy searchers " + JSON.stringify(heavySearchers.slice(0, 15)),
+        );
 
-      const mpcMembers = new Set<string>();
-      for (const [id, c] of nodeToCommunity) {
-        if (mpcCommunities.has(c)) mpcMembers.add(id);
+        const mpcMembers = new Set<string>();
+        if (mpc !== null) {
+          for (const [id, c] of nodeToCommunity) {
+            if (mpc.mpcCommunities.has(c)) mpcMembers.add(id);
+          }
+        }
+        const tipsTouchedByNode = new Map<string, number>();
+        for (const [id, p] of searcherProfile) {
+          tipsTouchedByNode.set(id, p.tipsTouched);
+        }
+        roles = classifyNodes({
+          graph,
+          tipAddrs: tipSet,
+          mpcMembers,
+          mintAddrs: mintAddrsRef.current,
+          tipsTouchedByNode,
+        });
       }
-      const tipsTouchedByNode = new Map<string, number>();
-      for (const [id, p] of searcherProfile) {
-        tipsTouchedByNode.set(id, p.tipsTouched);
-      }
-      const roles = classifyNodes({
-        graph,
-        tipAddrs: tipSet,
-        mpcMembers,
-        mintAddrs: mintAddrsRef.current,
-        tipsTouchedByNode,
-      });
       const summary: RoleSummary = {
         "token-mint": 0,
         "tip-account": 0,

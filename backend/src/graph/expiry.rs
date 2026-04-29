@@ -62,6 +62,13 @@ impl EdgesByTime {
     pub fn len(&self) -> usize {
         self.inner.len()
     }
+
+    /// Iterate every live `EdgeId` in this window's deque in oldest-first
+    /// order. Used by analytics snapshotting to walk the per-window edge
+    /// set without copying.
+    pub fn iter(&self) -> impl Iterator<Item = EdgeId> + '_ {
+        self.inner.iter().copied()
+    }
 }
 
 /// Generation-checking slab read used by `EdgesByTime`. Returns

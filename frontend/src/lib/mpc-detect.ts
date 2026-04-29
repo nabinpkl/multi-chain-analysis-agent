@@ -19,7 +19,6 @@ interface NodeStats {
 }
 
 export interface MpcDetection {
-  nodeToCommunity: Map<string, number>;
   mpcCommunities: Set<number>;
   communityStats: Map<number, NodeStats>;
 }
@@ -38,11 +37,28 @@ function nodeLooksLikeLooper(
   return loopRatio >= BIDIR_VOL_THRESHOLD && balance >= BALANCE_THRESHOLD;
 }
 
-export function detectMpcClusters(graph: Graph): MpcDetection {
+/**
+ * Run Louvain on the local graphology instance. Used in `frontend`
+ * Louvain mode. In `backend` mode the hook gets `nodeToCommunity`
+ * from the SSE `AnalyticsBatch` stream instead and never calls this.
+ */
+export function runFrontendLouvain(graph: Graph): Map<string, number> {
   const mapping = louvain(graph, { getEdgeWeight: "weight" });
-  const nodeToCommunity = new Map<string, number>();
-  for (const [id, c] of Object.entries(mapping)) nodeToCommunity.set(id, c);
+  const out = new Map<string, number>();
+  for (const [id, c] of Object.entries(mapping)) out.set(id, c);
+  return out;
+}
 
+/**
+ * MPC scoring: classify communities as "MPC-like" based on bidirectional
+ * volume + intra-cluster volume share. Pure scoring step; takes the
+ * `nodeToCommunity` map from whatever source (frontend Louvain or
+ * backend `AnalyticsBatch`) so it works under either mode.
+ */
+export function detectMpcClusters(
+  graph: Graph,
+  nodeToCommunity: Map<string, number>,
+): MpcDetection {
   const byCommunity = new Map<number, string[]>();
   for (const [id, c] of nodeToCommunity) {
     const arr = byCommunity.get(c);
@@ -59,6 +75,7 @@ export function detectMpcClusters(graph: Graph): MpcDetection {
     let loopers = 0;
     let totalVolume = 0;
     for (const id of members) {
+      if (!graph.hasNode(id)) continue;
       const vol = graph.getNodeAttribute(id, "volume") as number;
       const inVol = graph.getNodeAttribute(id, "inVol") as number;
       const outVol = graph.getNodeAttribute(id, "outVol") as number;
@@ -75,6 +92,7 @@ export function detectMpcClusters(graph: Graph): MpcDetection {
     let touchVol = 0;
     const memberSet = new Set(members);
     for (const id of members) {
+      if (!graph.hasNode(id)) continue;
       graph.forEachEdge(id, (eid, attrs, src, tgt) => {
         const other = src === id ? tgt : src;
         const v = attrs.volume as number;
@@ -102,5 +120,5 @@ export function detectMpcClusters(graph: Graph): MpcDetection {
     }
   }
 
-  return { nodeToCommunity, mpcCommunities, communityStats };
+  return { mpcCommunities, communityStats };
 }

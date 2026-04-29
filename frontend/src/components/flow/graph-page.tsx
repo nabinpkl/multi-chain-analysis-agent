@@ -13,6 +13,7 @@ import { EDGE_PALETTE, ROLE_PALETTE } from "@/lib/role-colors";
 import type { NodeRole } from "@/lib/role-detect";
 import { formatInt } from "@/lib/format";
 import { LiveIndicator } from "@/components/flow/live-indicator";
+import { LouvainSourceToggle } from "@/components/flow/louvain-source-toggle";
 import { cn } from "@/lib/utils";
 
 const WINDOW_LABELS: Record<WindowSeconds, string> = {
@@ -193,6 +194,7 @@ function RawPanel({
           ))}
         </div>
       </div>
+      <LouvainSourceToggle />
       <div>
         <div className="text-[0.65rem] uppercase tracking-[1.5px] text-mca-muted mb-1">
           wallets
