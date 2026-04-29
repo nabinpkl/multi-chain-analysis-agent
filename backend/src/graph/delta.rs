@@ -39,11 +39,6 @@ pub enum GraphDelta {
         slot: u64,
         kind: Option<EdgeKind>,
     },
-    ComponentAssigned {
-        seq: u64,
-        node: u32,
-        component_id: u64,
-    },
     EdgeExpired {
         seq: u64,
         idx: u32,
@@ -69,7 +64,6 @@ impl GraphDelta {
         match self {
             GraphDelta::NodeAdded { seq, .. } => *seq,
             GraphDelta::EdgeAdded { seq, .. } => *seq,
-            GraphDelta::ComponentAssigned { seq, .. } => *seq,
             GraphDelta::EdgeExpired { seq, .. } => *seq,
             GraphDelta::NodeExpired { seq, .. } => *seq,
             GraphDelta::CaughtUp { seq } => *seq,

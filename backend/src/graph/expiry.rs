@@ -176,13 +176,15 @@ impl GraphState {
 
     /// Settle split detection for a set of dirty component ids. Uses
     /// rayon::par_iter to BFS each dirty component in parallel. Serial
-    /// within each component. Returns all ComponentAssigned deltas.
+    /// within each component. Updates `node_to_component` and the UF
+    /// in place; no events emitted (frontend recomputes connectivity
+    /// itself from the edge stream).
     pub(super) fn settle_components(
         &mut self,
         dirty: FxHashSet<ComponentId>,
-    ) -> Vec<GraphDelta> {
+    ) {
         if dirty.is_empty() {
-            return Vec::new();
+            return;
         }
 
         // For each dirty component_id, collect the set of live nodes in it.
@@ -231,7 +233,6 @@ impl GraphState {
             .collect();
 
         // Now apply the split results (single-threaded, needs &mut self).
-        let mut deltas = Vec::new();
         for (old_cid, partitions) in bfs_results {
             if partitions.len() <= 1 {
                 // No split: UF state is inconsistent with actual connectivity
@@ -255,12 +256,6 @@ impl GraphState {
                 };
                 for &node in partition {
                     self.node_to_component[node as usize] = cid;
-                    let seq = self.next_seq();
-                    deltas.push(GraphDelta::ComponentAssigned {
-                        seq,
-                        node,
-                        component_id: cid,
-                    });
                 }
                 // Rebuild UF root meta for this partition.
                 // We re-union all nodes in the partition so the UF is again
@@ -274,8 +269,6 @@ impl GraphState {
                 }
             }
         }
-
-        deltas
     }
 }
 
@@ -389,14 +382,9 @@ mod tests {
         let deltas = gs.ingest(&e3);
 
         // After expiry of A-B, A is an orphan (NodeExpired) and B-C remains.
-        // So we have: B-C component + new D-E component.
-        let component_assigned: Vec<_> = deltas
-            .iter_all()
-            .filter(|d| matches!(d, GraphDelta::ComponentAssigned { .. }))
-            .collect();
-        // A got NodeExpired, so only B and C remain in the old component  no split there.
-        // The important check is that no panic occurred and expiry worked correctly.
-        let _ = component_assigned;
+        // The important check is that no panic occurred and expiry worked
+        // correctly. Connectivity is verified directly on `gs`.
+        let _ = deltas;
         assert!(gs.total_nodes() >= 4, "D, E should be added; B, C should remain");
     }
 }

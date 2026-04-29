@@ -7,8 +7,10 @@ import {
   addNode as addToComponent,
   createComponentState,
   findRoot,
+  handleEdgeRemoved,
   removeNode as removeFromComponent,
   union,
+  type Adjacency,
   type ComponentState,
 } from "@/lib/components";
 import {
@@ -335,9 +337,15 @@ export function useRawStream({
         ) {
           layoutClientRef.current.removeEdge(srcSlot, dstSlot);
         }
-        // Note: components UF isn't decremented (DSU doesn't support split).
-        // Component view becomes slightly stale on long window-slide
-        // events. Acceptable for the visual.
+        // Detect connectivity loss (the edge may have been a bridge)
+        // and split the component if so. Adjacency lookup goes against
+        // graphology, which has already had the edge dropped above, so
+        // the BFS walks the post-removal world. Result: window-correct
+        // components without rebuild-from-scratch  cost is bounded by
+        // the smaller side, often a few hops when the edge wasn't
+        // load-bearing.
+        const adj: Adjacency = (id) => graph.neighbors(id);
+        handleEdgeRemoved(componentsRef.current, src, dst, adj);
         setStatus((s) => ({ ...s, edgeCount: graph.size, nodeCount: graph.order }));
       } catch {
         // ignore malformed events

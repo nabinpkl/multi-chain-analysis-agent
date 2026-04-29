@@ -15,13 +15,16 @@ use interner::{NodeIdx, NodeInterner};
 use union_find::{ComponentId, UnionFind};
 use window::{NUM_WINDOWS, MAX_WINDOW_IDX, WINDOWS};
 
-/// Result of a single ingest call. `common` events fan out to every
-/// per-window broadcast channel (UF-merge `ComponentAssigned` only;
-/// these may reference nodes that aren't visible in a given window and
-/// the frontend ignores unknowns). `per_window[w]` events fan out only
-/// to channel `w` and cover everything window-scoped: the per-window
-/// `NodeAdded` (on 0->1 edge-count transition), the matching
-/// `ComponentAssigned`, the `EdgeAdded` itself, plus expiry deltas.
+/// Result of a single ingest call. `per_window[w]` events fan out
+/// only to channel `w` and cover everything window-scoped: the
+/// per-window `NodeAdded` on 0->1 edge-count transition, the
+/// matching `EdgeAdded`, plus expiry deltas.
+///
+/// `common` exists as scaffolding for future cross-window events
+/// (e.g. analytics broadcasts). It is currently always empty.
+/// Component IDs are still tracked internally on `GraphState` for
+/// stats endpoints but no longer streamed; the frontend computes
+/// window-correct connectivity itself from the edge stream.
 #[derive(Default)]
 pub struct IngestDeltas {
     pub common: Vec<GraphDelta>,
@@ -230,12 +233,12 @@ impl GraphState {
 
     /// Core ingest: advances cutoff, drains expired edges per window,
     /// adds new edge, settles splits. Returns deltas split into:
-    ///   - `common`: UF-merge `ComponentAssigned`s that span the whole
-    ///     graph (broadcast to every channel).
+    ///   - `common`: scaffolding for cross-window broadcast events.
+    ///     Currently always empty.
     ///   - `per_window[w]`: every window-scoped delta, including the
-    ///     `NodeAdded` / `ComponentAssigned` / `EdgeAdded` triple for
-    ///     edges visible in window `w`, plus `EdgeExpired` /
-    ///     `NodeExpired` when they fall off `w`.
+    ///     `NodeAdded` / `EdgeAdded` pair for edges visible in window
+    ///     `w`, plus `EdgeExpired` / `NodeExpired` when they fall off
+    ///     `w`.
     pub fn ingest(&mut self, edge: &Edge) -> IngestDeltas {
         let mut out = IngestDeltas::default();
 
@@ -293,35 +296,39 @@ impl GraphState {
             }
         }
 
-        // 3. Add new edge. Common deltas (NodeAdded, EdgeAdded,
-        //    ComponentAssigned) fan out to all channels.
+        // 3. Add new edge. Per-window NodeAdded/EdgeAdded fan to the
+        //    matching window channels.
         self.add_edge(edge, &mut out);
 
-        // 4. Settle splits for dirty components via rayon BFS. These
-        //    ComponentAssigned events are global so they go on `common`.
-        let settle_deltas = self.settle_components(dirty_components);
-        out.common.extend(settle_deltas);
+        // 4. Settle splits for dirty components. Updates internal
+        //    `node_to_component` so stats endpoints (and any future
+        //    in-process consumer) see window-correct connectivity.
+        //    No events emitted: connectivity is recomputed on the
+        //    frontend from the edge stream.
+        self.settle_components(dirty_components);
 
         self.last_ingested_slot = Some(edge.slot);
         out
     }
 
     /// Add a single edge (sub-routine of ingest). Handles node interning,
-    /// edge slab allocation, adjacency update, UF union, and component
-    /// assignment events.
+    /// edge slab allocation, adjacency update, and UF union.
     ///
-    /// `NodeAdded` / `ComponentAssigned` / `EdgeAdded` are emitted on
-    /// `per_window[w]` for each window the edge satisfies (`bt >=
-    /// cutoff_w`). A node's `NodeAdded` fires whenever its per-window
-    /// edge count transitions from 0 to 1, so a wallet that was
-    /// `NodeExpired` from the 10s view and then comes back is announced
-    /// again on that window's channel. Without this, the frontend's
-    /// `idxToPubkey` map (which it deletes on `NodeExpired`) would never
-    /// rebind for the returning wallet and subsequent `EdgeAdded`s for
-    /// it would be silently dropped.
+    /// `NodeAdded` / `EdgeAdded` are emitted on `per_window[w]` for
+    /// each window the edge satisfies (`bt >= cutoff_w`). A node's
+    /// `NodeAdded` fires whenever its per-window edge count transitions
+    /// from 0 to 1, so a wallet that was `NodeExpired` from the 10s
+    /// view and then comes back is announced again on that window's
+    /// channel. Without this, the frontend's `idxToPubkey` map (which
+    /// it deletes on `NodeExpired`) would never rebind for the
+    /// returning wallet and subsequent `EdgeAdded`s for it would be
+    /// silently dropped.
     ///
-    /// UF-merge `ComponentAssigned`s remain on `common` because they
-    /// touch nodes across every window.
+    /// Component assignment is updated in `node_to_component` for
+    /// internal correctness (stats endpoints, future analytics) but
+    /// no longer emitted on the wire. The frontend computes
+    /// connectivity itself from the edge stream so its view stays
+    /// window-pure.
     fn add_edge(&mut self, edge: &Edge, out: &mut IngestDeltas) {
         let bt = edge.block_time as u64;
 
@@ -356,8 +363,8 @@ impl GraphState {
             .map(|midx| self.mint_interner.lookup(midx).unwrap_or("").to_string());
 
         // Insert into every window whose cutoff this edge satisfies and
-        // emit per-window NodeAdded (on 0->1 transition) + ComponentAssigned
-        // + EdgeAdded so each subscriber sees only what fits in its view.
+        // emit per-window NodeAdded (on 0->1 transition) + EdgeAdded so
+        // each subscriber sees only what fits in its view.
         for w in 0..NUM_WINDOWS {
             let cutoff = self.latest_block_time.saturating_sub(WINDOWS[w]);
             if bt < cutoff {
@@ -373,13 +380,6 @@ impl GraphState {
                     idx: src_idx,
                     pubkey: edge.from_wallet.clone(),
                 });
-                let cid = self.node_to_component[src_idx as usize];
-                let seq2 = self.next_seq();
-                out.per_window[w].push(GraphDelta::ComponentAssigned {
-                    seq: seq2,
-                    node: src_idx,
-                    component_id: cid,
-                });
             }
             self.windows[w].edge_count_per_node[src_idx as usize] = src_count.saturating_add(1);
 
@@ -391,13 +391,6 @@ impl GraphState {
                         seq,
                         idx: dst_idx,
                         pubkey: edge.to_wallet.clone(),
-                    });
-                    let cid = self.node_to_component[dst_idx as usize];
-                    let seq2 = self.next_seq();
-                    out.per_window[w].push(GraphDelta::ComponentAssigned {
-                        seq: seq2,
-                        node: dst_idx,
-                        component_id: cid,
                     });
                 }
                 self.windows[w].edge_count_per_node[dst_idx as usize] =
@@ -421,7 +414,10 @@ impl GraphState {
         self.out_adj[src_idx as usize].push(edge_id);
         self.in_adj[dst_idx as usize].push(edge_id);
 
-        // Union-Find merge.
+        // Union-Find merge. Updates `node_to_component` for stats
+        // and future in-process consumers; no event is emitted
+        // because the frontend tracks connectivity itself from the
+        // edge stream.
         let ra = self.uf.find(src_idx);
         let rb = self.uf.find(dst_idx);
         if ra != rb {
@@ -438,16 +434,11 @@ impl GraphState {
 
             self.uf.union(src_idx, dst_idx);
 
-            // O(N) scan over node_to_component.
+            // O(N) scan over node_to_component to relabel the smaller
+            // component's members with the larger's id.
             for i in 0..self.node_to_component.len() {
                 if self.node_to_component[i] == smaller_cid {
                     self.node_to_component[i] = larger_cid;
-                    let seq = self.next_seq();
-                    out.common.push(GraphDelta::ComponentAssigned {
-                        seq,
-                        node: i as NodeIdx,
-                        component_id: larger_cid,
-                    });
                 }
             }
         }
@@ -568,9 +559,6 @@ mod tests {
         assert!(deltas1
             .iter_all()
             .any(|d| matches!(d, GraphDelta::EdgeAdded { .. })));
-        assert!(deltas1
-            .iter_all()
-            .any(|d| matches!(d, GraphDelta::ComponentAssigned { .. })));
 
         assert_eq!(gs.total_nodes(), 2);
         assert_eq!(gs.total_edges(), 1);

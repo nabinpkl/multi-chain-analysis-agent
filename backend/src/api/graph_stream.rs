@@ -97,7 +97,6 @@ fn delta_to_sse_event(delta: &GraphDelta, with_id: bool) -> Event {
     let event_type = match delta {
         GraphDelta::NodeAdded { .. } => "NodeAdded",
         GraphDelta::EdgeAdded { .. } => "EdgeAdded",
-        GraphDelta::ComponentAssigned { .. } => "ComponentAssigned",
         GraphDelta::EdgeExpired { .. } => "EdgeExpired",
         GraphDelta::NodeExpired { .. } => "NodeExpired",
         GraphDelta::CaughtUp { .. } => "CaughtUp",

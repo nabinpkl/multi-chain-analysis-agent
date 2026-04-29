@@ -5,7 +5,11 @@
 /// Order:
 /// 1. NodeAdded for each node with at least one edge in the window
 /// 2. EdgeAdded for each edge whose `block_time` is within the window
-/// 3. ComponentAssigned for each visible node (using the global component id)
+///
+/// Connectivity is not shipped: the frontend recomputes it from the
+/// edge stream so its component view stays window-pure (a global
+/// component id can group nodes that aren't connected within a
+/// smaller window's edge subset).
 use rustc_hash::FxHashSet;
 
 use super::GraphState;
@@ -39,7 +43,7 @@ pub fn bootstrap_events(gs: &GraphState, window_idx: usize) -> Vec<GraphDelta> {
     }
 
     let mut events: Vec<GraphDelta> =
-        Vec::with_capacity(visible_nodes.len() * 2 + visible_edges.len() + 1);
+        Vec::with_capacity(visible_nodes.len() + visible_edges.len() + 1);
 
     for &n in &visible_nodes {
         if let Some(pubkey) = gs.interner.lookup(n) {
@@ -66,21 +70,6 @@ pub fn bootstrap_events(gs: &GraphState, window_idx: usize) -> Vec<GraphDelta> {
             slot: e.slot,
             kind: e.kind.clone(),
         });
-    }
-
-    for &n in &visible_nodes {
-        let cid = gs
-            .node_to_component
-            .get(n as usize)
-            .copied()
-            .unwrap_or(u64::MAX);
-        if cid != u64::MAX {
-            events.push(GraphDelta::ComponentAssigned {
-                seq: 0,
-                node: n,
-                component_id: cid,
-            });
-        }
     }
 
     events
@@ -133,18 +122,18 @@ mod tests {
         let events = bootstrap_events(&gs, MAX_WINDOW_IDX);
         let mut nodes = 0;
         let mut edges = 0;
-        let mut components = 0;
         for ev in &events {
             match ev {
                 GraphDelta::NodeAdded { .. } => nodes += 1,
                 GraphDelta::EdgeAdded { .. } => edges += 1,
-                GraphDelta::ComponentAssigned { .. } => components += 1,
                 _ => {}
             }
         }
         assert_eq!(nodes, 4);
         assert_eq!(edges, 3);
-        assert_eq!(components, 4);
+        // Connectivity is not part of the bootstrap stream; verified
+        // separately on `gs` directly.
+        assert_eq!(gs.total_components(), 1);
     }
 
     #[test]

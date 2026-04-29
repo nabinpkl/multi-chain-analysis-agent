@@ -21,8 +21,10 @@ import {
   addNode as ufAddNode,
   createComponentState,
   findRoot,
+  handleEdgeRemoved,
   removeNode as ufRemoveNode,
   union,
+  type Adjacency,
   type ComponentState,
 } from "@/lib/components";
 import {
@@ -53,6 +55,17 @@ function nodeSizeFromDegree(degree: number): number {
     NODE_SIZE_MIN_PX + Math.sqrt(norm) * (NODE_SIZE_MAX_PX - NODE_SIZE_MIN_PX)
   );
 }
+
+/**
+ * Lazily yield string-coerced keys of a `Map<number, ...>`. Used by
+ * `removeEdge` to feed the UF's string-keyed `Adjacency` lookup
+ * without materializing an array each call.
+ */
+function* mapKeysAsStrings(m: Map<number, unknown>): IterableIterator<string> {
+  for (const k of m.keys()) yield String(k);
+}
+
+const EMPTY_ITER: Iterable<string> = [];
 
 interface NodeRecord {
   x: number;
@@ -188,11 +201,20 @@ export class LayoutEngine {
       dst.degree = Math.max(0, dst.degree - 1);
       dst.size = nodeSizeFromDegree(dst.degree);
     }
-    // Note: we don't run split-detection in the engine. The frontend
-    // UF doesn't support split (matches main's behavior). Worst case:
-    // pushComponentsApart treats two disconnected sub-clusters as one
-    // until a future merge restructures things. Visually acceptable.
+    // Detect bridge-edge removal and split the component if it was
+    // load-bearing. BFS walks the worker's post-removal `adj` map;
+    // slot ints are stringified for the UF's string-keyed API.
+    // Marks both surviving roots dirty so pushComponentsApart and
+    // physics see the new component layout on the next tick.
+    const adj: Adjacency = (id) => {
+      const slot = Number(id);
+      const m = this.adj.get(slot);
+      if (!m) return EMPTY_ITER;
+      return mapKeysAsStrings(m);
+    };
+    handleEdgeRemoved(this.uf, String(srcSlot), String(dstSlot), adj);
     this.dirty.add(findRoot(this.uf, String(srcSlot)));
+    this.dirty.add(findRoot(this.uf, String(dstSlot)));
   }
 
   setRole(slot: number, role: NodeRole): void {

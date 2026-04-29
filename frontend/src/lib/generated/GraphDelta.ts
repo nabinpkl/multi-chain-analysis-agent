@@ -13,7 +13,7 @@ idx: number,
  * is `gen`; the Rust field is renamed because `gen` is a
  * reserved keyword in Rust 2024.
  */
-gen: number, src: number, dst: number, mint: string | null, amount: bigint, slot: bigint, kind: EdgeKind | null, } | { "type": "ComponentAssigned", seq: bigint, node: number, component_id: bigint, } | { "type": "EdgeExpired", seq: bigint, idx: number, 
+gen: number, src: number, dst: number, mint: string | null, amount: bigint, slot: bigint, kind: EdgeKind | null, } | { "type": "EdgeExpired", seq: bigint, idx: number, 
 /**
  * Generation of the edge being expired. Frontend uses
  * `${idx}:${gen}` to drop the exact graphology entry, so an

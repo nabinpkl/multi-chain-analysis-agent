@@ -85,6 +85,99 @@ export function componentSize(state: ComponentState, id: string): number {
 }
 
 /**
+ * Adjacency lookup: given a node id, returns an iterable of its
+ * current neighbors in the *post-removal* graph. Provided by the
+ * caller so this module stays agnostic of where adjacency lives
+ * (graphology on main, plain Map<slot, Map<slot, weight>> in the
+ * worker  worker passes a wrapper that stringifies slot ints).
+ */
+export type Adjacency = (id: string) => Iterable<string>;
+
+/**
+ * React to an edge removal between `src` and `dst`. If the removal
+ * disconnected a previously-merged component (i.e. the edge was a
+ * "bridge"), split the component by promoting one of its nodes to a
+ * new root.
+ *
+ * Two-sided BFS: alternate one step from each endpoint. As soon as
+ * one frontier touches the other's visited set, we know the
+ * component is still connected and abort cheaply (cost roughly the
+ * number of hops between the two endpoints). When the edge IS a
+ * true bridge, whichever BFS exhausts first is by definition the
+ * smaller side (its reachable set is fully enumerated); we reassign
+ * just that side, keeping work proportional to the smaller half.
+ *
+ * Returns `true` if a split happened. Caller is expected to have
+ * already updated the underlying adjacency (graphology / worker
+ * adj map) so that `adj()` reflects the post-removal world.
+ *
+ * No-op if either endpoint isn't tracked or if they're not in the
+ * same component to begin with (out-of-order delivery, double
+ * delivery, or stale event for an already-removed pair).
+ */
+export function handleEdgeRemoved(
+  state: ComponentState,
+  src: string,
+  dst: string,
+  adj: Adjacency,
+): boolean {
+  if (src === dst) return false;
+  if (!state.parent.has(src) || !state.parent.has(dst)) return false;
+  const root = findRoot(state, src);
+  if (findRoot(state, dst) !== root) return false;
+
+  const visitedA = new Set<string>([src]);
+  const queueA: string[] = [src];
+  const visitedB = new Set<string>([dst]);
+  const queueB: string[] = [dst];
+
+  // Alternate one BFS step per side. The loop exits when either a
+  // search exhausts its queue (smaller side fully enumerated) or one
+  // search reaches a node the other has visited (still connected).
+  while (queueA.length > 0 && queueB.length > 0) {
+    const nextA = queueA.shift()!;
+    for (const n of adj(nextA)) {
+      if (visitedA.has(n)) continue;
+      if (visitedB.has(n)) return false; // a met b: still connected
+      visitedA.add(n);
+      queueA.push(n);
+    }
+    if (queueA.length === 0) break;
+    const nextB = queueB.shift()!;
+    for (const n of adj(nextB)) {
+      if (visitedB.has(n)) continue;
+      if (visitedA.has(n)) return false; // b met a: still connected
+      visitedB.add(n);
+      queueB.push(n);
+    }
+  }
+
+  // The exhausted side is the smaller half. Pick a new root from it.
+  // Preferring src/dst keeps future findRoot path-compression cheap
+  // for the endpoint that triggered the split.
+  const smaller = queueA.length === 0 ? visitedA : visitedB;
+  const newRoot = smaller.has(src) ? src : dst;
+
+  const oldMembers = state.members.get(root);
+  if (!oldMembers) return false; // defensive; root should always have members
+
+  const newMembers = new Set<string>();
+  for (const id of smaller) {
+    state.parent.set(id, newRoot);
+    oldMembers.delete(id);
+    newMembers.add(id);
+  }
+  state.members.set(newRoot, newMembers);
+  state.size.set(newRoot, newMembers.size);
+  state.size.set(root, oldMembers.size);
+  // If newRoot used to be a non-root member, its old parent pointer
+  // is now stale. Setting parent[newRoot] = newRoot makes findRoot
+  // terminate correctly at it.
+  state.parent.set(newRoot, newRoot);
+  return true;
+}
+
+/**
  * Remove `id` from the union-find structure. Used when the backend
  * emits `NodeExpired` for the active window so the layout pipeline
  * doesn't keep iterating a dead pubkey in `members` and crash on
