@@ -32,11 +32,26 @@ const ATTRACTION = 0.002;
 // >0 makes bigger nodes repel harder, which creates natural hierarchy
 // (big hubs keep their personal space, small nodes orbit them).
 const SIZE_POW = 0.9;
-// For components above this size, pairwise repulsion is too expensive
-// and we skip it  attraction alone keeps the structure together, and
-// the collision pass below still runs because it's filtered to "big"
-// nodes only.
-const MAX_N2_COMPONENT_SIZE = 400;
+// Components below this size use the naive O(N^2) repulsion loop;
+// build/walk overhead of the quadtree exceeds direct pair work for
+// small N. Above this, Barnes-Hut wins and there is no upper bound
+// (we used to silently disable repulsion past 400 nodes, which is
+// what made mega-components knot up).
+const SMALL_COMPONENT_THRESHOLD = 64;
+// Barnes-Hut acceptance criterion. A tree node is treated as a
+// single point if (boxWidth / distance) < theta. Stored squared so
+// the hot test is `w*w < theta*theta * d2` with no sqrt. 0.9 is
+// aggressive but layout is approximate by construction (damping +
+// MAX_STEP); cluster shape stays the same vs theta=0.7 and the walk
+// is ~2x faster.
+const BARNES_HUT_THETA_SQ = 0.81;
+// Cap quadtree depth so coincident points (rare with hashed spawn,
+// possible after merges) bottom out as a "bucket" leaf instead of
+// looping forever. At depth 24 the cell is ~6e-7 of the original
+// bbox  far below the +0.01 force epsilon, so treating the bucket
+// as one point at its COM is physically equivalent to per-pair
+// computation.
+const TREE_MAX_DEPTH = 24;
 const MIN_ACTIVE_SIZE = 2;
 // Nodes at or above this size are treated as hubs for collision. We
 // always check hub-vs-anything pairs but skip leaf-vs-leaf  leaves
@@ -186,6 +201,339 @@ function allComponents(k: number): Int32Array {
   return _allComponentsScratch.subarray(0, k);
 }
 
+// ---------------------------------------------------------------
+// Barnes-Hut quadtree (module-scoped scratch).
+//
+// One tree is built per component per frame, then queried by every
+// member of that component to accumulate O(N log N) far-field
+// repulsion. All state lives in typed-array pools that grow
+// monotonically across frames; per-frame work is just zeroing a
+// node-count cursor. No allocations on the hot path.
+//
+// Per-node storage (one entry per tree node, indexed 0.._treeNodeCount):
+//   _treeMass[i]     during build: running mass sum; after finalize: same
+//   _treeMx[i]       during build: sum of x*mass; after finalize: COM x
+//   _treeMy[i]       during build: sum of y*mass; after finalize: COM y
+//   _treeCx[i]       bbox center x (subdivision frame, not COM)
+//   _treeCy[i]       bbox center y
+//   _treeW[i]        bbox width (max of dx, dy of the cell)
+//   _treeChildren[i*4 + k]  child node index 0..3 (NW/NE/SW/SE), -1 if absent
+//   _treeLeafSlot[i] >= 0: leaf with one point, that slot's id.
+//                    -1: internal (children populated).
+//                    -2: bucket leaf (>=2 coincident points; no children).
+//   _treeCount[i]    number of points in this subtree
+//   _treeCommunity[i] -2 unset, -1 mixed, else dominant community id
+//
+// `_masses` is per-snapshot-slot (length N, indexed by snap slot id),
+// holding sizes[s]^SIZE_POW so the quadtree can aggregate mass
+// without recomputing pow inside the hot loop.
+// ---------------------------------------------------------------
+
+let _masses: Float64Array = new Float64Array(0);
+
+let _treeCapacity = 0;
+let _treeMass: Float64Array = new Float64Array(0);
+let _treeMx: Float64Array = new Float64Array(0);
+let _treeMy: Float64Array = new Float64Array(0);
+let _treeCx: Float64Array = new Float64Array(0);
+let _treeCy: Float64Array = new Float64Array(0);
+let _treeW: Float64Array = new Float64Array(0);
+let _treeChildren: Int32Array = new Int32Array(0);
+let _treeLeafSlot: Int32Array = new Int32Array(0);
+let _treeCount: Int32Array = new Int32Array(0);
+let _treeCommunity: Int32Array = new Int32Array(0);
+let _treeNodeCount = 0;
+
+// Worst-case walk depth at any point is TREE_MAX_DEPTH * 4 (push
+// all four children at each level). Pre-allocated; never grows.
+const _traversalStack = new Int32Array(TREE_MAX_DEPTH * 4 + 16);
+
+function ensureTreeCapacity(target: number): void {
+  if (target <= _treeCapacity) return;
+  const cap = Math.max(_treeCapacity * 2, target, 256);
+  const newMass = new Float64Array(cap);
+  newMass.set(_treeMass);
+  _treeMass = newMass;
+  const newMx = new Float64Array(cap);
+  newMx.set(_treeMx);
+  _treeMx = newMx;
+  const newMy = new Float64Array(cap);
+  newMy.set(_treeMy);
+  _treeMy = newMy;
+  const newCx = new Float64Array(cap);
+  newCx.set(_treeCx);
+  _treeCx = newCx;
+  const newCy = new Float64Array(cap);
+  newCy.set(_treeCy);
+  _treeCy = newCy;
+  const newW = new Float64Array(cap);
+  newW.set(_treeW);
+  _treeW = newW;
+  const newChildren = new Int32Array(cap * 4);
+  newChildren.set(_treeChildren);
+  _treeChildren = newChildren;
+  const newLeaf = new Int32Array(cap);
+  newLeaf.set(_treeLeafSlot);
+  _treeLeafSlot = newLeaf;
+  const newCount = new Int32Array(cap);
+  newCount.set(_treeCount);
+  _treeCount = newCount;
+  const newCommunity = new Int32Array(cap);
+  newCommunity.set(_treeCommunity);
+  _treeCommunity = newCommunity;
+  _treeCapacity = cap;
+}
+
+function newTreeNode(cx: number, cy: number, w: number): number {
+  const i = _treeNodeCount++;
+  _treeMass[i] = 0;
+  _treeMx[i] = 0;
+  _treeMy[i] = 0;
+  _treeCx[i] = cx;
+  _treeCy[i] = cy;
+  _treeW[i] = w;
+  const c4 = i * 4;
+  _treeChildren[c4] = -1;
+  _treeChildren[c4 + 1] = -1;
+  _treeChildren[c4 + 2] = -1;
+  _treeChildren[c4 + 3] = -1;
+  _treeLeafSlot[i] = -1;
+  _treeCount[i] = 0;
+  _treeCommunity[i] = -2;
+  return i;
+}
+
+function newChildOf(parentIdx: number, k: number): number {
+  const half = _treeW[parentIdx] * 0.5;
+  const quarter = half * 0.5;
+  const px = _treeCx[parentIdx];
+  const py = _treeCy[parentIdx];
+  const cx = px + ((k & 1) ? quarter : -quarter);
+  const cy = py + ((k & 2) ? quarter : -quarter);
+  const idx = newTreeNode(cx, cy, half);
+  _treeChildren[parentIdx * 4 + k] = idx;
+  return idx;
+}
+
+function insertIntoTree(
+  rootIdx: number,
+  slot: number,
+  x: number,
+  y: number,
+  m: number,
+  community: number,
+  xs: Float64Array,
+  ys: Float64Array,
+  masses: Float64Array,
+  communityArr: Int32Array | null,
+): void {
+  let idx = rootIdx;
+  let depth = 0;
+  // Iterative descent. Each iteration: update aggregates at idx,
+  // decide whether to land here (empty leaf) or descend.
+  for (;;) {
+    _treeMass[idx] += m;
+    _treeMx[idx] += x * m;
+    _treeMy[idx] += y * m;
+    _treeCount[idx] += 1;
+    {
+      const cur = _treeCommunity[idx];
+      if (cur === -2) {
+        _treeCommunity[idx] = community;
+      } else if (cur !== -1 && cur !== community) {
+        // Differ (including either side being -1 unknown). Treat as
+        // mixed so the boost is conservatively skipped at this node.
+        _treeCommunity[idx] = -1;
+      }
+    }
+
+    if (_treeCount[idx] === 1) {
+      // First point in this subtree: park here as a single leaf.
+      _treeLeafSlot[idx] = slot;
+      return;
+    }
+
+    // Subtree now has >= 2 points. If we're still a single leaf,
+    // split (or, at max depth, become a bucket).
+    if (_treeLeafSlot[idx] >= 0) {
+      if (depth >= TREE_MAX_DEPTH) {
+        _treeLeafSlot[idx] = -2; // bucket marker; aggregates already include both points
+        return;
+      }
+      const priorSlot = _treeLeafSlot[idx];
+      _treeLeafSlot[idx] = -1;
+      const priorX = xs[priorSlot];
+      const priorY = ys[priorSlot];
+      const priorM = masses[priorSlot];
+      const priorC = communityArr ? communityArr[priorSlot] : -1;
+      const pK =
+        (priorX >= _treeCx[idx] ? 1 : 0) | (priorY >= _treeCy[idx] ? 2 : 0);
+      // childK 0..3, may or may not collide with the new point's quadrant.
+      let priorChildIdx = _treeChildren[idx * 4 + pK];
+      if (priorChildIdx === -1) priorChildIdx = newChildOf(idx, pK);
+      // Seed the child with the prior point's contribution. If the
+      // new point hits the same quadrant, the next iteration will
+      // add its contribution on top via the standard aggregate
+      // update at the loop head.
+      _treeMass[priorChildIdx] = priorM;
+      _treeMx[priorChildIdx] = priorX * priorM;
+      _treeMy[priorChildIdx] = priorY * priorM;
+      _treeCount[priorChildIdx] = 1;
+      _treeCommunity[priorChildIdx] = priorC;
+      _treeLeafSlot[priorChildIdx] = priorSlot;
+    } else if (_treeLeafSlot[idx] === -2) {
+      // Already a bucket; aggregates are correct, nothing to do.
+      return;
+    }
+
+    // Descend into the new point's quadrant.
+    const k = (x >= _treeCx[idx] ? 1 : 0) | (y >= _treeCy[idx] ? 2 : 0);
+    let childIdx = _treeChildren[idx * 4 + k];
+    if (childIdx === -1) childIdx = newChildOf(idx, k);
+    idx = childIdx;
+    depth += 1;
+  }
+}
+
+function buildQuadtree(
+  snap: LayoutSnapshot,
+  memStart: number,
+  n: number,
+): number {
+  // Bbox of this component's members.
+  const xs = snap.xs;
+  const ys = snap.ys;
+  let xmin = Infinity;
+  let ymin = Infinity;
+  let xmax = -Infinity;
+  let ymax = -Infinity;
+  for (let ii = 0; ii < n; ii++) {
+    const s = snap.members[memStart + ii];
+    const x = xs[s];
+    const y = ys[s];
+    if (x < xmin) xmin = x;
+    if (x > xmax) xmax = x;
+    if (y < ymin) ymin = y;
+    if (y > ymax) ymax = y;
+  }
+  const cx = (xmin + xmax) * 0.5;
+  const cy = (ymin + ymax) * 0.5;
+  let w = Math.max(xmax - xmin, ymax - ymin);
+  // Guard the all-coincident case so subdivision still has a frame.
+  if (w < 1) w = 1;
+  // Tiny epsilon so points exactly on the right/bottom edge land
+  // inside the cell after the >= comparison in `quadrant`.
+  w *= 1.0001;
+
+  // Reserve enough nodes that no insert hits a realloc. Worst case
+  // for a fully unique distribution is ~4N/3 nodes; over-provision
+  // to cover splits at any depth.
+  ensureTreeCapacity(_treeNodeCount + 4 * n + 8);
+  _treeNodeCount = 0;
+  const rootIdx = newTreeNode(cx, cy, w);
+
+  const masses = _masses;
+  const community = snap.community;
+
+  for (let ii = 0; ii < n; ii++) {
+    const s = snap.members[memStart + ii];
+    const x = xs[s];
+    const y = ys[s];
+    const m = masses[s];
+    const c = community ? community[s] : -1;
+    insertIntoTree(rootIdx, s, x, y, m, c, xs, ys, masses, community);
+  }
+
+  // Convert running (sum of x*mass) / (sum of y*mass) to COM by
+  // dividing by total mass. After this pass _treeMx / _treeMy hold
+  // the center of mass per node.
+  for (let i = 0; i < _treeNodeCount; i++) {
+    const m = _treeMass[i];
+    if (m > 0) {
+      _treeMx[i] /= m;
+      _treeMy[i] /= m;
+    }
+  }
+
+  return rootIdx;
+}
+
+function accumulateRepulsion(
+  siSlot: number,
+  rootIdx: number,
+  xs: Float64Array,
+  ys: Float64Array,
+  sizes: Float64Array,
+  fx: Float64Array,
+  fy: Float64Array,
+  community: Int32Array | null,
+): void {
+  const sx = xs[siSlot];
+  const sy = ys[siSlot];
+  const sMass = _masses[siSlot];
+  const sCommunity = community ? community[siSlot] : -1;
+  const stack = _traversalStack;
+  let top = 0;
+  stack[top++] = rootIdx;
+  while (top > 0) {
+    const idx = stack[--top];
+    if (_treeCount[idx] === 0) continue;
+
+    const dx = _treeMx[idx] - sx;
+    const dy = _treeMy[idx] - sy;
+    const d2 = dx * dx + dy * dy + 0.01;
+    const w = _treeW[idx];
+
+    const leafSlot = _treeLeafSlot[idx];
+    if (leafSlot >= 0) {
+      // Single-point leaf.
+      if (leafSlot === siSlot) continue;
+      const sj = leafSlot;
+      const d = Math.sqrt(d2);
+      const sizeFactor = Math.pow(sizes[siSlot] * sizes[sj], SIZE_POW);
+      const cI = sCommunity;
+      const cJ = community ? community[sj] : -1;
+      const crossCommunity = cI !== -1 && cJ !== -1 && cI !== cJ;
+      const cf = crossCommunity ? CROSS_COMMUNITY_REPULSION_FACTOR : 1;
+      const f = (REPULSION * sizeFactor * cf) / d2;
+      const ux = dx / d;
+      const uy = dy / d;
+      fx[siSlot] -= f * ux;
+      fy[siSlot] -= f * uy;
+      continue;
+    }
+
+    if (leafSlot === -2 || w * w < BARNES_HUT_THETA_SQ * d2) {
+      // Far enough (or bucket of coincident points): treat as one
+      // point at COM with summed mass. Force on si only; the
+      // represented points each walk the tree on their own.
+      const M = _treeMass[idx];
+      const cI = sCommunity;
+      const cJ = _treeCommunity[idx];
+      const crossCommunity = cI !== -1 && cJ !== -1 && cI !== cJ;
+      const cf = crossCommunity ? CROSS_COMMUNITY_REPULSION_FACTOR : 1;
+      const f = (REPULSION * sMass * M * cf) / d2;
+      const d = Math.sqrt(d2);
+      const ux = dx / d;
+      const uy = dy / d;
+      fx[siSlot] -= f * ux;
+      fy[siSlot] -= f * uy;
+      continue;
+    }
+
+    // Internal, too close: recurse.
+    const c4 = idx * 4;
+    const c0 = _treeChildren[c4];
+    const c1 = _treeChildren[c4 + 1];
+    const c2 = _treeChildren[c4 + 2];
+    const c3 = _treeChildren[c4 + 3];
+    if (c0 !== -1) stack[top++] = c0;
+    if (c1 !== -1) stack[top++] = c1;
+    if (c2 !== -1) stack[top++] = c2;
+    if (c3 !== -1) stack[top++] = c3;
+  }
+}
+
 /**
  * Step physics one frame. Mutates `snap.xs`, `snap.ys`, and
  * `state.velocities` in place. Force arrays in `state` are zeroed
@@ -209,6 +557,18 @@ export function stepLayout(snap: LayoutSnapshot, state: LayoutState): void {
   const isTip = snap.isTip;
   const community = snap.community;
 
+  // Pre-compute per-slot effective mass (size^SIZE_POW) for the
+  // Barnes-Hut tree. The pair force is REPULSION * (sizeI*sizeJ)^p,
+  // and (a*b)^p == a^p * b^p, so a tree node's summed mass times the
+  // query node's mass gives the correct aggregate force without
+  // per-pair pow().
+  if (_masses.length < N) {
+    _masses = new Float64Array(N);
+  }
+  for (let s = 0; s < N; s++) {
+    _masses[s] = Math.pow(sizes[s], SIZE_POW);
+  }
+
   const components = snap.dirtyComponents ?? allComponents(snap.numComponents);
 
   for (let dIdx = 0; dIdx < components.length; dIdx++) {
@@ -219,7 +579,15 @@ export function stepLayout(snap: LayoutSnapshot, state: LayoutState): void {
     if (n < MIN_ACTIVE_SIZE) continue;
 
     // (1) Pairwise repulsion within the component.
-    if (n <= MAX_N2_COMPONENT_SIZE) {
+    //
+    // Two paths: at small N the naive O(N^2) double loop is the
+    // cheapest option (no tree build, tight inner loop); above the
+    // threshold a Barnes-Hut quadtree drops the cost to O(N log N)
+    // per query and lets components of any size feel real
+    // repulsion. The previous implementation silently disabled
+    // repulsion past 400 nodes, which is what made mega-hubs look
+    // knotted; that gate is gone.
+    if (n < SMALL_COMPONENT_THRESHOLD) {
       for (let ii = 0; ii < n; ii++) {
         const si = snap.members[memStart + ii];
         for (let jj = ii + 1; jj < n; jj++) {
@@ -243,6 +611,21 @@ export function stepLayout(snap: LayoutSnapshot, state: LayoutState): void {
           fx[sj] += f * ux;
           fy[sj] += f * uy;
         }
+      }
+    } else {
+      const rootIdx = buildQuadtree(snap, memStart, n);
+      for (let ii = 0; ii < n; ii++) {
+        const si = snap.members[memStart + ii];
+        accumulateRepulsion(
+          si,
+          rootIdx,
+          xs,
+          ys,
+          sizes,
+          fx,
+          fy,
+          community,
+        );
       }
     }
 
