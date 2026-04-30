@@ -54,13 +54,15 @@ is what the budget buckets key on.
   Capacity + refill rate, request admitted if tokens available.
   Repurposed here so the "tokens" represent cost units, not request
   counts.
-- **Anthropic API rate limits.** The vendor's own approach: separate
-  buckets for input tokens, output tokens, requests per minute, all
-  enforced simultaneously. Multi-axis is the industry-default at
-  scale.
-- **OpenAI organization spend limits.** Per-org dollar ceiling per
-  month, hard-capped at provider level. A coarser version of the
-  same idea.
+- **Vendor API rate-limit shapes.** Major providers (OpenAI,
+  Anthropic, Google, etc.) all converge on per-axis buckets:
+  separate counters for input tokens, output tokens, requests per
+  minute, enforced simultaneously. Multi-axis is the industry-
+  default at scale; we mirror the shape internally for our own
+  budget framework.
+- **Provider-side organization spend limits.** Per-org dollar
+  ceilings per month, hard-capped at the vendor level. A coarser
+  version of the same idea.
 - **ClickHouse `max_execution_time` and `max_rows_to_read`.** The
   database-side cost ceiling. Per-query and per-user. Set as
   defense-in-depth alongside the application-level budget.

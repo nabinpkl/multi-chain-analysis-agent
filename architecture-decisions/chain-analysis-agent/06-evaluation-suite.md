@@ -42,10 +42,10 @@ all three.
   suite. Reference for the "diverse fixed question set" pattern. Our
   golden set is much smaller (30-50 questions) but the structural
   approach is the same.
-- **Anthropic, "Evaluating prompt engineering" (production
-  guidance).** The vendor's own pattern: small held-out test set,
-  structural assertions, regression gating. Aligns with what we
-  implement here.
+- **Vendor eval guidance (Anthropic, OpenAI).** Convergent pattern
+  across major providers: small held-out test set, structural
+  assertions, regression gating. Aligns with what we implement
+  here.
 - **OpenAI evals framework.** Adjacent prior art. Class-based eval
   definitions, structured output assertions. Not directly used (we
   ship our own runner) but the design influence is direct.

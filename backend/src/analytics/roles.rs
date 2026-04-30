@@ -36,7 +36,18 @@ const WHALE_DEGREE_MAX: u32 = 10;
 /// Wire-stable per-node role tag. Kebab-case strings on the wire so the
 /// frontend's existing union type
 /// (`"token-mint" | "tip-account" | ...`) reads them unchanged.
-#[derive(Serialize, TS, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(
+    Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+    TS,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+)]
 #[serde(rename_all = "kebab-case")]
 #[ts(export, export_to = "../../frontend/src/lib/generated/")]
 pub enum NodeRole {

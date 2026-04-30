@@ -2,9 +2,15 @@
 
 import "@react-sigma/core/lib/style.css";
 
-import { SigmaContainer, useSigma } from "@react-sigma/core";
+import {
+  SigmaContainer,
+  useRegisterEvents,
+  useSigma,
+} from "@react-sigma/core";
 import type Graph from "graphology";
 import { useEffect, useMemo } from "react";
+
+import { useGraphFocus } from "@/stores/use-graph-focus";
 
 interface RawGraphCanvasProps {
   graph: Graph;
@@ -12,6 +18,30 @@ interface RawGraphCanvasProps {
 
 const BG = "#0c0d12";
 const LABEL_COLOR = "#e9ebf1";
+
+/**
+ * Wires Sigma node-level events into the focus store so the agent
+ * panel can read what the user clicked. Per D-6: structured frontend
+ * context is the strongest disambiguation signal. Click sets focus
+ * (sticky); hover updates the transient hover field. Clicking the
+ * stage (off any node) clears focus.
+ */
+function FocusEventBridge() {
+  const registerEvents = useRegisterEvents();
+  const setFocus = useGraphFocus((s) => s.setFocus);
+  const setHover = useGraphFocus((s) => s.setHover);
+
+  useEffect(() => {
+    registerEvents({
+      clickNode: (e) => setFocus(e.node),
+      enterNode: (e) => setHover(e.node),
+      leaveNode: () => setHover(null),
+      clickStage: () => setFocus(null),
+    });
+  }, [registerEvents, setFocus, setHover]);
+
+  return null;
+}
 
 /**
  * Refits the camera to the graph as it grows. Sigma only auto-fits on
@@ -93,6 +123,7 @@ export function RawGraphCanvas({ graph }: RawGraphCanvasProps) {
       settings={settings}
     >
       <CameraAutoFit graph={graph} />
+      <FocusEventBridge />
     </SigmaContainer>
   );
 }

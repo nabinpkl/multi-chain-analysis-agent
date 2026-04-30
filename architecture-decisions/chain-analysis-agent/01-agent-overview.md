@@ -73,9 +73,9 @@ frontend. Same ClickHouse instance, dedicated read-only role.
                                  v
 +----------------+        +------+--------+        +---------------+
 |  GraphState    |<------ | Agent runtime |------> | LLM provider  |
-|  (live)        |  read  |  - planner    |        |  (Anthropic)  |
-+----------------+        |  - executor   |        +---------------+
-                          |  - policy     |
+|  (live)        |  read  |  - planner    |        |  (via rig,    |
++----------------+        |  - executor   |        |   swappable)  |
+                          |  - policy     |        +---------------+
 +----------------+        |  - budget     |        +---------------+
 |  ClickHouse    |<------ |  - ledger     |------> | Output policy |
 |  (warehouse)   | read   +---+-----------+        | (cheap model) |
@@ -139,16 +139,32 @@ duplicating the existing analytics-task pattern. The cost-amplification
 risk that motivates a separate process (agent runaway pegging the
 host) is already addressed by the budget buckets in phase 05.
 
-### D-2: Model versioning
+### D-2: Provider-agnostic LLM client + pinned model identifiers
 
-**Decision:** pin exact model strings in Rust constants. No floating
-"latest" aliases. Two model slots: a primary reasoning model
-(`claude-sonnet-4-5-...`) and an output-policy model (the cheapest
-Claude variant that still parses structured output). Updating a model
-is a code change with an eval-suite gate (phase 06).
+**Decision:** the LLM client is `rig` (provider-agnostic Rust crate
+with native support for ~20 providers). Provider and model are
+selected at deploy time via configuration, not hard-coded in the
+loop. Within that configuration, exact model identifiers are pinned
+in Rust constants per environment. No floating "latest" aliases.
 
-**Rationale:** floating aliases produce silent regressions on vendor
-updates. Pinning forces every model change through review.
+Two model slots:
+- **Primary reasoning model.** The high-capability model the loop
+  uses for the main turn-by-turn reasoning.
+- **Output-policy model.** The cheapest model variant available
+  from the configured provider that still parses structured input
+  and produces structured output reliably.
+
+Updating either the provider or a pinned model identifier is a
+code change with an eval-suite gate (phase 06).
+
+**Rationale:** floating aliases produce silent regressions on
+vendor updates; pinning forces every model change through review.
+Provider abstraction (via rig) keeps the loop usable across
+vendors so a pricing or capability shift does not strand the
+codebase on a single vendor. The agent loop, primitive layer,
+prompt assembly, output policy, ledger, and cost framework are all
+provider-neutral; vendor-specific shape lives behind rig's
+abstraction.
 
 ### D-3: Conversation surface
 
@@ -227,8 +243,9 @@ disambiguation work, in decreasing order of authority:
    reasoning.
 3. **Tool descriptions with routing examples.** Each primitive's
    description teaches when to pick `Live` vs `Range` from question
-   patterns. Anthropic's tool-use guidance: rich descriptions with
-   examples beat clever system prompts.
+   patterns. Vendor function-calling guidance across providers
+   converges: rich descriptions with examples beat clever system
+   prompts.
 
 The model's judgment is the residual layer, not the primary one,
 applied only when the prior three leave ambiguity. The system
@@ -246,6 +263,38 @@ decisions explicit at the type level. Misroutes are bounded: a
 window costs little. Drift telemetry (phase 04) catches recurring
 misroutes; descriptions tighten in response.
 
+### D-7: Two modes (reactive + proactive) over one core
+
+**Decision:** the agent runs in two modes that share every
+underlying layer (primitives, claim format, ledger, output policy,
+cost framework). **Reactive** answers user questions in the
+sidebar. **Proactive** surfaces unprompted observations to a
+separate "pulse" panel by running an LLM analyst over a structured
+signal stream produced by deterministic Rust extractors. Pulse
+claims feed back into the reactive `ViewContext` so the user can
+interrogate them without ambiguity ("tell me more about that
+wallet you just flagged"). Detail in `08-proactive-pulse.md`.
+
+**Rationale:** the high-value observations in a busy graph combine
+multiple signals in ways no hand-written rule encodes (an MPC
+cluster forming + members in last hour's top-10 + one tagged
+yesterday). Two failure shapes were rejected:
+
+- **Hardcoded watchers** catch only what their author thought of;
+  every interesting combination cannot be enumerated; maintenance
+  scales quadratically as new signal classes interact with old.
+- **Pure LLM scanning** of raw graph state is too expensive,
+  fixates on surface features, and lacks auditable coverage.
+
+The split is two-layer: cheap deterministic extractors generate a
+dense typed signal stream (full coverage, no LLM cost); an LLM
+analyst combines signals on a slower cadence and emits hedged,
+provenance-attached claims. Proactivity is not hardcoded; the agent
+is the layer that does the combining, which is where pretrained
+pattern noticing earns its keep. Bounded by a `system` principal
+in the same cost framework; degrades gracefully on budget
+exhaustion to a deterministic structured summary.
+
 ## Phase index
 
 Each row links to a self-contained design document. Phases are
@@ -260,6 +309,7 @@ where flexibility exists.
 | 05 | Anonymous principal + cost rate-limiting | 04 (writes through ledger) | not started |
 | 06 | Evaluation suite | 02, 03, 04 | not started |
 | 07 | Polish + analyst surfaces | 02, 03, 04, 05, 06 | not started |
+| 08 | Proactive pulse (signal stream + analyst) | 02, 03, 04, 05; eval extension lands with 06 | not started |
 
 ## Working with this document set
 
@@ -291,10 +341,16 @@ rationale>`. Reference an earlier decision by id when overriding.
 ## References
 
 - OWASP Top 10 for Large Language Model Applications, 2025 edition.
-- Anthropic, "Tool use with Claude" (production guidance for typed
-  function calling).
-- Anthropic, "Mitigating prompt injections" (layered defense
-  guidance).
+- Vendor function-calling specifications: OpenAI function calling,
+  Anthropic tool use, Google Gemini function calling. Convergent
+  shape (typed function-calling with JSON-schema-validated args).
+- Vendor prompt-injection mitigation guidance (Anthropic, OpenAI,
+  Microsoft, NVIDIA): all converge on layered defense (structural
+  separation, system-prompt rules, output filtering).
+- `rig` crate documentation (Rust LLM client with provider-native
+  abstractions across ~20 providers).
+- Model Context Protocol (MCP) specification (open protocol for
+  tool exposure to LLM clients).
 - ClickHouse documentation: `max_execution_time`,
   `max_rows_to_read`, `EXPLAIN ESTIMATE`, read-only user roles.
 - W3C, Server-Sent Events specification.

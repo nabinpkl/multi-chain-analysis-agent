@@ -5,6 +5,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 
+mod agent;
 mod analytics;
 mod api;
 mod config;
@@ -112,6 +113,14 @@ async fn main() -> anyhow::Result<()> {
         for h in analytics_handles {
             bg_handles.push(h);
         }
+    }
+
+    // agent runtime: per phase 03/00-build-order ship-0. v0 is an idle
+    // task; the SSE handler drives the LLM round-trip directly. Future
+    // ships move the loop into this task.
+    {
+        let agent_handle = agent::Agent::spawn(state.clone(), shutdown_rx.clone());
+        bg_handles.push(agent_handle);
     }
 
     if config.solana_rpc_url.is_empty() {

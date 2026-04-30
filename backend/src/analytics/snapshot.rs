@@ -38,7 +38,7 @@ pub struct WindowSnapshot {
 /// edges only (kind == None); SPL movements don't carry SOL amounts in
 /// this v0 ingester. `sol_degree` / `spl_degree` count unique
 /// counterparties partitioned by edge kind.
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Copy, Debug)]
 pub struct NodeStats {
     /// Unique counterparties (any kind).
     pub degree: u32,

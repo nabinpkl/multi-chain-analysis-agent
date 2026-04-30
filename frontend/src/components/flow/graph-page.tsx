@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   DEFAULT_WINDOW_SECONDS,
   WINDOW_SECONDS,
@@ -14,6 +14,8 @@ import type { NodeRole } from "@/lib/role-detect";
 import { formatInt } from "@/lib/format";
 import { LiveIndicator } from "@/components/flow/live-indicator";
 import { LouvainSourceToggle } from "@/components/flow/louvain-source-toggle";
+import { AgentSheet } from "@/components/agent/agent-sheet";
+import { AgentToggle } from "@/components/agent/agent-toggle";
 import { cn } from "@/lib/utils";
 
 const WINDOW_LABELS: Record<WindowSeconds, string> = {
@@ -71,7 +73,25 @@ const RawGraphCanvas = dynamic(
 
 export function GraphPage() {
   const [windowSecs, setWindowSecs] = useState<WindowSeconds>(DEFAULT_WINDOW_SECONDS);
+  const [agentOpen, setAgentOpen] = useState(false);
   const { graph, status, roleSummary, reset } = useRawStream({ windowSecs });
+
+  // Global ⌘K / Ctrl+K toggles the agent sheet. Skip when the user is
+  // typing into an input or textarea (the textarea inside the agent
+  // sheet uses the same key as a no-op there).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+        const target = e.target as HTMLElement | null;
+        const tag = target?.tagName?.toLowerCase();
+        if (tag === "input" || tag === "textarea") return;
+        e.preventDefault();
+        setAgentOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)] min-h-[640px]">
@@ -79,8 +99,20 @@ export function GraphPage() {
         <h1 className="text-[0.7rem] uppercase tracking-[2px] text-mca-muted">
           Solana SOL flow · raw stream
         </h1>
-        <LiveIndicator active={status.connected} />
+        <div className="flex items-center gap-3">
+          <AgentToggle
+            open={agentOpen}
+            onToggle={() => setAgentOpen((v) => !v)}
+          />
+          <LiveIndicator active={status.connected} />
+        </div>
       </header>
+
+      <AgentSheet
+        open={agentOpen}
+        onOpenChange={setAgentOpen}
+        liveWindowSecs={windowSecs}
+      />
 
       <div className="flex-1 flex min-h-0">
         <div className="flex-1 relative bg-mca-bg">

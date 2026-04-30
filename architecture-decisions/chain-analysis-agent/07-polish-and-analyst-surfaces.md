@@ -104,7 +104,7 @@ ledger (phase 04) as a timeline:
 [session-uuid]
  t=0ms        SessionStarted (principal abc123)
  t=12ms       Prompt (system v3, user "profile wallet 9n4...")
- t=140ms     LlmCall (claude-sonnet-4-5, 1240 input)
+ t=140ms     LlmCall (model: <pinned>, 1240 input)
  t=2890ms     LlmResponse (450 output, stop=tool_use)
  t=2891ms      ToolCall wallet_profile { addr: "9n4..." }
  t=2912ms      ToolResult (12 KB) ok

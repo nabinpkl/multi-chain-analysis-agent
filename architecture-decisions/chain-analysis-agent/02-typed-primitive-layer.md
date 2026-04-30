@@ -27,17 +27,19 @@ the executor that runs each primitive against the right backend.
 The typed primitive layer is the dominant pattern for production LLM
 agents that touch real data:
 
-- **Anthropic tool use specification.** The native shape for Claude
-  to call a typed function with JSON-schema-validated arguments.
-  Reference: Anthropic API documentation, `tools` array on the
-  messages endpoint.
-- **OpenAI function calling.** Equivalent on the OpenAI side. Same
-  pattern: tool definitions with JSON schemas, model emits a
-  validated call.
-- **Model Context Protocol (MCP).** Anthropic's open protocol for
-  exposing tools to a model from an external server. Same shape at
-  the wire level. Useful as a future extension if we ever want to
-  expose primitives to other model clients.
+- **Vendor function-calling APIs.** OpenAI function calling,
+  Anthropic tool use, Google Gemini function calling, and others.
+  The shape has converged across providers: tool definitions with
+  JSON-schema-validated arguments; the model emits a validated
+  call. Our LLM client (`rig`) abstracts over them; the typed
+  primitive layer is the same shape regardless of which provider
+  serves.
+- **Model Context Protocol (MCP).** Open protocol for exposing
+  tools to a model from an external server. Originally from
+  Anthropic and now supported by multiple clients. Same shape at
+  the wire level. Useful as a future extension if we want to
+  expose primitives to other model clients (e.g. a Python research
+  client).
 - **Capability-based security.** Each tool is a capability; the
   agent has only the capabilities the runtime hands it. No tool means
   no access. Original literature: Dennis & Van Horn, 1966; modern

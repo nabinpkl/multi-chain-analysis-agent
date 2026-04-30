@@ -7,6 +7,10 @@ edition = "2024"
 name = "server"
 path = "src/main.rs"
 
+[[bin]]
+name = "agent_smoke"
+path = "src/bin/agent_smoke.rs"
+
 [dependencies]
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
@@ -29,3 +33,14 @@ parking_lot = "0.12"
 ts-rs = { version = "10", features = ["serde-compat"] }
 rustc-hash = "2"
 rayon = "1"
+# Agent. rig-core pinned at the version that introduces OpenRouter
+# native support with the current builder API. Pre-1.0; upgrades are
+# deliberate. async-stream backs the SSE handler; fastrand provides
+# session-id randomness; schemars provides JSON schema for tool
+# definitions; ulid for sortable claim ids.
+rig-core = "=0.36.0"
+async-stream = "0.3"
+fastrand = "2"
+schemars = "0.8"
+ulid = { version = "1", features = ["serde"] }
+sha2 = "0.10"

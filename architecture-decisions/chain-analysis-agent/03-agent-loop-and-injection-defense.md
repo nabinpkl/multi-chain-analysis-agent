@@ -38,10 +38,10 @@ solved together because they share the same prompt-assembly seam:
 - **OWASP LLM02 (Insecure Output Handling).** Treats the LLM as an
   untrusted source for downstream consumers. Renderer-level escaping
   + structured-only outputs are the standard mitigation.
-- **Anthropic, "Mitigating jailbreaks and prompt injections."** Names
-  the layered approach: structural separation, system-prompt rules,
-  output filtering. Notes that no single layer suffices in
-  adversarial settings.
+- **Vendor mitigation guidance (Anthropic, OpenAI, Microsoft,
+  NVIDIA).** All converge on a layered approach: structural
+  separation, system-prompt rules, output filtering. All vendors
+  note that no single layer suffices in adversarial settings.
 - **Greshake et al., "Not what you've signed up for: Compromising
   Real-World LLM-Integrated Applications with Indirect Prompt
   Injection" (2023).** The seminal academic treatment. Demonstrates
@@ -57,11 +57,12 @@ solved together because they share the same prompt-assembly seam:
 - **ReAct (Yao et al., 2022).** The reason+act loop pattern. Most
   modern tool-using agents are ReAct variants.
 - **Toolformer (Schick et al., 2023).** Earlier formulation;
-  superseded by native tool-use APIs in Claude / OpenAI but the
+  superseded by native tool-use APIs across modern vendors but the
   underlying logic is the same.
-- **Anthropic tool use loop.** The vendor-recommended structure for a
-  ReAct-style loop with Claude. Reference: Anthropic API
-  documentation, "Tool use" section.
+- **Vendor tool-use loop guidance.** OpenAI, Anthropic, Google
+  publish recommended ReAct-style loop structures for their
+  function-calling APIs. The structures converge; `rig`'s `Agent`
+  abstraction encodes the convergent shape.
 
 ### Streaming
 
@@ -91,10 +92,11 @@ solved together because they share the same prompt-assembly seam:
    visually, gray it out, or annotate it? Pick one and apply
    uniformly so the UI doesn't have multiple states to render.
 
-3. **Tool call concurrency.** Claude supports parallel tool calls in
-   a single turn. Use them or run sequentially? Parallel is faster
-   but harder to budget pre-flight. Default position: sequential for
-   v0, revisit when budget mechanics in phase 05 are stable.
+3. **Tool call concurrency.** Most current vendor APIs support
+   parallel tool calls in a single turn. Use them or run
+   sequentially? Parallel is faster but harder to budget pre-flight.
+   Default position: sequential for v0, revisit when budget
+   mechanics in phase 05 are stable.
 
 4. **Conversation memory.** Single-turn (each question fresh) or
    multi-turn (follow-up questions remember earlier claims)? Multi-
@@ -133,8 +135,18 @@ pub struct ViewContext {
     pub focus: Option<EntityRef>,              // hovered/selected node
     pub selection: Vec<EntityRef>,             // multi-select
     pub visible_communities: Vec<u32>,         // currently rendered
+    pub recent_pulse: Vec<PulseClaimRef>,      // last K pulse claims
+                                               //   (phase 08, populated when
+                                               //   proactive pulse is enabled)
 }
 ```
+
+`recent_pulse` carries the headlines and ids of the most recent
+proactive observations so a follow-up question ("tell me more about
+that wallet you just flagged") resolves "that" against structured
+ground truth rather than model heuristic. The field is empty when
+phase 08 is not deployed; the reactive agent treats it as ground
+truth when present.
 
 The block is injected into the prompt as a JSON-typed `<context>`
 section, separate from the user's free-text question. Two reasons
@@ -156,7 +168,7 @@ model judgment when the block doesn't constrain the answer.
 
 ```
 loop {
-    let response = claude.messages(messages, tools, system).await?;
+    let response = llm.complete(messages, tools, system).await?;
     match response {
         StopReason::EndTurn => {
             emit_remaining_claims_buffer();
@@ -177,6 +189,9 @@ loop {
 }
 ```
 
+`llm` here is a provider-neutral handle from `rig`; the same loop
+runs against any provider rig supports.
+
 Each iteration does one round trip to the LLM. The model decides
 whether to call more tools or end; the runtime supplies tool results
 and budget telemetry as system context.
@@ -194,18 +209,19 @@ in delimited blocks before the model sees it. Example:
 
 The system prompt includes a paragraph explaining that text inside
 `<external_data>` blocks is data, not instructions, and that any
-imperative text inside such blocks must be ignored. Modern Claude is
-robust to this on its own; the explicit contract reduces the failure
-rate further.
+imperative text inside such blocks must be ignored. Modern frontier
+models are robust to this on their own; the explicit contract
+reduces the failure rate further.
 
 ### Layer 2: tool-result-as-data
 
-Primitive outputs are returned as Anthropic `tool_result` content
-blocks, never concatenated into the user message or system prompt.
-Tool results carry their own role in the conversation; the model is
-trained to treat them as evidence, not commands. This is a stronger
-boundary than a delimiter alone because the model's instruction-
-following is conditioned on role.
+Primitive outputs are returned as `tool_result` content blocks
+(per the vendor's function-calling protocol; rig presents the same
+shape across providers), never concatenated into the user message
+or system prompt. Tool results carry their own role in the
+conversation; modern models are trained to treat them as evidence,
+not commands. This is a stronger boundary than a delimiter alone
+because the model's instruction-following is conditioned on role.
 
 ### Layer 3: output policy
 
@@ -223,9 +239,10 @@ The constitution (versioned alongside the system prompt) covers:
 - No statements about the agent itself except metering ("I have N%
   budget remaining").
 
-The policy model is the cheapest Claude variant that reliably parses
-structured input and produces structured output. Pinned in code per
-decision D-2 in the overview.
+The policy model is the cheapest variant available from the
+configured provider that reliably parses structured input and
+produces structured output. Pinned in code per decision D-2 in the
+overview.
 
 ### Claim wire format
 

@@ -4,7 +4,11 @@ use clickhouse::Client;
 use parking_lot::RwLock;
 use tokio::sync::{broadcast, watch};
 
+use crate::agent::{
+    AgentClient, BudgetGate, Ledger, OutputPolicy, PrimitiveRegistry, StubRegistry,
+};
 use crate::analytics::{AnalyticsChannels, AnalyticsSnapshot};
+use crate::api::agent::AgentSessions;
 use crate::config::Config;
 use crate::graph::GraphState;
 use crate::graph::delta::GraphDelta;
@@ -55,6 +59,23 @@ pub struct AppState {
     pub analytics: AnalyticsChannels,
     /// In-memory graph engine: node interner + adjacency + Union-Find.
     pub graph: Arc<RwLock<GraphState>>,
+    /// rig-backed LLM client. `None` when `AGENT_API_KEY` is unset;
+    /// agent endpoints return 503 in that case so the rest of the
+    /// server still boots and serves /graph/stream.
+    pub agent_client: Option<AgentClient>,
+    /// In-memory pending-session map for POST /agent/ask -> SSE
+    /// /agent/stream/:id handoff.
+    pub agent_sessions: AgentSessions,
+    /// Action ledger writer (per phase 04). Sync writes in v0.
+    pub agent_ledger: Ledger,
+    /// Tool registry. Built once at startup; immutable thereafter.
+    pub agent_registry: Arc<PrimitiveRegistry>,
+    /// Output-policy gate (phase 03 layer 3). v0 stub: always Approved.
+    pub agent_policy: Arc<OutputPolicy>,
+    /// Cost-rate-limit gate (phase 05). v0 stub: always Ok.
+    pub agent_budget: Arc<BudgetGate>,
+    /// Stub registry surfaced via /agent/diagnostics + the UI banner.
+    pub agent_stubs: Arc<StubRegistry>,
 }
 
 impl AppState {
@@ -77,6 +98,20 @@ impl AppState {
         let ch_store = Arc::new(ClickHouseEdgeStore::new(clickhouse.clone()));
         let (analytics, analytics_senders) = AnalyticsChannels::new();
 
+        let agent_config = crate::agent::AgentConfig::from_env();
+        let agent_client = crate::agent::build_client(&agent_config);
+
+        // Stub registry first; policy + budget register their stubs
+        // into it during construction. Pre-register per-primitive
+        // stubs so the diagnostics endpoint lists them even before
+        // anyone calls them.
+        let agent_stubs = StubRegistry::new();
+        let agent_policy = Arc::new(OutputPolicy::new(agent_stubs.clone()));
+        let agent_budget = Arc::new(BudgetGate::new(agent_stubs.clone()));
+        crate::agent::register_primitive_stubs(&agent_stubs);
+        let agent_registry = Arc::new(crate::agent::build_registry());
+        let agent_ledger = Ledger::new(clickhouse.clone());
+
         let state = Self {
             clickhouse,
             store: ch_store,
@@ -84,6 +119,13 @@ impl AppState {
             deltas: WindowChannels::new(),
             analytics,
             graph: Arc::new(RwLock::new(GraphState::default())),
+            agent_client,
+            agent_sessions: AgentSessions::new(),
+            agent_ledger,
+            agent_registry,
+            agent_policy,
+            agent_budget,
+            agent_stubs,
         };
         (state, analytics_senders)
     }

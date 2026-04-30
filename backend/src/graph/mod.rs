@@ -522,6 +522,13 @@ impl GraphState {
         self.interner.lookup(idx)
     }
 
+    /// Reverse lookup: pubkey -> NodeIdx if currently interned. Used by
+    /// the agent's `wallet_profile` primitive to translate a model-supplied
+    /// addr into the indexed identifier the snapshot helpers use.
+    pub fn lookup_idx(&self, pubkey: &str) -> Option<NodeIdx> {
+        self.interner.lookup_idx(pubkey)
+    }
+
     /// Is there at least one live edge in either direction between
     /// `a` and `b`? Used to detect first-edge-for-this-pair so we can
     /// bump unique_degree only when the pair becomes connected.
