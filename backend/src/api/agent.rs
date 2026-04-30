@@ -198,6 +198,14 @@ fn frame_to_event(frame: SseFrame) -> Result<Event, Infallible> {
                 .event("error")
                 .data(format!("serialize Progress failed: {e}")),
         },
+        SseFrame::Narrative { text } => match serde_json::to_string(&serde_json::json!({
+            "text": text,
+        })) {
+            Ok(json) => Event::default().event("Narrative").data(json),
+            Err(e) => Event::default()
+                .event("error")
+                .data(format!("serialize Narrative failed: {e}")),
+        },
         SseFrame::Error { message } => match serde_json::to_string(&serde_json::json!({
             "message": message,
         })) {

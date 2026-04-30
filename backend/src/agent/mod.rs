@@ -24,7 +24,7 @@ pub use config::AgentConfig;
 pub use ledger::Ledger;
 pub use policy::OutputPolicy;
 pub use primitives::{PrimitiveRegistry, SseFrame};
-pub use prompt::{PROMPT_V1_TAG, PROMPT_V1_TEXT, active_prompt};
+pub use prompt::{PROMPT_V1_TAG, PROMPT_V1_TEXT, PROMPT_V2_TAG, PROMPT_V2_TEXT, active_prompt};
 pub use runtime::{Agent, build_client};
 pub use stubs::{StubInfo, StubInfoWire, StubRegistry};
 pub use types::{
@@ -66,6 +66,21 @@ pub fn register_thread_stubs(stubs: &StubRegistry) {
         component: "thread_state",
         reason: "threads live in-process: no persistence (refresh/restart drops), no length cap, no token cap, no TTL, no per-principal scoping. cost caps land in ship 4; persistent + recallable conversation memory is its own future phase.",
         promoted_in_ship: 4,
+    });
+}
+
+/// Pre-register the Ship 1.6 Narrative-channel stubs. Hit every time
+/// the loop pushes a `SseFrame::Narrative`. Names the gap between
+/// "we render free-form prose from the model" and "we cross-check
+/// numbers in that prose against the cited Claims". The cheap-model
+/// factuality gate that closes this lands in ship 2 alongside the
+/// real `OutputPolicy::check` body.
+pub fn register_narrative_stubs(stubs: &StubRegistry) {
+    stubs.register(StubInfo {
+        name: "narrative.no_factuality_gate",
+        component: "output_policy",
+        reason: "narrative prose is rendered without cross-checking numerical claims against cited Claims. ship 2 adds the cheap-model factuality gate; until then, interpretations may misstate quantities even when cited claims are correct. the persistent disclaimer footer in the agent panel surfaces this risk to the user.",
+        promoted_in_ship: 2,
     });
 }
 

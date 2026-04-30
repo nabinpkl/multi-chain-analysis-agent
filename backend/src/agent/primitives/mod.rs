@@ -46,6 +46,15 @@ pub struct PrimitiveCtx<'a> {
 pub enum SseFrame {
     Claim(Claim),
     Progress { phase: String, detail: String },
+    /// Free-form interpretive prose. Carries the model's natural reply
+    /// text (the string returned by `rig::prompt(...).await`) so the
+    /// frontend can render it as an "interpretation" bubble alongside
+    /// the structured Claim cards. Ship 1.6 introduces this channel
+    /// alongside a permanent disclaimer + the
+    /// `narrative.no_factuality_gate` stub so the user sees that
+    /// numerical claims inside Narrative are NOT cross-checked against
+    /// cited Claims yet (ship 2 closes the gap).
+    Narrative { text: String },
     /// Terminal turn-level error (e.g. provider 5xx, network drop, rig
     /// loop crashed). The SSE handler renders this as an `Error` event
     /// before the closing `Done`, so the frontend can finalize the

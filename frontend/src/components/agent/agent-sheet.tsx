@@ -74,6 +74,8 @@ export function AgentSheet({
           <AgentClaimList turns={turns} status={status} />
         )}
 
+        <DisclaimerFooter />
+
         <AgentInput
           onSend={ask}
           status={status}
@@ -81,6 +83,28 @@ export function AgentSheet({
         />
       </SheetContent>
     </Sheet>
+  );
+}
+
+/**
+ * Permanent, non-dismissable disclaimer above the input. Ship 1.6
+ * paired this with the new Narrative output channel: now that the
+ * model can speak in free-form prose, the user has to know that
+ * interpretive statements are not yet cross-checked against the
+ * underlying data. The `narrative.no_factuality_gate` stub names this
+ * gap in the diagnostics banner; this footer is the user-facing half
+ * of the same warning. Visible = remembered, per the ship-1
+ * stub-visibility philosophy.
+ */
+function DisclaimerFooter() {
+  return (
+    <div className="px-4 py-2 border-t border-mca-border bg-mca-bg/60">
+      <p className="text-[0.55rem] uppercase tracking-[1.5px] text-mca-dim leading-relaxed">
+        numbers + provenance come from live on-chain data. interpretations are
+        model-generated and can be wrong even when numbers are right. click any
+        chip to verify the source.
+      </p>
+    </div>
   );
 }
 

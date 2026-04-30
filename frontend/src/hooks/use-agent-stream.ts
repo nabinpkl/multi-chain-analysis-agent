@@ -22,17 +22,21 @@ export type AgentStatus =
 
 /**
  * One round of conversation: the user's question + the resulting
- * claim (or null while the agent is still working). Renders inline as
- * a user card followed by either the claim card or a "thinking..."
- * placeholder. Future ships may bundle multiple claims per turn (e.g.
- * a Profile + a Summary); the shape is `claim` singular for v0 with
- * `error` carrying any failure message instead.
+ * agent output. Ship 1.6 splits output into two channels: a structured
+ * `claim` (rendered as a card with chips) and a free-form `narrative`
+ * (rendered as an "interpretation" bubble). A turn may carry one,
+ * both, or neither (a turn with neither + no error means the loop
+ * ended without a response, which the Done-fallback marks as errored).
+ *
+ * Pending = nothing yet: claim, narrative, and error are all null.
+ * The "thinking..." placeholder renders only while pending.
  */
 export interface ChatTurn {
   id: string;
   userText: string;
   sentAtMs: number;
   claim: Claim | null;
+  narrative: string | null;
   error: string | null;
 }
 
@@ -89,6 +93,7 @@ export function useAgentStream() {
         userText: request.user_question,
         sentAtMs: Date.now(),
         claim: null,
+        narrative: null,
         error: null,
       };
       setTurns((prev) => [...prev, newTurn]);
@@ -163,6 +168,29 @@ export function useAgentStream() {
         }
       });
 
+      es.addEventListener("Narrative", (ev) => {
+        const data = (ev as MessageEvent<string>).data;
+        try {
+          const parsed = JSON.parse(data) as { text?: string };
+          const text = parsed.text ?? "";
+          if (!text) return;
+          setTurns((prev) => {
+            const idx = prev.findIndex((t) => t.id === turnId);
+            if (idx === -1) return prev;
+            const next = prev.slice();
+            // First Narrative wins for a turn. Future ships could
+            // append (a streamed-token shape), but ship 1.6 sends
+            // one frame per turn.
+            if (next[idx].narrative === null) {
+              next[idx] = { ...next[idx], narrative: text };
+            }
+            return next;
+          });
+        } catch {
+          // skip malformed payloads
+        }
+      });
+
       es.addEventListener("Error", (ev) => {
         const data = (ev as MessageEvent<string>).data;
         let msg = "agent loop errored";
@@ -187,17 +215,21 @@ export function useAgentStream() {
         } catch {
           setStatus({ kind: "done", sessionId, elapsedMs: 0 });
         }
-        // Defensive: if the loop ended without emitting a claim and
-        // without an explicit Error frame, the turn would otherwise
-        // hang on "thinking..." forever. Mark it errored so the user
-        // sees something.
+        // Defensive: if the loop ended without emitting anything at
+        // all (no Claim, no Narrative) and no explicit Error frame,
+        // the turn would otherwise hang on "thinking..." forever.
+        // Mark it errored so the user sees something. Narrative-only
+        // turns are valid (interpretive replies) and short-circuit
+        // here.
         setTurns((prev) => {
           const idx = prev.findIndex((t) => t.id === turnId);
           if (idx === -1) return prev;
           const t = prev[idx];
-          if (t.claim !== null || t.error !== null) return prev;
+          if (t.claim !== null || t.narrative !== null || t.error !== null) {
+            return prev;
+          }
           const next = prev.slice();
-          next[idx] = { ...t, error: "agent ended without a claim" };
+          next[idx] = { ...t, error: "agent ended without a response" };
           return next;
         });
         cleanup();

@@ -116,6 +116,7 @@ impl AppState {
         let agent_budget = Arc::new(BudgetGate::new(agent_stubs.clone()));
         crate::agent::register_primitive_stubs(&agent_stubs);
         crate::agent::register_thread_stubs(&agent_stubs);
+        crate::agent::register_narrative_stubs(&agent_stubs);
         let agent_registry = Arc::new(crate::agent::build_registry());
         let agent_ledger = Ledger::new(clickhouse.clone());
 

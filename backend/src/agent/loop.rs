@@ -229,6 +229,32 @@ async fn run(
         }
     }
 
+    // Push the model's free-form prose through SSE as a Narrative
+    // frame. Ship 1.6: this is the second output channel (alongside
+    // structured Claims). Empty / whitespace-only replies don't get a
+    // bubble; they typically mean the model only emitted tool calls
+    // and let the Claim card carry the answer. Fires the
+    // `narrative.no_factuality_gate` stub so the diagnostics banner
+    // surfaces the unverified-prose risk every time we ship a bubble.
+    if let Ok(final_text) = &result {
+        let trimmed = final_text.trim();
+        if !trimmed.is_empty() {
+            state.agent_stubs.hit("narrative.no_factuality_gate");
+            info!(
+                %session_id,
+                %thread_id,
+                turn,
+                len = trimmed.len(),
+                "narrative emitted",
+            );
+            let _ = sse
+                .send(SseFrame::Narrative {
+                    text: trimmed.to_string(),
+                })
+                .await;
+        }
+    }
+
     // ----- "synthesizing" Progress (best effort) --------------------------
     let _ = sse
         .send(SseFrame::Progress {

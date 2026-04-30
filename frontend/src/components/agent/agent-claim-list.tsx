@@ -12,16 +12,20 @@ import {
   SummaryCard,
 } from "./claim-cards/other-cards";
 import { UserMessageCard } from "./claim-cards/user-message-card";
+import { NarrativeBubble } from "./claim-cards/narrative-bubble";
 import { SubgraphModal } from "./provenance/subgraph-modal";
 
 /**
  * Conversation-shaped renderer. Each ChatTurn renders as:
  *   - user message card (right-aligned, "you" tag)
- *   - assistant claim card OR "thinking..." placeholder
+ *   - optional Claim card (structured, with provenance chips)
+ *   - optional Narrative bubble (free-form interpretation prose)
+ *   - "thinking..." placeholder while nothing has arrived yet
  *
- * The user's message is shown immediately on send so they have a
- * record of what they asked while the agent works. The claim slots
- * below it as soon as SSE delivers it.
+ * Ship 1.6 split agent output into two channels (Claim + Narrative);
+ * a turn can carry one, both, or neither. The user's message is shown
+ * immediately on send so they have a record of what they asked while
+ * the agent works.
  */
 export function AgentClaimList({
   turns,
@@ -36,7 +40,8 @@ export function AgentClaimList({
     <>
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
         {turns.map((turn) => {
-          const pending = turn.claim === null && turn.error === null;
+          const pending =
+            turn.claim === null && turn.narrative === null && turn.error === null;
           return (
             <div key={turn.id} className="space-y-2">
               <UserMessageCard
@@ -50,6 +55,7 @@ export function AgentClaimList({
                   onModalRequest={() => setModalSlice(turn.claim)}
                 />
               ) : null}
+              {turn.narrative ? <NarrativeBubble text={turn.narrative} /> : null}
             </div>
           );
         })}
