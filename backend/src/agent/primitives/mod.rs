@@ -46,6 +46,11 @@ pub struct PrimitiveCtx<'a> {
 pub enum SseFrame {
     Claim(Claim),
     Progress { phase: String, detail: String },
+    /// Terminal turn-level error (e.g. provider 5xx, network drop, rig
+    /// loop crashed). The SSE handler renders this as an `Error` event
+    /// before the closing `Done`, so the frontend can finalize the
+    /// pending turn instead of hanging on its "thinking..." spinner.
+    Error { message: String },
 }
 
 pub type ClaimSink = mpsc::Sender<SseFrame>;

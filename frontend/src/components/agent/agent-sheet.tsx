@@ -32,9 +32,9 @@ export function AgentSheet({
   agentStream: AgentStreamState;
 }) {
   const focusedAddr = useGraphFocus((s) => s.focusedAddr);
-  const { status, claims, progress, threadId, turn, ask, reset } = agentStream;
+  const { status, turns, progress, threadId, turn, ask, reset } = agentStream;
   const inFlight = status.kind === "sending" || status.kind === "streaming";
-  const showTurnChip = threadId !== null && (turn > 0 || claims.length > 0);
+  const showTurnChip = threadId !== null && (turn > 0 || turns.length > 0);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange} modal={false}>
@@ -54,7 +54,7 @@ export function AgentSheet({
             </span>
             <button
               onClick={reset}
-              disabled={status.kind === "idle" && claims.length === 0}
+              disabled={status.kind === "idle" && turns.length === 0}
               className="text-[0.6rem] uppercase tracking-[1.5px] text-mca-muted hover:text-mca-text transition-colors px-2 py-1 border border-mca-border rounded disabled:opacity-30 disabled:hover:text-mca-muted"
               title="start a new thread"
             >
@@ -68,10 +68,10 @@ export function AgentSheet({
 
         <ProgressStrip current={progress} active={inFlight} />
 
-        {claims.length === 0 && !inFlight ? (
+        {turns.length === 0 && !inFlight ? (
           <AgentEmptyState focusedAddr={focusedAddr} />
         ) : (
-          <AgentClaimList claims={claims} status={status} />
+          <AgentClaimList turns={turns} status={status} />
         )}
 
         <AgentInput

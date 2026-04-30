@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use rig::client::CompletionClient;
-use rig::completion::{Chat, ToolDefinition};
+use rig::completion::{Prompt, ToolDefinition};
 use rig::message::{Message, UserContent};
 use rig::providers::openrouter;
 use rig::tool::{ToolDyn, ToolError};
@@ -55,6 +55,7 @@ pub fn run_session(
 ) -> mpsc::Receiver<SseFrame> {
     let (tx, rx) = mpsc::channel::<SseFrame>(32);
     tokio::spawn(async move {
+        let tx_for_error = tx.clone();
         if let Err(e) = run(
             state,
             request,
@@ -67,6 +68,16 @@ pub fn run_session(
         .await
         {
             warn!(error = %e, %session_id, "agent loop errored");
+            // Surface the failure to the SSE stream so the frontend
+            // can finalize the pending turn instead of hanging on
+            // "thinking..." until the user reloads. Best-effort; if
+            // the receiver already dropped (client navigated away),
+            // there's nothing to do.
+            let _ = tx_for_error
+                .send(SseFrame::Error {
+                    message: e.to_string(),
+                })
+                .await;
         }
     });
     rx
@@ -185,6 +196,7 @@ async fn run(
                 history,
                 adapters,
                 &session_id,
+                &thread_id,
                 &state,
                 principal_hash,
             )
@@ -267,6 +279,7 @@ async fn run_with_openrouter(
     history: Vec<Message>,
     adapters: Vec<Box<dyn ToolDyn>>,
     session_id: &str,
+    thread_id: &str,
     state: &AppState,
     principal_hash: [u8; 32],
 ) -> Result<String> {
@@ -276,50 +289,39 @@ async fn run_with_openrouter(
         .tools(adapters)
         .build();
 
-    let history_len = history.len();
+    // Per-call observability hook: fires before/after every provider
+    // hit so the logs show whether a session is in a tight tool-call
+    // loop. Replaces the outer LlmCall/LlmResponse pair (which only
+    // saw the wrap of the whole multi-turn loop, not individual hits).
+    // rig's openrouter `Client` exposes `base_url()` (e.g.
+    // "https://openrouter.ai/api/v1") but not the full per-call URL.
+    // The chat endpoint path is fixed inside rig
+    // (`/chat/completions` in providers/openrouter/completion.rs),
+    // so we compose the full URL ourselves for log visibility. If we
+    // ever swap providers or rig adds a per-call URL hook, this is
+    // the one place to update.
+    let endpoint = format!("{}/chat/completions", client.base_url());
+    let logger = super::hooks::LlmCallLogger::new(
+        session_id.to_string(),
+        thread_id.to_string(),
+        model.to_string(),
+        endpoint,
+        state.clone(),
+        principal_hash,
+    );
 
-    // Write LlmCall ledger event before invoking. We don't have token
-    // counts in v0 (rig's Agent::chat doesn't surface usage on this
-    // path); ship 4 records actual usage from the lower-level model
-    // call path.
-    let _ = state
-        .agent_ledger
-        .write(LedgerEventDraft {
-            session_id: session_id.to_string(),
-            kind: LedgerEventKind::LlmCall,
-            principal_hash,
-            payload: serde_json::json!({
-                "model": model,
-                "max_turns": MAX_TURNS,
-                "history_len": history_len,
-            })
-            .to_string(),
-            pre_estimate_units: 0,
-            post_actual_units: 0,
-            cost_relevant: false,
-        })
-        .await;
-
+    // rig 0.36: `Chat::chat()` is single-turn (no tool loop) and has
+    // no `.max_turns()`. The right API for tool-using multi-turn with
+    // history is `prompt(user).with_history(...).max_turns(N)`.
+    // `.max_turns()` is required: rig defaults to 0 multi-turns,
+    // which trips after the first round of tool calls.
     let response_text = agent
-        .chat(user_msg, history)
+        .prompt(user_msg)
+        .with_history(history)
+        .with_hook(logger)
+        .max_turns(MAX_TURNS)
         .await
-        .map_err(|e| anyhow::anyhow!("rig chat failed: {e}"))?;
-
-    let _ = state
-        .agent_ledger
-        .write(LedgerEventDraft {
-            session_id: session_id.to_string(),
-            kind: LedgerEventKind::LlmResponse,
-            principal_hash,
-            payload: serde_json::json!({
-                "final_text_len": response_text.len(),
-            })
-            .to_string(),
-            pre_estimate_units: 0,
-            post_actual_units: 0,
-            cost_relevant: false,
-        })
-        .await;
+        .map_err(|e| anyhow::anyhow!("rig prompt failed: {e}"))?;
 
     Ok(response_text)
 }

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { Claim } from "@/lib/generated/Claim";
-import type { AgentStatus } from "@/hooks/use-agent-stream";
+import type { AgentStatus, ChatTurn } from "@/hooks/use-agent-stream";
 import { ProfileCard } from "./claim-cards/profile-card";
 import {
   ComparisonCard,
@@ -11,56 +11,51 @@ import {
   RetractedCard,
   SummaryCard,
 } from "./claim-cards/other-cards";
+import { UserMessageCard } from "./claim-cards/user-message-card";
 import { SubgraphModal } from "./provenance/subgraph-modal";
 
 /**
- * Per-ClaimKind dispatcher. v0 only emits Profile; the other cards
- * render via Profile as a placeholder until ship 3/5/7 fill them.
- * Retracted claims (ship 2) get the dedicated RetractedCard.
+ * Conversation-shaped renderer. Each ChatTurn renders as:
+ *   - user message card (right-aligned, "you" tag)
+ *   - assistant claim card OR "thinking..." placeholder
+ *
+ * The user's message is shown immediately on send so they have a
+ * record of what they asked while the agent works. The claim slots
+ * below it as soon as SSE delivers it.
  */
 export function AgentClaimList({
-  claims,
+  turns,
   status,
 }: {
-  claims: Claim[];
+  turns: ChatTurn[];
   status: AgentStatus;
 }) {
   const [modalSlice, setModalSlice] = useState<Claim | null>(null);
 
   return (
     <>
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-        {claims.map((claim) => {
-          if (claim.policy_verdict.verdict === "retracted") {
-            return <RetractedCard key={claim.id} claim={claim} />;
-          }
-          const props = {
-            claim,
-            onModalRequest: () => setModalSlice(claim),
-          };
-          switch (claim.kind) {
-            case "profile":
-              return <ProfileCard key={claim.id} {...props} />;
-            case "pattern":
-              return <PatternCard key={claim.id} {...props} />;
-            case "comparison":
-              return <ComparisonCard key={claim.id} {...props} />;
-            case "summary":
-              return <SummaryCard key={claim.id} {...props} />;
-            case "pulse":
-              return <PulseCard key={claim.id} {...props} />;
-            default:
-              return null;
-          }
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+        {turns.map((turn) => {
+          const pending = turn.claim === null && turn.error === null;
+          return (
+            <div key={turn.id} className="space-y-2">
+              <UserMessageCard
+                text={turn.userText}
+                pending={pending}
+                errorMessage={turn.error}
+              />
+              {turn.claim ? (
+                <ClaimRender
+                  claim={turn.claim}
+                  onModalRequest={() => setModalSlice(turn.claim)}
+                />
+              ) : null}
+            </div>
+          );
         })}
-        {status.kind === "error" ? (
+        {status.kind === "error" && turns.length === 0 ? (
           <div className="text-xs text-amber-500 border border-mca-border rounded p-3">
             {status.message}
-          </div>
-        ) : null}
-        {status.kind === "done" && claims.length > 0 ? (
-          <div className="text-[0.6rem] uppercase tracking-[1.5px] text-mca-dim pt-1">
-            done in {status.elapsedMs}ms
           </div>
         ) : null}
       </div>
@@ -73,4 +68,31 @@ export function AgentClaimList({
       />
     </>
   );
+}
+
+function ClaimRender({
+  claim,
+  onModalRequest,
+}: {
+  claim: Claim;
+  onModalRequest: () => void;
+}) {
+  if (claim.policy_verdict.verdict === "retracted") {
+    return <RetractedCard claim={claim} />;
+  }
+  const props = { claim, onModalRequest };
+  switch (claim.kind) {
+    case "profile":
+      return <ProfileCard {...props} />;
+    case "pattern":
+      return <PatternCard {...props} />;
+    case "comparison":
+      return <ComparisonCard {...props} />;
+    case "summary":
+      return <SummaryCard {...props} />;
+    case "pulse":
+      return <PulseCard {...props} />;
+    default:
+      return null;
+  }
 }

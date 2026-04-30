@@ -6,6 +6,7 @@
 pub mod budget;
 pub mod client;
 pub mod config;
+pub mod hooks;
 pub mod ledger;
 #[allow(clippy::module_inception)]
 #[path = "loop.rs"]
