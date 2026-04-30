@@ -5,5 +5,12 @@ import type { ViewContext } from "./ViewContext";
  * User question + structured ground-truth context the frontend builds
  * from its own DOM/state. Per D-6 (overview), the context block is the
  * strongest disambiguation signal.
+ *
+ * `thread_id` is None on the first send of a fresh conversation; the
+ * backend mints one and returns it. Subsequent follow-up sends echo
+ * the prior thread_id so the backend can append to the existing
+ * in-memory thread (per ship 1.5). Refreshing the page or clicking
+ * "new" clears the frontend's stored thread_id; the orphaned backend
+ * thread is named by the `thread.in_memory_only` stub.
  */
-export type AgentRequest = { user_question: string, context: ViewContext, };
+export type AgentRequest = { user_question: string, context: ViewContext, thread_id: string | null, };

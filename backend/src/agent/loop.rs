@@ -17,9 +17,11 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use rig::client::CompletionClient;
-use rig::completion::{Prompt, ToolDefinition};
+use rig::completion::{Chat, ToolDefinition};
+use rig::message::{Message, UserContent};
 use rig::providers::openrouter;
 use rig::tool::{ToolDyn, ToolError};
+use rig::OneOrMany;
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -35,18 +37,35 @@ use crate::state::AppState;
 
 const MAX_TURNS: usize = 8;
 
-/// Spawn the loop for one session. Returns the receiver side of the
-/// SSE channel; the SSE handler subscribes to it and serializes each
-/// frame as an SSE event.
+/// Spawn the loop for one session-turn. Returns the receiver side of
+/// the SSE channel; the SSE handler subscribes to it and serializes
+/// each frame as an SSE event.
+///
+/// `thread_id` + `turn` thread the conversation continuity layer (ship
+/// 1.5): the loop loads `thread.messages` as `chat()` history, runs
+/// the turn, and appends the new user prompt + final assistant text
+/// back to the thread on completion.
 pub fn run_session(
     state: AppState,
     request: AgentRequest,
     session_id: String,
+    thread_id: String,
+    turn: u32,
     session_started_at_ms: u64,
 ) -> mpsc::Receiver<SseFrame> {
     let (tx, rx) = mpsc::channel::<SseFrame>(32);
     tokio::spawn(async move {
-        if let Err(e) = run(state, request, session_id.clone(), session_started_at_ms, tx).await {
+        if let Err(e) = run(
+            state,
+            request,
+            session_id.clone(),
+            thread_id,
+            turn,
+            session_started_at_ms,
+            tx,
+        )
+        .await
+        {
             warn!(error = %e, %session_id, "agent loop errored");
         }
     });
@@ -57,6 +76,8 @@ async fn run(
     state: AppState,
     request: AgentRequest,
     session_id: String,
+    thread_id: String,
+    turn: u32,
     session_started_at_ms: u64,
     sse: ClaimSink,
 ) -> Result<()> {
@@ -135,6 +156,22 @@ async fn run(
 
     let started = std::time::Instant::now();
     let _ = session_started_at_ms; // also handed to adapters via state lookup
+
+    // Pull thread history under the lock, clone, drop the lock before
+    // the LLM call. v1.5 in-memory only; orphan-protected because the
+    // POST handler always inserts a thread before the SSE GET runs.
+    let history = {
+        let threads = state.agent_threads.lock();
+        threads
+            .get(&thread_id)
+            .map(|t| t.messages.clone())
+            .unwrap_or_default()
+    };
+    if !history.is_empty() {
+        // Follow-up turn: surface the visibility stub.
+        state.agent_stubs.hit("thread.in_memory_only");
+    }
+
     let result = match &state.agent_client {
         Some(AgentClient::OpenRouter {
             client,
@@ -145,6 +182,7 @@ async fn run(
                 primary_model,
                 prompt_text,
                 &user_msg,
+                history,
                 adapters,
                 &session_id,
                 &state,
@@ -157,6 +195,27 @@ async fn run(
             Err(anyhow::anyhow!("agent disabled"))
         }
     };
+
+    // Append this turn's user prompt + final assistant text to the
+    // thread so the next follow-up sees them. Skipped on error so a
+    // failed turn doesn't pollute the thread.
+    if let Ok(final_text) = &result {
+        let mut threads = state.agent_threads.lock();
+        if let Some(thread) = threads.get_mut(&thread_id) {
+            thread
+                .messages
+                .push(Message::User {
+                    content: OneOrMany::one(UserContent::text(user_msg.clone())),
+                });
+            thread.messages.push(Message::Assistant {
+                id: None,
+                content: OneOrMany::one(rig::message::AssistantContent::text(
+                    final_text.clone(),
+                )),
+            });
+            thread.turn_count = turn.saturating_add(1);
+        }
+    }
 
     // ----- "synthesizing" Progress (best effort) --------------------------
     let _ = sse
@@ -178,6 +237,8 @@ async fn run(
     let session_end_payload = serde_json::json!({
         "elapsed_ms": elapsed_ms,
         "ok": result.is_ok(),
+        "thread_id": thread_id,
+        "turn": turn,
     })
     .to_string();
     let _ = state
@@ -193,7 +254,7 @@ async fn run(
         })
         .await;
     state.agent_ledger.drop_session(&session_id);
-    info!(%session_id, elapsed_ms, "agent session done");
+    info!(%session_id, %thread_id, turn, elapsed_ms, "agent session done");
 
     result.map(|_| ())
 }
@@ -203,23 +264,22 @@ async fn run_with_openrouter(
     model: &str,
     preamble: &str,
     user_msg: &str,
+    history: Vec<Message>,
     adapters: Vec<Box<dyn ToolDyn>>,
     session_id: &str,
     state: &AppState,
     principal_hash: [u8; 32],
-) -> Result<()> {
-    // rig's `Agent` builder wants tools added one at a time via
-    // `.tool()` (typed) or as a vec via the underlying API. We use
-    // `dyn_tool()` which accepts boxed ToolDyn so heterogeneous
-    // primitives register through one path.
+) -> Result<String> {
     let agent = client
         .agent(model)
         .preamble(preamble)
         .tools(adapters)
         .build();
 
+    let history_len = history.len();
+
     // Write LlmCall ledger event before invoking. We don't have token
-    // counts in v0 (rig's Agent::prompt doesn't surface usage on this
+    // counts in v0 (rig's Agent::chat doesn't surface usage on this
     // path); ship 4 records actual usage from the lower-level model
     // call path.
     let _ = state
@@ -231,6 +291,7 @@ async fn run_with_openrouter(
             payload: serde_json::json!({
                 "model": model,
                 "max_turns": MAX_TURNS,
+                "history_len": history_len,
             })
             .to_string(),
             pre_estimate_units: 0,
@@ -240,10 +301,9 @@ async fn run_with_openrouter(
         .await;
 
     let response_text = agent
-        .prompt(user_msg)
-        .max_turns(MAX_TURNS)
+        .chat(user_msg, history)
         .await
-        .map_err(|e| anyhow::anyhow!("rig prompt failed: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("rig chat failed: {e}"))?;
 
     let _ = state
         .agent_ledger
@@ -261,7 +321,7 @@ async fn run_with_openrouter(
         })
         .await;
 
-    Ok(())
+    Ok(response_text)
 }
 
 fn build_adapters(

@@ -23,16 +23,28 @@ use rustc_hash::FxHashMap;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::info;
 
+use crate::agent::AgentThread;
 use crate::agent::SseFrame;
 use crate::agent::loop_driver;
 use crate::agent::types::{AgentDone, AgentRequest, AgentSessionStarted};
 use crate::state::AppState;
 
-/// Pending requests keyed by session_id. Inserted by POST, removed by
-/// the SSE GET when it picks up the session.
+/// Pending turn ready to be picked up by SSE GET. Carries the
+/// resolved thread_id (either echoed from the AgentRequest or freshly
+/// minted) and the turn number (0 on first turn of a thread, then
+/// increments per follow-up).
+#[derive(Clone)]
+pub struct PendingTurn {
+    pub request: AgentRequest,
+    pub thread_id: String,
+    pub turn: u32,
+}
+
+/// Pending turns keyed by session_id (per-turn handle). Inserted by
+/// POST, removed by the matching SSE GET.
 #[derive(Default, Clone)]
 pub struct AgentSessions {
-    inner: Arc<Mutex<FxHashMap<String, AgentRequest>>>,
+    inner: Arc<Mutex<FxHashMap<String, PendingTurn>>>,
 }
 
 impl AgentSessions {
@@ -40,12 +52,12 @@ impl AgentSessions {
         Self::default()
     }
 
-    fn insert(&self, id: String, req: AgentRequest) {
+    fn insert(&self, id: String, turn: PendingTurn) {
         let mut g = self.inner.lock();
-        g.insert(id, req);
+        g.insert(id, turn);
     }
 
-    fn take(&self, id: &str) -> Option<AgentRequest> {
+    fn take(&self, id: &str) -> Option<PendingTurn> {
         let mut g = self.inner.lock();
         g.remove(id)
     }
@@ -63,20 +75,74 @@ pub async fn ask(
             .into_response();
     }
     let session_id = generate_session_id();
-    info!(session_id = %session_id, q = %req.user_question, "agent ask received");
-    state.agent_sessions.insert(session_id.clone(), req);
+
+    // Resolve thread_id: echo what the client sent if it points to an
+    // existing thread; otherwise mint a fresh one. We don't trust
+    // unknown ids (a client sending a fabricated id gets a fresh
+    // thread, not a foreign thread). Turn count is 0 for new threads,
+    // current turn_count for follow-ups.
+    let (thread_id, turn) = {
+        let mut threads = state.agent_threads.lock();
+        if let Some(provided) = req.thread_id.as_ref() {
+            if let Some(existing) = threads.get(provided) {
+                (provided.clone(), existing.turn_count)
+            } else {
+                let id = generate_session_id();
+                threads.insert(
+                    id.clone(),
+                    AgentThread::new(id.clone(), now_ms_utc()),
+                );
+                (id, 0)
+            }
+        } else {
+            let id = generate_session_id();
+            threads.insert(
+                id.clone(),
+                AgentThread::new(id.clone(), now_ms_utc()),
+            );
+            (id, 0)
+        }
+    };
+
+    info!(
+        session_id = %session_id,
+        thread_id = %thread_id,
+        turn,
+        q = %req.user_question,
+        "agent ask received"
+    );
+
+    state.agent_sessions.insert(
+        session_id.clone(),
+        PendingTurn {
+            request: req,
+            thread_id: thread_id.clone(),
+            turn,
+        },
+    );
     (
         StatusCode::ACCEPTED,
-        Json(AgentSessionStarted { session_id }),
+        Json(AgentSessionStarted {
+            session_id,
+            thread_id,
+            turn,
+        }),
     )
         .into_response()
+}
+
+fn now_ms_utc() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 pub async fn stream(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> Response {
-    let Some(req) = state.agent_sessions.take(&session_id) else {
+    let Some(pending) = state.agent_sessions.take(&session_id) else {
         return (StatusCode::NOT_FOUND, "session not found or already consumed").into_response();
     };
     if state.agent_client.is_none() {
@@ -88,7 +154,14 @@ pub async fn stream(
 
     // Hand off to the loop driver. It returns the receiver side of an
     // mpsc channel into which Progress + Claim frames flow.
-    let rx = loop_driver::run_session(state, req, session_id, started_ms());
+    let rx = loop_driver::run_session(
+        state,
+        pending.request,
+        session_id,
+        pending.thread_id,
+        pending.turn,
+        started_ms(),
+    );
 
     // Map SseFrame -> Event. After the channel closes, append a Done.
     let frames = ReceiverStream::new(rx).map(frame_to_event);

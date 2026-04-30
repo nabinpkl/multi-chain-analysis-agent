@@ -1,7 +1,7 @@
 "use client";
 
 import { useGraphFocus } from "@/stores/use-graph-focus";
-import { useAgentStream } from "@/hooks/use-agent-stream";
+import type { AgentStreamState } from "@/hooks/use-agent-stream";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AgentEmptyState } from "./agent-empty-state";
 import { AgentClaimList } from "./agent-claim-list";
@@ -24,14 +24,17 @@ export function AgentSheet({
   open,
   onOpenChange,
   liveWindowSecs,
+  agentStream,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   liveWindowSecs: number;
+  agentStream: AgentStreamState;
 }) {
   const focusedAddr = useGraphFocus((s) => s.focusedAddr);
-  const { status, claims, progress, ask, reset } = useAgentStream();
+  const { status, claims, progress, threadId, turn, ask, reset } = agentStream;
   const inFlight = status.kind === "sending" || status.kind === "streaming";
+  const showTurnChip = threadId !== null && (turn > 0 || claims.length > 0);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange} modal={false}>
@@ -41,13 +44,19 @@ export function AgentSheet({
       >
         <header className="px-4 py-3 border-b border-mca-border space-y-1">
           <div className="flex items-center justify-between gap-2 pr-8">
-            <span className="text-[0.7rem] uppercase tracking-[2px] text-mca-text">
+            <span className="text-[0.7rem] uppercase tracking-[2px] text-mca-text flex items-center gap-2">
               agent
+              {showTurnChip ? (
+                <span className="text-[0.55rem] tabular-nums text-mca-muted normal-case border border-mca-border rounded px-1.5 py-0.5">
+                  turn {turn + 1}
+                </span>
+              ) : null}
             </span>
             <button
               onClick={reset}
-              disabled={status.kind === "idle" || inFlight}
+              disabled={status.kind === "idle" && claims.length === 0}
               className="text-[0.6rem] uppercase tracking-[1.5px] text-mca-muted hover:text-mca-text transition-colors px-2 py-1 border border-mca-border rounded disabled:opacity-30 disabled:hover:text-mca-muted"
+              title="start a new thread"
             >
               new
             </button>

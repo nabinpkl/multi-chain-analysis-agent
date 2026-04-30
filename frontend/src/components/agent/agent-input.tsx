@@ -31,6 +31,9 @@ export function AgentInput({
     e?.preventDefault();
     const trimmed = text.trim();
     if (!trimmed || inFlight) return;
+    // `thread_id` is overwritten by `useAgentStream` with the
+    // currently-tracked threadId before POST. We send null here as a
+    // safe default that satisfies the typed shape.
     const request: AgentRequest = {
       user_question: trimmed,
       context: {
@@ -38,6 +41,7 @@ export function AgentInput({
         focus: focusedAddr ? { kind: "wallet", id: focusedAddr } : null,
         selection: selection.map((addr) => ({ kind: "wallet" as const, id: addr })),
       },
+      thread_id: null,
     };
     onSend(request);
     setText("");

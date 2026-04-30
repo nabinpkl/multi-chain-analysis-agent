@@ -9,6 +9,7 @@ import {
   type RoleSummary,
   type WindowSeconds,
 } from "@/hooks/use-raw-stream";
+import { useAgentStream } from "@/hooks/use-agent-stream";
 import { EDGE_PALETTE, ROLE_PALETTE } from "@/lib/role-colors";
 import type { NodeRole } from "@/lib/role-detect";
 import { formatInt } from "@/lib/format";
@@ -75,6 +76,9 @@ export function GraphPage() {
   const [windowSecs, setWindowSecs] = useState<WindowSeconds>(DEFAULT_WINDOW_SECONDS);
   const [agentOpen, setAgentOpen] = useState(false);
   const { graph, status, roleSummary, reset } = useRawStream({ windowSecs });
+  // Lifted so the agent thread survives sheet close/open within the
+  // page lifetime (per ship 1.5: refresh = clear, close+reopen = keep).
+  const agentStream = useAgentStream();
 
   // Global ⌘K / Ctrl+K toggles the agent sheet. Skip when the user is
   // typing into an input or textarea (the textarea inside the agent
@@ -112,6 +116,7 @@ export function GraphPage() {
         open={agentOpen}
         onOpenChange={setAgentOpen}
         liveWindowSecs={windowSecs}
+        agentStream={agentStream}
       />
 
       <div className="flex-1 flex min-h-0">

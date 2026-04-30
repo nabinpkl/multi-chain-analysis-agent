@@ -4,8 +4,10 @@ use clickhouse::Client;
 use parking_lot::RwLock;
 use tokio::sync::{broadcast, watch};
 
+use std::collections::HashMap;
+
 use crate::agent::{
-    AgentClient, BudgetGate, Ledger, OutputPolicy, PrimitiveRegistry, StubRegistry,
+    AgentClient, AgentThread, BudgetGate, Ledger, OutputPolicy, PrimitiveRegistry, StubRegistry,
 };
 use crate::analytics::{AnalyticsChannels, AnalyticsSnapshot};
 use crate::api::agent::AgentSessions;
@@ -76,6 +78,10 @@ pub struct AppState {
     pub agent_budget: Arc<BudgetGate>,
     /// Stub registry surfaced via /agent/diagnostics + the UI banner.
     pub agent_stubs: Arc<StubRegistry>,
+    /// Per-thread message history for follow-up continuity (ship 1.5).
+    /// Backend-owned single source of truth; frontend echoes thread_id.
+    /// In-memory; named by `thread.in_memory_only` stub.
+    pub agent_threads: Arc<parking_lot::Mutex<HashMap<String, AgentThread>>>,
 }
 
 impl AppState {
@@ -103,12 +109,13 @@ impl AppState {
 
         // Stub registry first; policy + budget register their stubs
         // into it during construction. Pre-register per-primitive
-        // stubs so the diagnostics endpoint lists them even before
-        // anyone calls them.
+        // and thread-state stubs so diagnostics lists them even
+        // before anyone hits them.
         let agent_stubs = StubRegistry::new();
         let agent_policy = Arc::new(OutputPolicy::new(agent_stubs.clone()));
         let agent_budget = Arc::new(BudgetGate::new(agent_stubs.clone()));
         crate::agent::register_primitive_stubs(&agent_stubs);
+        crate::agent::register_thread_stubs(&agent_stubs);
         let agent_registry = Arc::new(crate::agent::build_registry());
         let agent_ledger = Ledger::new(clickhouse.clone());
 
@@ -126,6 +133,7 @@ impl AppState {
             agent_policy,
             agent_budget,
             agent_stubs,
+            agent_threads: Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
         (state, analytics_senders)
     }

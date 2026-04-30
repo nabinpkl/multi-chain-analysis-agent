@@ -20,6 +20,7 @@ Apply when drafting/editing post content in `docs/EngineeringPosts/`.
 - Post = log, not content marketing. Skip hook-bait openers. Reader from resume link, not scroll.
 
 # MultiChain Analysis Engine
+Name: Real-time Graph Engine for Multi-chain State
 
 ## What It Is
 

@@ -21,16 +21,24 @@ export type AgentStatus =
   | { kind: "error"; message: string };
 
 /**
- * Owns the lifecycle of a single agent question -> response cycle.
- * Posts an `AgentRequest` to `/agent/ask`, opens an EventSource on
- * `/agent/stream/:session_id`, accumulates `Claim` events into the
- * claims list, threads `Progress` events through `progress`, and
- * resolves on `Done`.
+ * Owns the agent thread for the lifetime of the page.
+ *
+ * Per ship 1.5 thread continuity: each `ask()` either starts a fresh
+ * thread (no `currentThreadId`) or continues an existing one (echoes
+ * the stored id). The backend mints/echoes a `thread_id` on the POST
+ * response; we keep it across turns. `reset()` clears it ("new"
+ * button); page refresh drops it (component unmount). The matching
+ * server-side thread is named by the `thread.in_memory_only` stub.
+ *
+ * Lifted to `graph-page.tsx` so the hook state survives the agent
+ * sheet closing + reopening.
  */
 export function useAgentStream() {
   const [status, setStatus] = useState<AgentStatus>({ kind: "idle" });
   const [claims, setClaims] = useState<Claim[]>([]);
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
+  const [threadId, setThreadId] = useState<string | null>(null);
+  const [turn, setTurn] = useState<number>(0);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   const cleanup = useCallback(() => {
@@ -47,21 +55,29 @@ export function useAgentStream() {
     setStatus({ kind: "idle" });
     setClaims([]);
     setProgress(null);
+    setThreadId(null);
+    setTurn(0);
   }, [cleanup]);
 
   const ask = useCallback(
     async (request: AgentRequest) => {
       cleanup();
-      setClaims([]);
+      // Keep claims across turns within a thread so the UI shows the
+      // running conversation. Reset on `reset()` only.
       setProgress(null);
       setStatus({ kind: "sending" });
+
+      const requestWithThread: AgentRequest = {
+        ...request,
+        thread_id: threadId,
+      };
 
       let sessionStart: AgentSessionStarted;
       try {
         const res = await fetch(`${apiUrl()}/agent/ask`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(request),
+          body: JSON.stringify(requestWithThread),
         });
         if (!res.ok) {
           const message = await res.text();
@@ -81,6 +97,8 @@ export function useAgentStream() {
       }
 
       const sessionId = sessionStart.session_id;
+      setThreadId(sessionStart.thread_id);
+      setTurn(sessionStart.turn);
       setStatus({ kind: "streaming", sessionId });
 
       const es = new EventSource(`${apiUrl()}/agent/stream/${sessionId}`);
@@ -133,8 +151,10 @@ export function useAgentStream() {
         cleanup();
       };
     },
-    [cleanup],
+    [cleanup, threadId],
   );
 
-  return { status, claims, progress, ask, reset };
+  return { status, claims, progress, threadId, turn, ask, reset };
 }
+
+export type AgentStreamState = ReturnType<typeof useAgentStream>;

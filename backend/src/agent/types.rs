@@ -15,11 +15,20 @@ use ts_rs::TS;
 /// User question + structured ground-truth context the frontend builds
 /// from its own DOM/state. Per D-6 (overview), the context block is the
 /// strongest disambiguation signal.
+///
+/// `thread_id` is None on the first send of a fresh conversation; the
+/// backend mints one and returns it. Subsequent follow-up sends echo
+/// the prior thread_id so the backend can append to the existing
+/// in-memory thread (per ship 1.5). Refreshing the page or clicking
+/// "new" clears the frontend's stored thread_id; the orphaned backend
+/// thread is named by the `thread.in_memory_only` stub.
 #[derive(Serialize, Deserialize, TS, Debug, Clone)]
 #[ts(export, export_to = "../../frontend/src/lib/generated/")]
 pub struct AgentRequest {
     pub user_question: String,
     pub context: ViewContext,
+    #[serde(default)]
+    pub thread_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, TS, Debug, Clone)]
@@ -39,10 +48,17 @@ pub enum EntityRef {
     Community(u32),
 }
 
+/// `session_id` is per-turn (drives the SSE GET, ledger row group).
+/// `thread_id` is the persistent conversation handle the frontend
+/// stores and echoes back on follow-up sends.
 #[derive(Serialize, Deserialize, TS, Debug, Clone)]
 #[ts(export, export_to = "../../frontend/src/lib/generated/")]
 pub struct AgentSessionStarted {
     pub session_id: String,
+    pub thread_id: String,
+    /// 0 on the first turn, increments on follow-ups. Frontend can
+    /// surface this as "turn N" if useful.
+    pub turn: u32,
 }
 
 /// Final SSE event for a session. `elapsed_ms` is u32 (caps at ~50d,

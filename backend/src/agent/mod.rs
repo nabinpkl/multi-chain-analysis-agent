@@ -54,3 +54,40 @@ pub fn register_primitive_stubs(stubs: &StubRegistry) {
         promoted_in_ship: 5,
     });
 }
+
+/// Pre-register thread-state stubs. `thread.in_memory_only` is hit on
+/// every follow-up turn (turn >= 2 of a conversation). Surfaces the
+/// fact that v1.5 thread state is in-process: no persistence, no
+/// length cap, no token cap, no TTL, no per-principal scoping.
+pub fn register_thread_stubs(stubs: &StubRegistry) {
+    stubs.register(StubInfo {
+        name: "thread.in_memory_only",
+        component: "thread_state",
+        reason: "threads live in-process: no persistence (refresh/restart drops), no length cap, no token cap, no TTL, no per-principal scoping. cost caps land in ship 4; persistent + recallable conversation memory is its own future phase.",
+        promoted_in_ship: 4,
+    });
+}
+
+/// In-memory thread state. v1.5: backend-owned, single source of truth
+/// for the rig message vec across follow-up turns. Frontend echoes the
+/// `thread_id` on every follow-up; the backend looks up here, appends,
+/// stores back. Server restart clears the map (named by the
+/// `thread.in_memory_only` stub).
+#[derive(Debug, Clone)]
+pub struct AgentThread {
+    pub thread_id: String,
+    pub messages: Vec<rig::message::Message>,
+    pub started_at_ms: u64,
+    pub turn_count: u32,
+}
+
+impl AgentThread {
+    pub fn new(thread_id: String, started_at_ms: u64) -> Self {
+        Self {
+            thread_id,
+            messages: Vec::new(),
+            started_at_ms,
+            turn_count: 0,
+        }
+    }
+}
