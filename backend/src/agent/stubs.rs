@@ -118,10 +118,11 @@ impl StubRegistry {
     }
 
     /// Build a per-claim stub marker list naming the stubs that
-    /// touched a claim's emission. v0 always includes policy +
-    /// budget; ship 2 deletes the policy entry, ship 4 the budget
-    /// entry. The frontend renders this as "via stubs: ..." on each
-    /// claim card.
+    /// touched a claim's emission. Ship 2 promoted the output policy
+    /// from a stub to a real check, so `policy.always_approve` is no
+    /// longer registered (or marked); only `budget.always_allow`
+    /// remains here. Ship 4 deletes that one too. The frontend renders
+    /// this as "via stubs: ..." on each claim card.
     pub fn markers_for_claim(&self) -> Vec<StubMarker> {
         self.entries
             .read()
@@ -129,11 +130,9 @@ impl StubRegistry {
             .filter(|e| {
                 // Only stubs that affect every claim emission go on
                 // the per-claim badge. Range-arm stub is per-call,
-                // not per-claim, so it's excluded here.
-                matches!(
-                    e.info.name,
-                    "policy.always_approve" | "budget.always_allow"
-                )
+                // not per-claim. Narrative stubs are per-narrative,
+                // not per-claim.
+                matches!(e.info.name, "budget.always_allow")
             })
             .map(|e| StubMarker {
                 name: e.info.name.to_string(),

@@ -103,13 +103,23 @@ auto-retracted by the output policy.\
             emitted_at_ms: now_ms_since(ctx.session_started_at_ms),
         };
 
-        // 2. Output policy gate (stub returns Approved in v0).
-        let verdict = ctx.state.agent_policy.check(&claim).await;
+        // 2. Output policy gate. Ship 2 promoted this from the
+        //    always-approve stub to a real cheap-model call against
+        //    the constitution. `check_claim` is the per-Claim entry
+        //    point; the parallel `check_narrative` runs in `loop.rs`
+        //    after rig returns the model's free-form prose.
+        let verdict = ctx.state.agent_policy.check_claim(&claim).await;
         claim.policy_verdict = verdict.clone();
 
-        // 3. Write ledger events.
-        let policy_payload = serde_json::to_string(&verdict)
-            .unwrap_or_else(|_| "{}".into());
+        // 3. Write ledger events. Ship 2 added `target` to the
+        //    PolicyVerdict payload so replay can tell which channel
+        //    each verdict gated (claim vs narrative).
+        let policy_payload = serde_json::json!({
+            "target": "claim",
+            "verdict": &verdict,
+            "claim_id": &claim_id,
+        })
+        .to_string();
         if let Err(e) = ctx
             .state
             .agent_ledger
@@ -146,10 +156,22 @@ auto-retracted by the output policy.\
         }
 
         // 4. Push to SSE sink. We push regardless of verdict so the
-        // frontend can render Retracted claims (greyed out) when ship
-        // 2 starts producing them.
+        // frontend can render Retracted claims (greyed out, as ship 2
+        // started producing them).
         if let Err(e) = ctx.sse.send(SseFrame::Claim(claim.clone())).await {
             warn!(error = %e, "SSE claim push failed (receiver dropped)");
+        }
+
+        // 5. Stash approved Claims in the per-session buffer so the
+        // Narrative gate in `loop.rs::run` sees them. Retracted
+        // Claims are excluded: the constitution should not let
+        // narrative cite a retracted Claim's numbers, and the gate
+        // would have to re-validate the retraction reason anyway.
+        if matches!(claim.policy_verdict, PolicyVerdict::Approved) {
+            let mut buf = ctx.state.agent_claims_emitted.lock();
+            buf.entry(ctx.session_id.clone())
+                .or_default()
+                .push(claim.clone());
         }
 
         let policy_str = match &verdict {

@@ -12,6 +12,8 @@ pub mod ledger;
 #[path = "loop.rs"]
 pub mod loop_driver;
 pub mod policy;
+pub mod policy_crosscheck;
+pub mod policy_prompt;
 pub mod primitives;
 pub mod prompt;
 pub mod runtime;
@@ -25,6 +27,10 @@ pub use ledger::Ledger;
 pub use policy::OutputPolicy;
 pub use primitives::{PrimitiveRegistry, SseFrame};
 pub use prompt::{PROMPT_V1_TAG, PROMPT_V1_TEXT, PROMPT_V2_TAG, PROMPT_V2_TEXT, active_prompt};
+pub use policy_prompt::{
+    POLICY_PROMPT_V1_TAG, POLICY_PROMPT_V1_TEXT, POLICY_PROMPT_V2_TAG, POLICY_PROMPT_V2_TEXT,
+    POLICY_PROMPT_V3_TAG, POLICY_PROMPT_V3_TEXT, active_policy_prompt,
+};
 pub use runtime::{Agent, build_client};
 pub use stubs::{StubInfo, StubInfoWire, StubRegistry};
 pub use types::{
@@ -69,20 +75,13 @@ pub fn register_thread_stubs(stubs: &StubRegistry) {
     });
 }
 
-/// Pre-register the Ship 1.6 Narrative-channel stubs. Hit every time
-/// the loop pushes a `SseFrame::Narrative`. Names the gap between
-/// "we render free-form prose from the model" and "we cross-check
-/// numbers in that prose against the cited Claims". The cheap-model
-/// factuality gate that closes this lands in ship 2 alongside the
-/// real `OutputPolicy::check` body.
-pub fn register_narrative_stubs(stubs: &StubRegistry) {
-    stubs.register(StubInfo {
-        name: "narrative.no_factuality_gate",
-        component: "output_policy",
-        reason: "narrative prose is rendered without cross-checking numerical claims against cited Claims. ship 2 adds the cheap-model factuality gate; until then, interpretations may misstate quantities even when cited claims are correct. the persistent disclaimer footer in the agent panel surfaces this risk to the user.",
-        promoted_in_ship: 2,
-    });
-}
+// Ship 2.5 retired the `narrative.no_numerical_crosscheck` stub when
+// the deterministic cross-check landed in `policy_crosscheck.rs`.
+// Constitution v2's Rule 5 + the cross-check together cover what the
+// stub flagged. Function deleted; the call site in `state.rs` is
+// also gone. If a future audit reveals a new gap in narrative
+// gating, register a new, specifically-named stub there rather than
+// reviving this one.
 
 /// In-memory thread state. v1.5: backend-owned, single source of truth
 /// for the rig message vec across follow-up turns. Frontend echoes the
@@ -95,7 +94,20 @@ pub struct AgentThread {
     pub messages: Vec<rig::message::Message>,
     pub started_at_ms: u64,
     pub turn_count: u32,
+    /// Approved Claims emitted in prior turns of this thread. Ship 2.5
+    /// adds this so the narrative numerical cross-check has a lenient
+    /// reference set: a follow-up turn can restate a number from an
+    /// earlier turn's Claim without re-fetching. Capped at
+    /// `MAX_THREAD_CLAIMS` entries (FIFO drop) so memory stays
+    /// bounded; the persistent-memory layer named by the
+    /// `thread.in_memory_only` stub will eventually replace this.
+    pub claims: Vec<crate::agent::types::Claim>,
 }
+
+/// FIFO cap on `AgentThread.claims`. 20 covers ~5-10 turns of a
+/// typical conversation; older Claims drop. Tunable; revisit if
+/// dogfood shows long conversations losing reference numbers.
+pub const MAX_THREAD_CLAIMS: usize = 20;
 
 impl AgentThread {
     pub fn new(thread_id: String, started_at_ms: u64) -> Self {
@@ -104,6 +116,7 @@ impl AgentThread {
             messages: Vec::new(),
             started_at_ms,
             turn_count: 0,
+            claims: Vec::new(),
         }
     }
 }

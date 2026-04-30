@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use crate::agent::{
     AgentClient, AgentThread, BudgetGate, Ledger, OutputPolicy, PrimitiveRegistry, StubRegistry,
 };
+use crate::agent::types::Claim;
 use crate::analytics::{AnalyticsChannels, AnalyticsSnapshot};
 use crate::api::agent::AgentSessions;
 use crate::config::Config;
@@ -82,6 +83,21 @@ pub struct AppState {
     /// Backend-owned single source of truth; frontend echoes thread_id.
     /// In-memory; named by `thread.in_memory_only` stub.
     pub agent_threads: Arc<parking_lot::Mutex<HashMap<String, AgentThread>>>,
+    /// Per-session buffer of approved Claims emitted this turn. Ship 2
+    /// reads this in the loop driver after rig's prompt() returns so
+    /// the Narrative gate sees what the agent already cited. Drained
+    /// at end-of-turn so the map can't leak across turns. Keyed by
+    /// session_id (per-turn handle, NOT thread_id, because each turn
+    /// gets a fresh narrative gate scope).
+    pub agent_claims_emitted: Arc<parking_lot::Mutex<HashMap<String, Vec<Claim>>>>,
+    /// Ship 2.6.1 dev-mode toggle. When true, SSE error / narrative-
+    /// retracted frames carry diagnostic detail fields the frontend
+    /// renders inline. When false (prod default), wire is fully
+    /// scrubbed of internal terms (rig, OpenRouter, constitution
+    /// reasons, etc.). Driven by `AGENT_DEBUG_PUBLIC` env. Solo-dev
+    /// pattern: the UI is the only surface I check, so dev-mode
+    /// surfaces rare events on the UI itself; prod ships sterile.
+    pub agent_debug_public: bool,
 }
 
 impl AppState {
@@ -107,16 +123,25 @@ impl AppState {
         let agent_config = crate::agent::AgentConfig::from_env();
         let agent_client = crate::agent::build_client(&agent_config);
 
-        // Stub registry first; policy + budget register their stubs
-        // into it during construction. Pre-register per-primitive
-        // and thread-state stubs so diagnostics lists them even
-        // before anyone hits them.
+        // Stub registry first. Budget still registers its stub during
+        // construction (ship 4 retires it). Output policy used to
+        // register `policy.always_approve` here; ship 2 retired the
+        // stub when the cheap-model gate became real, so policy no
+        // longer touches the registry on construction.
+        // Pre-register per-primitive, thread-state, and narrative
+        // stubs so diagnostics lists them before anyone hits them.
         let agent_stubs = StubRegistry::new();
-        let agent_policy = Arc::new(OutputPolicy::new(agent_stubs.clone()));
+        // OutputPolicy accepts an Option<AgentClient>; when None the
+        // gate auto-approves at the (unreachable) call site. Keeps
+        // the AppState field non-Option so callers don't have to
+        // re-check. Ship 2.5 dropped the StubRegistry parameter when
+        // `narrative.no_numerical_crosscheck` retired.
+        let agent_policy = Arc::new(OutputPolicy::new(agent_client.clone()));
         let agent_budget = Arc::new(BudgetGate::new(agent_stubs.clone()));
         crate::agent::register_primitive_stubs(&agent_stubs);
         crate::agent::register_thread_stubs(&agent_stubs);
-        crate::agent::register_narrative_stubs(&agent_stubs);
+        // `register_narrative_stubs` retired in ship 2.5: the cross-check
+        // landed and there's no remaining narrative-gating stub to flag.
         let agent_registry = Arc::new(crate::agent::build_registry());
         let agent_ledger = Ledger::new(clickhouse.clone());
 
@@ -135,6 +160,8 @@ impl AppState {
             agent_budget,
             agent_stubs,
             agent_threads: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            agent_claims_emitted: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            agent_debug_public: agent_config.debug_public,
         };
         (state, analytics_senders)
     }

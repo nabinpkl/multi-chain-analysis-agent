@@ -7,15 +7,23 @@ import { Loader2Icon } from "lucide-react";
  * inline above the assistant's claim so the conversation reads as a
  * back-and-forth. While the claim is still pending, a "thinking..."
  * placeholder renders below this card.
+ *
+ * Ship 2.6.1: `errorDebug` is the raw underlying error (rig prompt
+ * failure, HTTP status, etc.)  present only when the backend ships
+ * with `AGENT_DEBUG_PUBLIC=1`. Rendered as a small monospace block
+ * under the friendly `errorMessage` so the dev sees what really
+ * went wrong without that detail leaking to prod users.
  */
 export function UserMessageCard({
   text,
   pending,
   errorMessage,
+  errorDebug,
 }: {
   text: string;
   pending: boolean;
   errorMessage: string | null;
+  errorDebug?: string | null;
 }) {
   return (
     <div className="space-y-2">
@@ -34,8 +42,13 @@ export function UserMessageCard({
         </div>
       ) : null}
       {errorMessage ? (
-        <div className="text-xs text-amber-500 border border-amber-500/30 rounded p-2 bg-amber-500/5">
-          {errorMessage}
+        <div className="text-xs text-amber-500 border border-amber-500/30 rounded p-2 bg-amber-500/5 space-y-1">
+          <p>{errorMessage}</p>
+          {errorDebug ? (
+            <pre className="text-[0.6rem] font-mono text-mca-dim leading-snug whitespace-pre-wrap break-all bg-amber-500/5 rounded px-2 py-1 border border-amber-500/20">
+              <span className="text-amber-500/60">debug</span> {errorDebug}
+            </pre>
+          ) : null}
         </div>
       ) : null}
     </div>

@@ -329,9 +329,14 @@ to its own file only if the section grows past readable.
 
 | Ship | Target | Status | Notes |
 |---|---|---|---|
-| 1 | skeleton end-to-end | not started | next up |
-| 2 | defense teeth | not started | |
-| 3 | real primitive surface | not started | |
+| 1 | skeleton end-to-end | done | shipped 2026-04 |
+| 1.5 | single-thread follow-up | done | mid-ship insertion: backend-owned thread map, optimistic user-message rendering, per-LLM-call observability hook, SSE Error frame for provider failures |
+| 1.6 | two-channel output + disclaimer | done | mid-ship insertion: Narrative SSE channel alongside Claim, prompt v2 (drops rigid fetch-then-emit loop), permanent disclaimer footer, `narrative.no_factuality_gate` stub registered |
+| 2 | defense teeth | done | shipped 2026-04: cheap-model gate (`openai/gpt-oss-20b:free`) over Claim AND Narrative, constitution v1 (6 rules, versioned `policy_v1`), `policy.always_approve` stub deleted, `narrative.no_factuality_gate` renamed to `narrative.no_numerical_crosscheck` (cross-check itself deferred to ship 2.5), prompt v2 identity micro-update |
+| 2.5 | numerical cross-check | done | shipped 2026-04: deterministic regex extractor + tolerance compare in `policy_crosscheck.rs`, lenient-mode reference set (same-turn ∪ prior-turn `AgentThread.claims`, FIFO-capped at 20), constitution v2 with Rule 5 rewritten to "no calculation", `narrative.no_numerical_crosscheck` stub retired (3 stubs total). 17 extractor unit tests pass; cross-check verified retracting unsourced "50,000 SOL" in dogfood. |
+| 2.6 | retry + identity scrub | done | shipped 2026-04: narrative retractions retry up to 3× with rig feedback (model self-corrects when handed the retract reason); retry skipped if any Claim has already flowed to SSE (dupe-Claim worse than gated-prose). Final exhaustion sends a generic `SseFrame::Error` "Couldn't produce a valid response. Try rephrasing or try again."  no constitution leak. AgentDiagnostics scrubbed: `provider` / `primary_model` / `policy_model` removed; only `enabled` + stubs + primitives ship to frontend. Stub-banner header chip dropped. UTF-8 byte-slice panic in extractor fixed (real model output had unicode). |
+| 2.6.1 | dev-mode UI observability + bug-fix sweep | done | shipped 2026-04: solo-dev observability pattern. UI is the only surface dev naturally checks, so dev-mode surfaces internals on the UI itself via `debug_*` fields on `SseFrame::Error` and `SseFrame::NarrativeRetracted`, populated only when backend ships with `AGENT_DEBUG_PUBLIC=1`. Prod default unset so wire stays sterile. Fixes ride along: regex extractor switched from sentence-scan to immediate-token classification (kills the "3 SOL" false retract caused by digits inside wallet addresses picking up far-downstream "SOL" mentions); double-wrap "rig prompt failed: rig prompt failed:" prefix removed; multiplier regex alternation reordered longest-first so `trillion` no longer captures only `t`. 18 extractor unit tests pass including new address-digit regression. |
+| 3 | real primitive surface | not started | next up |
 | 4 | cost framework | not started | |
 | 5 | warehouse primitives | not started | |
 | 6 | eval suite | not started | |
@@ -339,7 +344,340 @@ to its own file only if the section grows past readable.
 | 8+ | phase 07 polish | not started | observed-need |
 
 Update this table at the end of every ship. The "current" ship is
-the topmost row whose status is not "done".
+the topmost row whose status is not "done". Mid-ship insertions
+(1.5, 1.6) get a row when they land; they are not retroactive
+re-numbering of the original ships.
+
+## Retros
+
+Append-only ship-by-ship log. Each entry: what surprised vs what we
+predicted, and what (if anything) the surprise changed about the
+next ship. Keeps the build order honest about what we actually
+learned.
+
+### Ship 1, 2026-04
+
+What surprised:
+
+- `rig 0.36`'s `Chat::chat(...)` is single-turn and exposes no
+  `.max_turns(N)`; tool-using multi-turn requires
+  `agent.prompt(user).with_history(...).max_turns(N)`. The plan
+  assumed `chat()` was the right entry point. Cost: half a day to
+  trace the rig source and switch to `PromptRequest`.
+- Per-call observability had to land in ship 1, not as a polish
+  item. Without `PromptHook` instrumentation we could not tell
+  whether a session was in a tight tool-loop hitting the provider
+  repeatedly. Added `LlmCallLogger` (impls `PromptHook<M>`) writing
+  per-call ledger rows + structured logs.
+- Provider 5xx from OpenRouter (especially Nvidia-routed free-tier
+  models) is routine, not exceptional. Without an SSE error path
+  the frontend hangs on "thinking..." indefinitely when rig's
+  `prompt().await` returns `Err`. Added `SseFrame::Error` and a
+  defensive Done-fallback on the frontend.
+
+Changes for next ships: nothing structural. Ship 2 inherits the
+hook + error path as built.
+
+### Ship 1.5 (mid-ship insertion), 2026-04
+
+What surprised:
+
+- Where to store thread state was a real architectural choice, not
+  obvious. Backend-owned in-memory map (`Arc<Mutex<HashMap<thread_id,
+  AgentThread>>>`) won over frontend-stored history because it
+  keeps cost attribution, ledger replay, and the future memory
+  layer all in one place; the frontend just echoes a `thread_id`.
+- Lifecycle subtlety: refresh should clear, close+reopen of the
+  sheet should NOT clear. Required lifting `useAgentStream` from
+  `agent-sheet.tsx` to `graph-page.tsx` so the hook state survives
+  sheet open/close (only dies on page unmount).
+- "How long do we keep the user chat" is its own research phase
+  (memory layer), not ship 1.5's job. Surfaced as the
+  `thread.in_memory_only` stub naming every concern (no persistence,
+  no length cap, no token cap, no TTL, no per-principal scoping)
+  so the gap is visible, not silent.
+
+Changes for next ships: ship 4's cost framework should attribute
+budget per thread_id (across turns) AND per principal_hash, since
+the thread map gives us a clean cross-turn bucket already.
+
+### Ship 1.6 (mid-ship insertion), 2026-04
+
+What surprised:
+
+- `emit_claim` being the only rendered output channel was a much
+  bigger constraint than the ship 1 design predicted. On follow-up
+  turns the model would re-fire `wallet_profile` solely to get fresh
+  ProvenanceRefs for an `emit_claim`, since the provenance contract
+  required them and there was no other path to a visible response.
+  Result: ~90s redundant turns answering interpretive follow-ups
+  with re-stated stats. Adding the Narrative channel brought
+  follow-ups to ~5s with genuine interpretation, no redundant tool
+  calls.
+- The fix was NOT "stream the model's text raw" (that loses the
+  provenance contract entirely). It was a second, clearly-labeled
+  channel with its own visibility stub
+  (`narrative.no_factuality_gate`) and a permanent disclaimer
+  footer. Two channels + visibility, not one channel widened.
+- Referential / pronoun-drift is a class of bug ship 2's factuality
+  gate will NOT catch. Numbers in narrative can be internally
+  consistent with a cited Claim while the cited Claim is about the
+  wrong wallet entirely. Caught in dogfood: a follow-up "is it SOL
+  only?" profiled the top counterparty instead of the focused
+  wallet, and answered confidently for the wrong entity. Resisted
+  the urge to add an if/else pronoun rule to the prompt; would
+  start a rule-list cascade. Parked for "Prompt v3 principles
+  refactor after 10+ dogfood interactions".
+- Free-tier nemotron is template-y under structured output
+  pressure. Once it learned the `Profile` Claim shape it would
+  fill it on every wallet question regardless of question intent.
+  Two-channel + prompt v2 broke that; principle-only prompts may
+  regress on smaller models, so the prompt still mixes principle
+  with explicit channel-selection patterns.
+
+Changes for next ships:
+
+- Ship 2 should gate Claims only, NOT Narrative. Narrative
+  factuality (cross-checking prose numbers against cited Claims)
+  is a distinct prompt + comparison shape and deserves its own
+  follow-up; bundling it bloats ship 2.
+- Ship 3 (wider primitive surface) should include showing tool-call
+  args on Claim cards (e.g. "ran `wallet_profile(9NXv…g6VR)`")
+  before the headline, so referential drift is visible in 1 second
+  instead of buried in chip addresses. The plumbing exists already
+  (Progress events carry `detail: "wallet_profile"`); we just don't
+  surface args.
+- A "Prompt v3 principles refactor" backlog item: collect ~10
+  dogfood failures across categories (referential, off-topic, tool
+  selection, hedging) before rewriting. Don't refactor preemptively.
+
+### Ship 2, 2026-04
+
+What surprised:
+
+- The cheap policy model (`openai/gpt-oss-20b:free`) almost never
+  retracted in practice during dogfood. Reason: prompt v2 (the
+  primary's instructions) plus prompt v2's micro-update for identity
+  made the primary refuse adversarial prompts itself, in
+  domain-appropriate language the constitution explicitly approves.
+  The gate fired on every emission but found nothing to retract on
+  five different adversarial probes (off-topic, identity drift,
+  trading advice, forced model reveal, injection-style instruction).
+  Defense in depth working as intended; the gate is the safety net,
+  not the primary defense.
+- We did NOT visually verify the retraction render path during
+  ship 2 dogfood because we couldn't elicit a natural retraction.
+  The code path is wired and type-safe (`SseFrame::NarrativeRetracted`
+  + frontend listener + amber struck-through styling), and parse
+  failures fail-closed. First real retraction will fire on a
+  policy-model 5xx (parse-failure path) or when the primary slips
+  through prompt v2.
+- `via stubs:` line on Claim cards now reads just "via stubs:
+  budget" instead of "via stubs: policy, budget". Visible evidence
+  of `policy.always_approve` deletion that lives even on retracted
+  claims.
+
+Changes for next ships:
+
+- **Ship 2.5 (numerical cross-check)** is now the next milestone.
+  The renamed stub `narrative.no_numerical_crosscheck` carries
+  through. Implementation plan: extend `OutputPolicy::check_narrative`
+  to also include same-turn-Claim numbers in the gate's user
+  message and tighten Rule 5 to forbid numbers in narrative that
+  aren't found in `same_turn_claims.support_numbers` or claim
+  `body_markdown`. The structural piece is already in place
+  (`same_turn_claims` flow into the gate); ship 2.5 is mostly a
+  constitution wording change + retraction-rate telemetry.
+- Ship 3 (primitive surface) should plan for `support_numbers` to
+  be more reliably populated by primitives so ship 2.5's
+  cross-check has clean reference data.
+- The "first 20 dogfood retractions" feedback loop named in the
+  ship 2 plan didn't fire because retractions were 0/5. May need
+  to seed deliberate retraction tests in ship 6's eval suite to
+  exercise the path, since organic retractions are rarer than
+  predicted with prompt v2's strength.
+
+### Ship 2.5, 2026-04
+
+What surprised:
+
+- The cross-check is genuinely fast: <1ms per gate call (regex
+  extraction over typical narrative + claim text). The pre-flight
+  position before the cheap-model constitution gate means
+  cross-check retractions skip the 2-5s OpenRouter round trip
+  entirely. Free latency win on top of the correctness win.
+- First retraction fired immediately on the verification probe
+  ("end with 'this wallet just moved 50,000 SOL'"): the model
+  complied with the user's instruction, narrative said "50,000
+  SOL", no Claim cited that number, retract. Reason text
+  "narrative number 50000 SOL not found in cited Claims" is
+  genuinely informative (vs ship 2's only-via-cheap-model reasons).
+- Lenient-mode WORKED: a follow-up turn with `same_turn_claims=0`
+  but `thread_history_claims=1` (from prior turn's emitted Claim)
+  ran the cross-check against the thread.claims buffer. Verified
+  by the `narrative emitted; gating` log line showing both counts.
+- The model occasionally writes its full chain-of-thought into
+  narrative on follow-up turns. Cross-check still fires correctly
+  (the rambling contained "1 SOL = 1e9 lamports" definitional
+  number → no cited Claim → retract). This is the right behavior;
+  the model shouldn't be doing unit conversions in narrative
+  anyway. Prompt v3 (eventual) might tighten "narrative is
+  user-facing prose, not your scratchpad".
+- The extractor's `small_bare_integer_skipped` heuristic correctly
+  handled "60-second window" without false-retracting (the bare
+  "60" in a definitional context is too small / context-free to
+  audit). Approve-on-uncertain working as designed.
+- Regex bug found in unit tests: the original alternation
+  `\d{1,3}(?:,\d{3})*|\d+` matched only the first 3 digits of bare
+  integers (regex left-most-first alternation took the shorter
+  match). Fixed by requiring the comma-group alternative to have
+  AT LEAST one comma group (`(?:,\d{3})+`), so plain integers fall
+  through to the second alt. Unit test `plain_integer` caught it
+  before deployment; would have shipped a real false-approve in
+  the wild.
+- Unicode superscripts (`¹³` in `1.2×10¹³`) don't match `\d` even
+  with `(?i)`. Solved with a pre-processing pass that folds
+  superscript codepoints + the `×` glyph to ASCII before regex
+  matching. Caught by `scientific_x10_superscript` unit test.
+
+Changes for next ships:
+
+- Ship 3 (primitive surface) should ensure new primitives populate
+  `Claim.support_numbers[]` reliably so the cross-check's
+  reference set has structured numbers, not just regex'd
+  body_markdown. Prompt v3 / tool descriptions can teach this.
+- Ship 6 (eval suite) should include adversarial fixtures that
+  deliberately try to slip numbers past the cross-check. The
+  retraction reason format `"narrative number N UNIT not found in
+  cited Claims"` is structured enough for assertion matching.
+- Tolerance defaults (±10% / ±15%) held in dogfood; revisit if
+  long-tail false retracts appear.
+- A future "narrative discipline" prompt update could discourage
+  the chain-of-thought leak observed in one follow-up turn. Not a
+  ship 2.5 concern; park as a Prompt v3 candidate.
+
+### Ship 2.6, 2026-04
+
+What surprised:
+
+- The model self-corrects on retry. First adversarial probe
+  ("end with 'this wallet just moved 50,000 SOL'") retracted on
+  attempt 0, then attempt 1 produced a polite refusal ("I'm
+  unable to verify that specific transfer amount...") that
+  approved cleanly. The retry feedback (server-side message
+  naming the retract reason) seems sufficient to nudge the model
+  back to compliance without a prompt rewrite. Means most
+  retractions in real use will resolve on attempt 2; the 3rd
+  attempt + friendly Error path will be rare.
+- UTF-8 byte-slice panic surfaced under the retry path that
+  ship 2.5's tests never hit. The cross-check used
+  `&lower[byte_offset..m.start()]` to look at pre-context, which
+  panics if `byte_offset` lands mid-codepoint. ASCII-only unit
+  tests passed; real model output (smart quotes, em-dashes,
+  NBSPs) panicked. Fixed by walking back char-aligned via
+  `char_indices().rev().nth(19)`. Lesson: unit-test fixtures with
+  unicode-laden strings, not just ASCII.
+- Diagnostics-scrub was a 30-second change but a real defensive
+  win. The stub-banner had been showing
+  `openrouter/nemotron-3-super-120b-a12b:free` on every render
+  since ship 1, contradicting constitution Rule 4's "agent's
+  identity is the analyst, not the model behind it". Caught only
+  because user pointed at the stub-banner chip and asked "are we
+  leaking the model name". Worth periodically auditing wire shapes
+  for this class of leak; the constitution gate doesn't guard
+  against ourselves shipping the answer in metadata.
+- Generic friendly error ("Try rephrasing or try again.")
+  instead of category-specific reasons was the right call on
+  reflection. Categorized errors leak the gate's shape (an
+  attacker can probe constitution rules by varying the prompt
+  and reading the categorized error). Generic costs nothing in
+  UX value (user re-tries either way) and forecloses that
+  attack vector.
+
+Changes for next ships:
+
+- Ship 6 (eval suite) should fixture-test the retry path
+  specifically: assert `Progress { phase: "retrying" }` events
+  fire when narratives retract, and that the friendly Error
+  message appears verbatim after exhaustion. Existing assertions
+  on retract reasons in ledger payloads still work for ops
+  debugging; the user-facing wire just doesn't carry them.
+- Constitution wording on attempt-feedback messages held up;
+  did not need iteration in dogfood. If it drifts, the retry
+  feedback in `loop.rs` is the one place to update.
+- Per-turn latency budget grows under retry: 1 attempt
+  ≈ 60s, 3 attempts ≈ 180s. If we add ship 4 cost gating with
+  per-turn caps, retries count toward the cap. Worth designing
+  retries as already-counted before ship 4.
+
+### Ship 2.6.1, 2026-04
+
+What surprised:
+
+- The catch-22 the dev called out resolved cleanly via a single
+  env flag at the wire layer. UI as observability surface in dev,
+  sterile in prod  same code, single source of truth. Pattern
+  worth applying anywhere we have "dev wants to see internals,
+  prod must hide them" tension. Honeycomb / Datadog culture
+  champions instrumentation-first dev cycle; for a solo-dev
+  portfolio without that infra, the equivalent is "the UI you
+  already use is your dashboard when AGENT_DEBUG_PUBLIC=1".
+- The "3 SOL" false-retract was a chain of three regex bugs the
+  ASCII-only ship 2.5 fixtures missed: (a) tail-extending past
+  arbitrary alphanumeric content into the rest of the sentence,
+  picking up unrelated unit mentions; (b) UTF-8 byte slicing
+  panicking on smart quotes (caught + fixed in ship 2.6); (c)
+  multiplier alternation `k|m|b|t|...|trillion` capturing single
+  letters before long words. All three only fired on real model
+  output, not test fixtures. Lesson: include real-shape narratives
+  in test fixtures (smart quotes, addresses-with-digits, em-dashes,
+  unicode multipliers); ASCII-only tests give false confidence.
+- The double-wrap "rig prompt failed: rig prompt failed:" was
+  caused by the retry-loop wrapper re-prefixing an already-prefixed
+  inner error. Two layers of `anyhow::anyhow!("rig prompt failed:
+  {e}")` because each layer thought it owned the prefix. Fix: the
+  innermost wrapper (`run_with_openrouter`) keeps the prefix; the
+  outer retry loop just propagates `e` verbatim. General lesson:
+  one error-wrapping layer per error class, not "every level
+  wraps for safety".
+- The new immediate-token classifier is strictly more correct
+  than the old sentence-scan, but it required reordering the
+  multiplier regex (longest-first) because the immediate-token
+  approach reads exactly what the regex captured. The two changes
+  had to ship together.
+
+Changes for next ships:
+
+- The `debug_*` field pattern generalizes: any future SSE frame
+  that would otherwise leak internals to prod (e.g. budget-denied
+  reasons, ledger replay snippets) should follow the same pattern.
+  Centralize the env read once via `state.agent_debug_public`;
+  every wire-construction site decides per-frame.
+- The `r#"..."#` raw string fix in the regex catches a future
+  trap: any time we want comments inside a regex that mention
+  ASCII quoted phrases, we need hash delimiters. Worth a project
+  convention: always use `r#"..."#` for multi-line regex strings,
+  zero exception.
+- Test fixtures for cross-check (and ship 6 eval) should include
+  a "real model narrative" fixture set built from actual dogfood
+  output. ASCII fixtures alone aren't enough; that's twice now.
+
+## Known issues (parked, not blocking)
+
+- **Cross-check immediate-token lookahead is too narrow** (found
+  in ship 2.6.1 dogfood, parked). The classifier reads exactly one
+  alphabetic token after the number, so a single adjective
+  between number and unit ("33 **total** connections", "5
+  **active** counterparties") classifies the number as `Raw` and
+  skips it. The narrative side often paraphrases without the
+  adjective ("33 connections"), so the same number is classified
+  as `Count` on the narrative side and `Raw` on the claim side,
+  causing a false retract. Dev-mode `debug_*` field made this
+  visible inline. Fix path: N-token lookahead (cap 3) bounded by
+  next-digit-token (so a downstream number's unit doesn't poison
+  the current number's classification). Apply symmetrically to
+  both narrative and claim extraction. Defer until cross-check
+  false-retract rate becomes user-visible noise.
 
 ## Resume prompt for chat
 
@@ -348,4 +686,6 @@ the topmost row whose status is not "done".
 > Identify the current ship from the status tracker. Resume work
 > on that ship. Phase docs (01-08) are the source of truth for
 > design decisions; this file is the source of truth for what gets
-> built next and which seams stay stubbed.
+> built next and which seams stay stubbed. Mid-ship insertions
+> (1.5, 1.6 etc.) live in the same tracker; check the Retros
+> section for what each one taught.

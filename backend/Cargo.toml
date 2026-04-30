@@ -44,3 +44,6 @@ fastrand = "2"
 schemars = "0.8"
 ulid = { version = "1", features = ["serde"] }
 sha2 = "0.10"
+# Numerical cross-check (ship 2.5): regex extracts numbers from
+# narrative + claim sources. rust-lang maintained, stable since 2014.
+regex = "1"

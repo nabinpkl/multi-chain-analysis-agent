@@ -18,6 +18,17 @@ pub struct AgentConfig {
     /// Provider API key. Read from a single env var so swapping
     /// providers does not require renaming.
     pub api_key: String,
+    /// Ship 2.6.1: dev-mode toggle for surfacing diagnostic details
+    /// (raw rig errors, raw constitution retract reasons, internal
+    /// model identifiers) on user-visible SSE payloads. When true,
+    /// `SseFrame::Error` / `SseFrame::NarrativeRetracted` carry an
+    /// extra `debug_*` field the frontend renders inline; when false
+    /// (default), the wire only carries friendly user-facing text.
+    /// Set `AGENT_DEBUG_PUBLIC=1` in `.env` for dev; leave unset in
+    /// prod. Pattern: the UI doubles as the observability surface
+    /// in dev mode so the solo dev sees rare events without having
+    /// to remember to check a separate admin panel.
+    pub debug_public: bool,
 }
 
 impl AgentConfig {
@@ -27,8 +38,12 @@ impl AgentConfig {
             primary_model: env::var("AGENT_PRIMARY_MODEL")
                 .unwrap_or_else(|_| "nvidia/nemotron-3-super-120b-a12b:free".into()),
             policy_model: env::var("AGENT_POLICY_MODEL")
-                .unwrap_or_else(|_| "nvidia/nemotron-3-super-120b-a12b:free".into()),
+                .unwrap_or_else(|_| "openai/gpt-oss-20b:free".into()),
             api_key: env::var("AGENT_API_KEY").unwrap_or_default(),
+            debug_public: matches!(
+                env::var("AGENT_DEBUG_PUBLIC").as_deref(),
+                Ok("1") | Ok("true") | Ok("yes")
+            ),
         }
     }
 

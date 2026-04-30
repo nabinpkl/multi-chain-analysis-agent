@@ -48,9 +48,16 @@ export function AgentInput({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    // Cmd/Ctrl+Enter sends; bare Enter inserts a newline (so multi-line
-    // questions are easy and stray Enter does not submit).
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    // Standard chat UX: plain Enter sends, Shift+Enter inserts a
+    // newline. Cmd/Ctrl+Enter also sends (muscle memory from the
+    // earlier UX) so existing users don't get a regression. IME
+    // composition (e.isComposing) is excluded so non-Latin input
+    // methods can use Enter to confirm composition without sending.
+    if (
+      e.key === "Enter" &&
+      !e.shiftKey &&
+      !e.nativeEvent.isComposing
+    ) {
       e.preventDefault();
       submit();
     }
@@ -76,7 +83,7 @@ export function AgentInput({
       />
       <div className="flex items-center justify-between gap-2">
         <span className="text-[0.6rem] uppercase tracking-[1.5px] text-mca-muted">
-          ⌘+enter to send
+          enter to send · shift+enter for newline
         </span>
         <Button type="submit" size="sm" disabled={inFlight || !text.trim()}>
           {inFlight ? "..." : "send"}

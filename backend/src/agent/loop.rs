@@ -54,6 +54,10 @@ pub fn run_session(
     session_started_at_ms: u64,
 ) -> mpsc::Receiver<SseFrame> {
     let (tx, rx) = mpsc::channel::<SseFrame>(32);
+    // Capture before moving `state` into `run`. The error path below
+    // needs to know whether to populate the wire's debug_message
+    // field; AppState is gone by the time we get there.
+    let debug_public = state.agent_debug_public;
     tokio::spawn(async move {
         let tx_for_error = tx.clone();
         if let Err(e) = run(
@@ -67,15 +71,20 @@ pub fn run_session(
         )
         .await
         {
-            warn!(error = %e, %session_id, "agent loop errored");
+            let raw = e.to_string();
+            warn!(error = %raw, %session_id, "agent loop errored");
             // Surface the failure to the SSE stream so the frontend
             // can finalize the pending turn instead of hanging on
-            // "thinking..." until the user reloads. Best-effort; if
-            // the receiver already dropped (client navigated away),
-            // there's nothing to do.
+            // "thinking..." until the user reloads. The user-facing
+            // `message` is always generic; the raw rig error
+            // (provider name, status code, upstream user_id, etc.)
+            // only goes on the wire when AGENT_DEBUG_PUBLIC=1.
             let _ = tx_for_error
                 .send(SseFrame::Error {
-                    message: e.to_string(),
+                    message:
+                        "Couldn't produce a valid response. Try rephrasing or try again."
+                            .to_string(),
+                    debug_message: if debug_public { Some(raw) } else { None },
                 })
                 .await;
         }
@@ -156,17 +165,10 @@ async fn run(
         })
         .await;
 
-    // ----- build rig agent with our primitives wrapped as ToolDyn ---------
-    let adapters = build_adapters(
-        &state,
-        session_id.clone(),
-        principal_hash,
-        session_started_at_ms,
-        sse.clone(),
-    );
-
+    // Per-attempt: tool adapters are rebuilt inside the retry loop
+    // (rig consumes `Vec<Box<dyn ToolDyn>>` per `agent.prompt(...)`,
+    // and we may run multiple attempts per turn).
     let started = std::time::Instant::now();
-    let _ = session_started_at_ms; // also handed to adapters via state lookup
 
     // Pull thread history under the lock, clone, drop the lock before
     // the LLM call. v1.5 in-memory only; orphan-protected because the
@@ -183,75 +185,321 @@ async fn run(
         state.agent_stubs.hit("thread.in_memory_only");
     }
 
-    let result = match &state.agent_client {
-        Some(AgentClient::OpenRouter {
-            client,
-            primary_model,
-        }) => {
-            run_with_openrouter(
+    // Snapshot prior-turn Claims for lenient-mode cross-check. Cloned
+    // under brief lock so the gate runs without holding it. Loop-
+    // invariant across attempts.
+    let thread_history_claims: Vec<crate::agent::types::Claim> = state
+        .agent_threads
+        .lock()
+        .get(&thread_id)
+        .map(|t| t.claims.clone())
+        .unwrap_or_default();
+
+    // ----- ship 2.6 narrative-retry loop ----------------------------------
+    //
+    // Up to MAX_NARRATIVE_ATTEMPTS rig.prompt() calls per turn. Retry
+    // fires when the narrative gate retracts AND no Claim has yet
+    // been pushed to SSE (Claims commit on emit_claim and we cannot
+    // un-push them). On retract with Claims already emitted, the
+    // turn stands as "Claim card + retracted narrative". On retract
+    // with no Claims and attempts exhausted, we send `SseFrame::Error`
+    // with a generic friendly message so the user doesn't see the
+    // policy reason verbatim (constitution rules are a defense-layer
+    // concern, not user UX).
+    //
+    // Across retries: rig adapters and tools are reused (one
+    // primitive registry, one ToolDyn vec). Each retry extends the
+    // conversation history with the previous attempt's text + a
+    // retry-feedback user message naming the constitution rule that
+    // tripped, so the model can self-correct.
+    const MAX_NARRATIVE_ATTEMPTS: u32 = 3;
+    let mut attempt: u32 = 0;
+    let mut retry_extension: Vec<Message> = Vec::new();
+    let mut prompt_for_attempt: String = user_msg.clone();
+    let mut accumulated_claims: Vec<crate::agent::types::Claim> = Vec::new();
+    let mut last_text: Option<String> = None;
+    // Track the most recent retract reason so the friendly-error
+    // path can attach it as `debug_message` in dev mode (ship 2.6.1).
+    // Cleared on approve.
+    let mut last_retract_reason: Option<String> = None;
+    let debug_public = state.agent_debug_public;
+
+    let result = loop {
+        // Build the rig invocation per-attempt: history is base
+        // (thread.messages) + retry_extension. The "user message"
+        // is `prompt_for_attempt`, which is the original wrapped
+        // question on attempt 0 and a retry-feedback message on
+        // subsequent attempts.
+        let extended_history: Vec<Message> = history
+            .iter()
+            .cloned()
+            .chain(retry_extension.iter().cloned())
+            .collect();
+
+        let attempt_result = match &state.agent_client {
+            Some(AgentClient::OpenRouter {
                 client,
                 primary_model,
-                prompt_text,
-                &user_msg,
-                history,
-                adapters,
-                &session_id,
-                &thread_id,
-                &state,
-                principal_hash,
-            )
-            .await
+                ..
+            }) => {
+                // We rebuild adapters per-attempt to keep one
+                // ToolDyn instance per call (rig consumes them).
+                let adapters_for_attempt = build_adapters(
+                    &state,
+                    session_id.clone(),
+                    principal_hash,
+                    session_started_at_ms,
+                    sse.clone(),
+                );
+                run_with_openrouter(
+                    client,
+                    primary_model,
+                    prompt_text,
+                    &prompt_for_attempt,
+                    extended_history,
+                    adapters_for_attempt,
+                    &session_id,
+                    &thread_id,
+                    &state,
+                    principal_hash,
+                )
+                .await
+            }
+            None => {
+                warn!("agent_client unset; cannot run loop");
+                Err(anyhow::anyhow!("agent disabled"))
+            }
+        };
+
+        let attempt_text = match &attempt_result {
+            Ok(t) => t.clone(),
+            Err(e) => {
+                // Provider-level failure (502, network, etc.). Bail
+                // out of the retry loop entirely; the outer error
+                // path emits SseFrame::Error with the friendly text
+                // + raw error in debug field when dev-mode is on.
+                // Pass the inner error verbatim  `run_with_openrouter`
+                // already prefixed "rig prompt failed:", so wrapping
+                // again would produce "rig prompt failed: rig prompt
+                // failed: ..." (caught in dogfood; ship 2.6.1 fix).
+                break Err(anyhow::anyhow!("{e}"));
+            }
+        };
+        last_text = Some(attempt_text.clone());
+
+        // Drain Claims emitted during THIS attempt. emit_claim
+        // already pushed them to SSE; we just track for the gate's
+        // reference set + thread persistence.
+        let new_claims: Vec<crate::agent::types::Claim> = state
+            .agent_claims_emitted
+            .lock()
+            .remove(&session_id)
+            .unwrap_or_default();
+        accumulated_claims.extend(new_claims.iter().cloned());
+
+        let trimmed = attempt_text.trim();
+
+        // Empty narrative: no prose to gate. If Claims emitted, the
+        // turn is "Claim only"  accept. If no Claims either, retry
+        // (model may have produced nothing useful; retrying nudges
+        // it toward a real answer).
+        if trimmed.is_empty() {
+            if !accumulated_claims.is_empty() {
+                break Ok(()); // claim-only turn, no narrative needed
+            }
+            if attempt + 1 < MAX_NARRATIVE_ATTEMPTS {
+                let _ = sse
+                    .send(SseFrame::Progress {
+                        phase: "retrying".into(),
+                        detail: format!(
+                            "no response on attempt {} of {}",
+                            attempt + 1,
+                            MAX_NARRATIVE_ATTEMPTS
+                        ),
+                    })
+                    .await;
+                retry_extension.push(Message::User {
+                    content: OneOrMany::one(UserContent::text(prompt_for_attempt.clone())),
+                });
+                retry_extension.push(Message::Assistant {
+                    id: None,
+                    content: OneOrMany::one(rig::message::AssistantContent::text(
+                        attempt_text.clone(),
+                    )),
+                });
+                prompt_for_attempt = "Your previous response was empty. Please answer the user's question with either a Claim (via emit_claim) or interpretive narrative.".to_string();
+                attempt += 1;
+                continue;
+            }
+            // Exhausted: friendly error, no specifics.
+            // Dev-mode debug field carries the last retract reason
+            // (or "agent produced no response" if we never hit the
+            // gate). Production wire stays sterile.
+            let debug = last_retract_reason
+                .as_deref()
+                .or(Some("agent produced empty narrative on every attempt"));
+            send_friendly_error(&sse, debug_public, debug).await;
+            break Ok(());
         }
-        None => {
-            warn!("agent_client unset; cannot run loop");
-            Err(anyhow::anyhow!("agent disabled"))
+
+        // Run the narrative gate. Reference set = accumulated claims
+        // (this turn, all attempts) + thread history.
+        info!(
+            %session_id,
+            %thread_id,
+            turn,
+            attempt,
+            len = trimmed.len(),
+            same_turn_claims = accumulated_claims.len(),
+            thread_history_claims = thread_history_claims.len(),
+            "narrative emitted; gating",
+        );
+        let verdict = state
+            .agent_policy
+            .check_narrative(trimmed, &accumulated_claims, &thread_history_claims)
+            .await;
+
+        // Ledger PolicyVerdict for this attempt.
+        let verdict_payload = serde_json::json!({
+            "target": "narrative",
+            "verdict": &verdict,
+            "thread_id": &thread_id,
+            "turn": turn,
+            "attempt": attempt,
+        })
+        .to_string();
+        let _ = state
+            .agent_ledger
+            .write(super::ledger::LedgerEventDraft {
+                session_id: session_id.clone(),
+                kind: super::ledger::LedgerEventKind::PolicyVerdict,
+                principal_hash,
+                payload: verdict_payload,
+                pre_estimate_units: 0,
+                post_actual_units: 0,
+                cost_relevant: false,
+            })
+            .await;
+
+        match verdict {
+            crate::agent::types::PolicyVerdict::Approved => {
+                last_retract_reason = None;
+                let _ = sse
+                    .send(SseFrame::Narrative {
+                        text: trimmed.to_string(),
+                    })
+                    .await;
+                    break Ok(());
+            }
+            crate::agent::types::PolicyVerdict::Retracted { reason } => {
+                last_retract_reason = Some(reason.clone());
+                info!(
+                    %session_id,
+                    %thread_id,
+                    attempt,
+                    reason = %reason,
+                    claims_already_emitted = accumulated_claims.len(),
+                    "narrative retracted by policy",
+                );
+
+                // Retry only when no Claim has flowed to SSE yet.
+                // emit_claim pushes Claim frames on every call, so
+                // any Claim from a prior attempt is already on the
+                // wire  retrying would add a duplicate.
+                let claims_committed = !accumulated_claims.is_empty();
+                let attempts_remaining = attempt + 1 < MAX_NARRATIVE_ATTEMPTS;
+
+                if !claims_committed && attempts_remaining {
+                    let _ = sse
+                        .send(SseFrame::Progress {
+                            phase: "retrying".into(),
+                            detail: format!(
+                                "policy retracted; refining (attempt {} of {})",
+                                attempt + 2,
+                                MAX_NARRATIVE_ATTEMPTS
+                            ),
+                        })
+                        .await;
+                    retry_extension.push(Message::User {
+                        content: OneOrMany::one(UserContent::text(prompt_for_attempt.clone())),
+                    });
+                    retry_extension.push(Message::Assistant {
+                        id: None,
+                        content: OneOrMany::one(rig::message::AssistantContent::text(
+                            attempt_text.clone(),
+                        )),
+                    });
+                    // The retry-feedback message names the rule that
+                    // tripped (server-side; the user never sees this)
+                    // so the model can self-correct without us
+                    // rewriting prompt v2 every iteration.
+                    prompt_for_attempt = format!(
+                        "Your previous response was retracted by the output policy. Reason: {reason}. Retry the user's question, this time staying within the rules: numbers in narrative must come from cited Claims (this turn or prior turns of the thread); do not compute new numbers; stay in domain (Solana on-chain graph analysis); decline politely if the question is out of scope; do not name the underlying LLM."
+                    );
+                    attempt += 1;
+                    continue;
+                }
+
+                // No retry path. Two cases:
+                if claims_committed {
+                    // Claim card carries the answer; surface
+                    // narrative as retracted so the user sees
+                    // policy intervened on the prose. The friendly
+                    // `reason` positions the Claim above as the real
+                    // output; the raw constitution `reason` only
+                    // appears in `debug_reason` when dev-mode is on.
+                    let _ = sse
+                        .send(SseFrame::NarrativeRetracted {
+                            text: trimmed.to_string(),
+                            reason:
+                                "Interpretation withheld; the structured profile above carries the verifiable answer."
+                                    .to_string(),
+                            debug_reason: if debug_public {
+                                Some(reason.clone())
+                            } else {
+                                None
+                            },
+                        })
+                        .await;
+                } else {
+                    // Exhausted retries with nothing to show.
+                    // Friendly error, no specifics. Dev-mode field
+                    // carries the last retract reason for the dev
+                    // to see inline.
+                    send_friendly_error(&sse, debug_public, Some(reason.as_str())).await;
+                }
+                    break Ok(());
+            }
         }
     };
 
-    // Append this turn's user prompt + final assistant text to the
-    // thread so the next follow-up sees them. Skipped on error so a
-    // failed turn doesn't pollute the thread.
-    if let Ok(final_text) = &result {
+    // Append this turn to thread.messages so future follow-ups have
+    // context. We save the LAST attempt's text (even if retracted)
+    // because the conversation history is for raw context, not gated
+    // content; hiding turn 0 entirely would leave the model unable to
+    // resolve "it" / "this" on a turn-1 follow-up. Also persist any
+    // approved Claims onto thread.claims for the next narrative
+    // gate's lenient reference set.
+    if result.is_ok() {
         let mut threads = state.agent_threads.lock();
         if let Some(thread) = threads.get_mut(&thread_id) {
-            thread
-                .messages
-                .push(Message::User {
+            if let Some(text) = last_text.as_ref() {
+                thread.messages.push(Message::User {
                     content: OneOrMany::one(UserContent::text(user_msg.clone())),
                 });
-            thread.messages.push(Message::Assistant {
-                id: None,
-                content: OneOrMany::one(rig::message::AssistantContent::text(
-                    final_text.clone(),
-                )),
-            });
+                thread.messages.push(Message::Assistant {
+                    id: None,
+                    content: OneOrMany::one(rig::message::AssistantContent::text(text.clone())),
+                });
+            }
             thread.turn_count = turn.saturating_add(1);
-        }
-    }
-
-    // Push the model's free-form prose through SSE as a Narrative
-    // frame. Ship 1.6: this is the second output channel (alongside
-    // structured Claims). Empty / whitespace-only replies don't get a
-    // bubble; they typically mean the model only emitted tool calls
-    // and let the Claim card carry the answer. Fires the
-    // `narrative.no_factuality_gate` stub so the diagnostics banner
-    // surfaces the unverified-prose risk every time we ship a bubble.
-    if let Ok(final_text) = &result {
-        let trimmed = final_text.trim();
-        if !trimmed.is_empty() {
-            state.agent_stubs.hit("narrative.no_factuality_gate");
-            info!(
-                %session_id,
-                %thread_id,
-                turn,
-                len = trimmed.len(),
-                "narrative emitted",
-            );
-            let _ = sse
-                .send(SseFrame::Narrative {
-                    text: trimmed.to_string(),
-                })
-                .await;
+            if !accumulated_claims.is_empty() {
+                thread.claims.extend(accumulated_claims.iter().cloned());
+                if thread.claims.len() > super::MAX_THREAD_CLAIMS {
+                    let drop = thread.claims.len() - super::MAX_THREAD_CLAIMS;
+                    thread.claims.drain(0..drop);
+                }
+            }
         }
     }
 
@@ -539,4 +787,28 @@ fn sha256_hex(bytes: &[u8]) -> String {
     h.update(bytes);
     let digest: [u8; 32] = h.finalize().into();
     super::ledger::event::hex_encode(&digest)
+}
+
+/// Generic user-facing error after exhausting narrative retries
+/// (ship 2.6). Deliberately category-free: leaking which constitution
+/// rule retracted means leaking the gate's shape, which is a defense
+/// concern. The full retract reason is in the ledger
+/// (`PolicyVerdict` rows per attempt) for ops debugging.
+///
+/// Ship 2.6.1: when `debug_public` is true, `last_reason` is attached
+/// to the wire as `debug_message` so the dev-mode UI can surface it
+/// inline without leaking to prod users.
+async fn send_friendly_error(sse: &ClaimSink, debug_public: bool, last_reason: Option<&str>) {
+    let _ = sse
+        .send(SseFrame::Error {
+            message:
+                "Couldn't produce a valid response. Try rephrasing or try again."
+                    .to_string(),
+            debug_message: if debug_public {
+                last_reason.map(|r| r.to_string())
+            } else {
+                None
+            },
+        })
+        .await;
 }

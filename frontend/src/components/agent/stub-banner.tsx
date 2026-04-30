@@ -12,6 +12,12 @@ import { cn } from "@/lib/utils";
  * a stub is removed (its `register` call deleted), the entry
  * disappears here automatically.
  *
+ * Ship 2.6: header chip dropped. The diagnostics endpoint no longer
+ * returns provider/model identifiers (constitution Rule 4 says the
+ * agent's identity is the analyst, not the model behind it; the chip
+ * used to contradict that). Operators read model identifiers from
+ * server logs.
+ *
  * Always visible while the agent sheet is open; cannot be dismissed.
  * Click to expand/collapse the full list.
  */
@@ -22,7 +28,7 @@ export function StubBanner({ enabled }: { enabled: boolean }) {
   if (!diagnostics && !error) {
     return (
       <div className="px-3 py-2 border-b border-mca-border text-[0.6rem] uppercase tracking-[1.5px] text-mca-dim">
-        loading agent diagnostics…
+        loading agent diagnostics
       </div>
     );
   }
@@ -48,8 +54,7 @@ export function StubBanner({ enabled }: { enabled: boolean }) {
           <AlertTriangleIcon className="size-3" />
           stubs ({stubCount}) active
         </span>
-        <span className="flex items-center gap-2 text-[0.6rem] text-amber-500/70 tabular-nums">
-          {diagnostics?.provider}/{shortModel(diagnostics?.primary_model ?? "")}
+        <span className="flex items-center gap-1 text-[0.6rem] text-amber-500/70">
           {expanded ? (
             <ChevronUpIcon className="size-3" />
           ) : (
@@ -96,12 +101,4 @@ export function StubBanner({ enabled }: { enabled: boolean }) {
       ) : null}
     </div>
   );
-}
-
-function shortModel(model: string): string {
-  // "nvidia/nemotron-3-super-120b-a12b:free" -> "nemotron-3-super…:free"
-  const parts = model.split("/");
-  const tail = parts[parts.length - 1] ?? model;
-  if (tail.length > 28) return `${tail.slice(0, 24)}…${tail.slice(-3)}`;
-  return tail;
 }

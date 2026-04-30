@@ -48,6 +48,7 @@ export function AgentClaimList({
                 text={turn.userText}
                 pending={pending}
                 errorMessage={turn.error}
+                errorDebug={turn.errorDebug}
               />
               {turn.claim ? (
                 <ClaimRender
@@ -55,7 +56,13 @@ export function AgentClaimList({
                   onModalRequest={() => setModalSlice(turn.claim)}
                 />
               ) : null}
-              {turn.narrative ? <NarrativeBubble text={turn.narrative} /> : null}
+              {turn.narrative ? (
+                <NarrativeBubble
+                  text={turn.narrative}
+                  retractedReason={turn.narrativeRetractedReason}
+                  retractedDebug={turn.narrativeRetractedDebug}
+                />
+              ) : null}
             </div>
           );
         })}

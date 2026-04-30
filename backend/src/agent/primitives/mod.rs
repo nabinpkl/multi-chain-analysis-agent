@@ -49,17 +49,39 @@ pub enum SseFrame {
     /// Free-form interpretive prose. Carries the model's natural reply
     /// text (the string returned by `rig::prompt(...).await`) so the
     /// frontend can render it as an "interpretation" bubble alongside
-    /// the structured Claim cards. Ship 1.6 introduces this channel
-    /// alongside a permanent disclaimer + the
-    /// `narrative.no_factuality_gate` stub so the user sees that
-    /// numerical claims inside Narrative are NOT cross-checked against
-    /// cited Claims yet (ship 2 closes the gap).
+    /// the structured Claim cards. Ship 1.6 introduced this channel.
+    /// Ship 2 added the constitution gate: only narrative that the
+    /// gate approves arrives as `Narrative`; gate-retracted narrative
+    /// arrives as `NarrativeRetracted` instead.
     Narrative { text: String },
+    /// Narrative the constitution gate retracted (ship 2). Carries the
+    /// original text alongside a friendly user-facing `reason`.
+    ///
+    /// `debug_reason` is the raw policy reason (e.g. "narrative
+    /// number 50000 SOL not found in cited Claims"); only populated
+    /// when `AGENT_DEBUG_PUBLIC=1` (ship 2.6.1 dev-mode). The
+    /// frontend renders it inline as an expandable diagnostic block
+    /// when present so the dev sees rare events on the UI itself.
+    /// Prod default: `debug_reason: None`, wire stays sterile.
+    NarrativeRetracted {
+        text: String,
+        reason: String,
+        debug_reason: Option<String>,
+    },
     /// Terminal turn-level error (e.g. provider 5xx, network drop, rig
     /// loop crashed). The SSE handler renders this as an `Error` event
     /// before the closing `Done`, so the frontend can finalize the
     /// pending turn instead of hanging on its "thinking..." spinner.
-    Error { message: String },
+    ///
+    /// `message` is the friendly user-facing string. `debug_message`
+    /// carries the raw underlying error (rig prompt failure, HTTP
+    /// status, etc.) only when `AGENT_DEBUG_PUBLIC=1`; absent in
+    /// prod so we don't leak provider names, status codes, or
+    /// upstream user_ids to end users.
+    Error {
+        message: String,
+        debug_message: Option<String>,
+    },
 }
 
 pub type ClaimSink = mpsc::Sender<SseFrame>;

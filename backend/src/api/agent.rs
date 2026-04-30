@@ -206,14 +206,44 @@ fn frame_to_event(frame: SseFrame) -> Result<Event, Infallible> {
                 .event("error")
                 .data(format!("serialize Narrative failed: {e}")),
         },
-        SseFrame::Error { message } => match serde_json::to_string(&serde_json::json!({
-            "message": message,
-        })) {
-            Ok(json) => Event::default().event("Error").data(json),
-            Err(e) => Event::default()
-                .event("error")
-                .data(format!("serialize Error failed: {e}")),
-        },
+        SseFrame::NarrativeRetracted {
+            text,
+            reason,
+            debug_reason,
+        } => {
+            let mut payload = serde_json::json!({
+                "text": text,
+                "reason": reason,
+            });
+            // Ship 2.6.1: only include debug field on the wire when
+            // backend was started with AGENT_DEBUG_PUBLIC=1. None
+            // omits the field entirely so a curl of the SSE endpoint
+            // in prod can never see internals.
+            if let Some(d) = debug_reason {
+                payload["debug_reason"] = serde_json::Value::String(d.clone());
+            }
+            match serde_json::to_string(&payload) {
+                Ok(json) => Event::default().event("NarrativeRetracted").data(json),
+                Err(e) => Event::default()
+                    .event("error")
+                    .data(format!("serialize NarrativeRetracted failed: {e}")),
+            }
+        }
+        SseFrame::Error {
+            message,
+            debug_message,
+        } => {
+            let mut payload = serde_json::json!({ "message": message });
+            if let Some(d) = debug_message {
+                payload["debug_message"] = serde_json::Value::String(d.clone());
+            }
+            match serde_json::to_string(&payload) {
+                Ok(json) => Event::default().event("Error").data(json),
+                Err(e) => Event::default()
+                    .event("error")
+                    .data(format!("serialize Error failed: {e}")),
+            }
+        }
     };
     Ok(ev)
 }

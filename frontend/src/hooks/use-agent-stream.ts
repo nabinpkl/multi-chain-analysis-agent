@@ -22,14 +22,25 @@ export type AgentStatus =
 
 /**
  * One round of conversation: the user's question + the resulting
- * agent output. Ship 1.6 splits output into two channels: a structured
- * `claim` (rendered as a card with chips) and a free-form `narrative`
- * (rendered as an "interpretation" bubble). A turn may carry one,
- * both, or neither (a turn with neither + no error means the loop
- * ended without a response, which the Done-fallback marks as errored).
+ * agent output. Ship 1.6 split output into two channels: a structured
+ * `claim` (card with chips) and a free-form `narrative` (interpretation
+ * bubble). Ship 2 added the constitution gate: narrative the gate
+ * retracts arrives with `narrativeRetractedReason` set, and the bubble
+ * renders in struck-through amber styling instead of normal prose.
  *
- * Pending = nothing yet: claim, narrative, and error are all null.
- * The "thinking..." placeholder renders only while pending.
+ * Ship 2.6.1: `*Debug*` fields carry diagnostic detail when the
+ * backend is started with `AGENT_DEBUG_PUBLIC=1`. The frontend renders
+ * them inline as a small monospace block under the user-facing text
+ * so the dev sees rare events on the UI itself (the only surface the
+ * solo dev naturally checks). In prod the backend never populates
+ * these fields, so they're always null.
+ *
+ * A turn may carry any combination: claim only, narrative only, both,
+ * a retracted narrative, or nothing (the Done-fallback flags the last
+ * case as errored so the spinner doesn't hang).
+ *
+ * Pending = nothing yet: claim, narrative, retraction, and error all
+ * null. The "thinking..." placeholder renders only while pending.
  */
 export interface ChatTurn {
   id: string;
@@ -37,7 +48,10 @@ export interface ChatTurn {
   sentAtMs: number;
   claim: Claim | null;
   narrative: string | null;
+  narrativeRetractedReason: string | null;
+  narrativeRetractedDebug: string | null;
   error: string | null;
+  errorDebug: string | null;
 }
 
 /**
@@ -94,7 +108,10 @@ export function useAgentStream() {
         sentAtMs: Date.now(),
         claim: null,
         narrative: null,
+        narrativeRetractedReason: null,
+        narrativeRetractedDebug: null,
         error: null,
+        errorDebug: null,
       };
       setTurns((prev) => [...prev, newTurn]);
       setStatus({ kind: "sending" });
@@ -191,16 +208,52 @@ export function useAgentStream() {
         }
       });
 
+      es.addEventListener("NarrativeRetracted", (ev) => {
+        const data = (ev as MessageEvent<string>).data;
+        try {
+          const parsed = JSON.parse(data) as {
+            text?: string;
+            reason?: string;
+            debug_reason?: string;
+          };
+          const text = parsed.text ?? "";
+          const reason = parsed.reason ?? "Interpretation withheld.";
+          const debugReason = parsed.debug_reason ?? null;
+          if (!text) return;
+          setTurns((prev) => {
+            const idx = prev.findIndex((t) => t.id === turnId);
+            if (idx === -1) return prev;
+            const next = prev.slice();
+            if (next[idx].narrative === null) {
+              next[idx] = {
+                ...next[idx],
+                narrative: text,
+                narrativeRetractedReason: reason,
+                narrativeRetractedDebug: debugReason,
+              };
+            }
+            return next;
+          });
+        } catch {
+          // skip malformed payloads
+        }
+      });
+
       es.addEventListener("Error", (ev) => {
         const data = (ev as MessageEvent<string>).data;
-        let msg = "agent loop errored";
+        let msg = "Couldn't produce a valid response. Try rephrasing or try again.";
+        let debug: string | null = null;
         try {
-          const parsed = JSON.parse(data) as { message?: string };
+          const parsed = JSON.parse(data) as {
+            message?: string;
+            debug_message?: string;
+          };
           if (parsed.message) msg = parsed.message;
+          if (parsed.debug_message) debug = parsed.debug_message;
         } catch {
-          // keep default
+          // keep defaults
         }
-        markTurnError(turnId, msg);
+        markTurnError(turnId, msg, debug);
       });
 
       es.addEventListener("Done", (ev) => {
@@ -246,13 +299,13 @@ export function useAgentStream() {
         cleanup();
       };
 
-      function markTurnError(id: string, msg: string) {
+      function markTurnError(id: string, msg: string, debug: string | null = null) {
         setTurns((prev) => {
           const idx = prev.findIndex((t) => t.id === id);
           if (idx === -1) return prev;
           const next = prev.slice();
           if (next[idx].error === null) {
-            next[idx] = { ...next[idx], error: msg };
+            next[idx] = { ...next[idx], error: msg, errorDebug: debug };
           }
           return next;
         });

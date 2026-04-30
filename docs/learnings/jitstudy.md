@@ -1,4 +1,4 @@
-Two distinct questions, both worth pulling apart.
+
 
 **Is Jito fairly distributing MEV among searchers?**
 
