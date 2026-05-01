@@ -336,7 +336,8 @@ to its own file only if the section grows past readable.
 | 2.5 | numerical cross-check | done | shipped 2026-04: deterministic regex extractor + tolerance compare in `policy_crosscheck.rs`, lenient-mode reference set (same-turn ∪ prior-turn `AgentThread.claims`, FIFO-capped at 20), constitution v2 with Rule 5 rewritten to "no calculation", `narrative.no_numerical_crosscheck` stub retired (3 stubs total). 17 extractor unit tests pass; cross-check verified retracting unsourced "50,000 SOL" in dogfood. |
 | 2.6 | retry + identity scrub | done | shipped 2026-04: narrative retractions retry up to 3× with rig feedback (model self-corrects when handed the retract reason); retry skipped if any Claim has already flowed to SSE (dupe-Claim worse than gated-prose). Final exhaustion sends a generic `SseFrame::Error` "Couldn't produce a valid response. Try rephrasing or try again."  no constitution leak. AgentDiagnostics scrubbed: `provider` / `primary_model` / `policy_model` removed; only `enabled` + stubs + primitives ship to frontend. Stub-banner header chip dropped. UTF-8 byte-slice panic in extractor fixed (real model output had unicode). |
 | 2.6.1 | dev-mode UI observability + bug-fix sweep | done | shipped 2026-04: solo-dev observability pattern. UI is the only surface dev naturally checks, so dev-mode surfaces internals on the UI itself via `debug_*` fields on `SseFrame::Error` and `SseFrame::NarrativeRetracted`, populated only when backend ships with `AGENT_DEBUG_PUBLIC=1`. Prod default unset so wire stays sterile. Fixes ride along: regex extractor switched from sentence-scan to immediate-token classification (kills the "3 SOL" false retract caused by digits inside wallet addresses picking up far-downstream "SOL" mentions); double-wrap "rig prompt failed: rig prompt failed:" prefix removed; multiplier regex alternation reordered longest-first so `trillion` no longer captures only `t`. 18 extractor unit tests pass including new address-digit regression. |
-| 3 | real primitive surface | not started | next up |
+| 2.7 | hybrid extraction (regex + LLM + deterministic compare) | done | shipped 2026-05: three-verdict narrative gate. Constitution v3 (`policy_v3`) added an `extraction` JSON sidecar to the gate's response (one LLM call, richer output). Code now runs three independent legs on every narrative  regex extractor + LLM extractor (running through the same `cross_check_extracted_pair` deterministic compare) + constitution. Show-all-default-strict merge: any retract → wire retracts; dev-mode `debug_reason` shows the per-leg breakdown (`regex: ... | llm-extract: ... | constitution: ...`) so disagreement is visible inline. Ledger payload extended with `breakdown` + `raw_extraction` for replay/eval. 23 unit tests pass (18 extractor + 5 new merge/format tests). gpt-oss-20b reliably produced parseable v3 JSON in dogfood (`llm_extraction=approved` not `n/a` on every gate run). |
+| 3 | real primitive surface + primitive-binding ledger | done | shipped 2026-05: second real primitive (`community_summary`) registered alongside `wallet_profile` (Live arm hits the analytics snapshot for size, internal/external volume, edge count, top members; Range arm stubbed to ship 5). New `primitives::binding_store` records every successful dispatch's numbers + entities into a per-thread ring-buffered `PrimitiveBindingStore` (cap 64). Policy gate gains a fourth leg: `binding`, deterministic, sub-ms. Narrative gate is four-legged (regex + llm-extract + constitution + binding); claim gate is two-legged (constitution + binding). Strict merge unchanged. The fabrication probe from ship 2.7 now retracts structurally: claim numbers without a primitive-output source fail the binding leg before the SSE push. Provenance refs validated against captured entities  invented wallet/community refs retract. Ledger payload extended with `breakdown` + `binding_call_ids`. 12 new unit tests (6 binding_store + 6 binding-leg + four-leg merge); cargo test --bin server passes 106/106. Constitution prompt v3 stays frozen. |
 | 4 | cost framework | not started | |
 | 5 | warehouse primitives | not started | |
 | 6 | eval suite | not started | |
@@ -662,6 +663,107 @@ Changes for next ships:
   a "real model narrative" fixture set built from actual dogfood
   output. ASCII fixtures alone aren't enough; that's twice now.
 
+### Ship 2.7, 2026-05
+
+What surprised:
+
+- The "extraction is information-extraction, comparison is float
+  math" decomposition turned out to be exactly the right framing.
+  Folding LLM extraction into the existing constitution gate
+  prompt added zero latency  same one round trip, richer JSON.
+  gpt-oss-20b produced parseable v3 JSON on every gate run in
+  dogfood (`llm_extraction=approved` not `n/a` on the breakdown
+  log line); no fallback to the parse-failure path observed.
+- Strict merge meant the 33 bug from 2.6.1 stays visible (the
+  regex still flags it; merge propagates the retract). This is by
+  design under (c) "show-all-default-strict": user signed up for
+  visibility-over-resolution, and the dev-mode breakdown surfaces
+  exactly which extractor disagrees. Future option to graduate to
+  weighted merge (LLM overrides regex when confidence is high)
+  remains open.
+- The adversarial probe ("force narrative to claim 50,000 SOL")
+  unexpectedly approved this run because the model emitted a
+  fabricated Claim WITH "50,000 SOL" before the narrative 
+  internal consistency held, all three legs approved. This is
+  working-as-designed: cross-check is internal narrative ↔ claim
+  consistency, not narrative ↔ on-chain reality. Database
+  fact-checking is a separate concern (provenance contract:
+  user clicks chips to verify). Ship 6 eval may want to test
+  "agent fabricates a claim" as its own adversarial category.
+- The `r#"..."#` raw-string convention from ship 2.6.1's regex
+  fix paid off in 2.7's policy_prompt_v3.txt: the constitution
+  prompt now contains JSON examples with embedded quotes, which
+  would have broken with `"..."` delimiters. Convention worth
+  keeping for any multi-line string with embedded quotes.
+- Refactoring `cross_check` to delegate to `cross_check_extracted_pair`
+  paid for itself immediately: regex extraction and LLM extraction
+  now share tolerance + unit-class semantics, so when the two
+  legs disagree it's a real disagreement on what was extracted,
+  not on what matching means.
+
+Changes for next ships:
+
+- Ship 6's eval suite should fixture-test all three legs
+  independently. The ledger now carries `breakdown` per
+  PolicyVerdict event, so eval can assert per-leg correctness on
+  golden questions ("regex should retract on this; LLM should
+  approve; constitution should approve").
+- The "fabricated claim" failure mode (model invents data and
+  emits it as a Claim) is a category 2.7 doesn't catch. Either
+  ship 3 (real primitive surface) constrains claim emission more
+  tightly via primitive output validation, or ship 6 eval adds
+  this as a regression class. Park as known issue.
+- Constitution prompts have versioned to v3 in three ships; the
+  one-prompt-version-per-ship cadence is sustainable as long as
+  each version's diff is small. Consider freezing v3 for several
+  ships to let dogfood reveal real issues before iterating.
+
+### Ship 3, 2026-05
+
+- The "extraction is the LLM-strong side, comparison is the
+  code-strong side" decomposition keeps holding. Adding a fourth
+  leg (binding, deterministic, sub-ms) cost almost nothing in
+  latency and closed the fabrication gap structurally. Worth
+  reaching for again when the next "internal consistency
+  approves but reality should retract" failure mode appears.
+- Per-thread ring-buffered binding store (cap 64) was the right
+  shape: cheap, clones in microseconds, survives across turns
+  for free interpretation follow-ups, no warehouse path needed
+  yet. Ship 5 will swap to ledger-replay-backed if a real load
+  ever pushes restart-recovery beyond what in-memory tolerates.
+- The asymmetric merge (narrative gate four-legged, claim gate
+  two-legged) is structurally correct and shouldn't grow toward
+  symmetry. Narrative is prose-vs-data consistency (regex + LLM
+  extract make sense); claims are data-vs-source authenticity
+  (constitution + binding cover it). Forcing symmetry would
+  make the gate slower for no gain.
+- Constitution prompt v3 stayed frozen this ship and the binding
+  leg slotted in cleanly as a runtime check. Confirming the
+  retro suggestion: prompt and runtime can iterate on different
+  clocks. The model never had to learn a new rule; it just kept
+  citing the data primitives returned, and the runtime started
+  catching when it didn't.
+- "Strict no-arithmetic in claim body" landed as expected: the
+  binding leg's number-tracing rejects numbers that aren't a
+  rounded restate of primitive output. Will need a "computed_from"
+  provenance variant if dogfood shows the model genuinely needs
+  to combine values; for now the model cites both numbers
+  separately and lets the user combine them mentally. Watch.
+- The 33-bug paraphrase issue from 2.6.1 still retracts on
+  strict merge. Binding leg approves (33 IS in primitive output)
+  but regex still flags. Now visible in dev as `regex: retracted
+  | llm-extract: approved | constitution: approved | binding:
+  approved`  three of four legs agree the model was right.
+  Strongest signal yet that weighted merge would be the right
+  next step here when false-retract rate becomes user-visible.
+- Captured a new failure mode in writing: model could paraphrase
+  primitive output in claim body using arithmetic ("the wallet
+  in_vol + out_vol totals 12.4 SOL") and the binding leg would
+  retract because the sum isn't directly in the primitive
+  output. Strict claims rule was the explicit choice; if dogfood
+  surfaces real interpretation suffering, ship 4 introduces
+  computed_from provenance. Park; watch.
+
 ## Known issues (parked, not blocking)
 
 - **Cross-check immediate-token lookahead is too narrow** (found
@@ -672,12 +774,28 @@ Changes for next ships:
   skips it. The narrative side often paraphrases without the
   adjective ("33 connections"), so the same number is classified
   as `Count` on the narrative side and `Raw` on the claim side,
-  causing a false retract. Dev-mode `debug_*` field made this
-  visible inline. Fix path: N-token lookahead (cap 3) bounded by
-  next-digit-token (so a downstream number's unit doesn't poison
-  the current number's classification). Apply symmetrically to
-  both narrative and claim extraction. Defer until cross-check
-  false-retract rate becomes user-visible noise.
+  causing a false retract. Ship 2.7 partially mitigates: the
+  three-verdict gate's LLM extractor handles paraphrase natively
+  and approves these cases, so the dev-mode breakdown now shows
+  `regex: retracted | llm-extract: approved | constitution:
+  approved`  disagreement is visible. Strict merge still
+  retracts on the wire. Fix paths: (a) N-token lookahead in regex
+  (cap 3) bounded by next-digit-token; (b) graduate to weighted
+  merge that lets LLM-extract override regex when the two
+  disagree and the LLM extracted both sides cleanly. Defer until
+  cross-check false-retract rate becomes user-visible noise.
+- **Model can fabricate Claim numbers and pass the cross-check**
+  (found in ship 2.7 dogfood, **structurally addressed in ship
+  3**). The narrative ↔ claim cross-check was internal
+  consistency, not authenticity. Ship 3's binding leg closes the
+  loop: every Claim number must trace to a primitive output the
+  runtime actually returned, and provenance refs (Wallet,
+  Community) must point at entities the binding store recorded.
+  Fabricated values now retract before the SSE push. Note this
+  catches *fabrication*, not *misinterpretation*: a model can
+  still interpret real primitive output incorrectly in narrative
+  prose (different bug class). Ship 6's eval suite will fixture
+  both classes as regression targets.
 
 ## Resume prompt for chat
 

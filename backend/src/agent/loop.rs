@@ -29,7 +29,8 @@ use tracing::{info, warn};
 use super::client::AgentClient;
 use super::ledger::{LedgerEventDraft, LedgerEventKind};
 use super::primitives::{
-    ClaimSink, DispatchOutput, ErasedPrimitive, PrimitiveCtx, PrimitiveError, SseFrame,
+    build_binding, ClaimSink, DispatchOutput, ErasedPrimitive, PrimitiveBindingStore, PrimitiveCtx,
+    PrimitiveError, SseFrame,
 };
 use super::prompt::active_prompt;
 use super::types::{AgentRequest, CostClass};
@@ -195,6 +196,22 @@ async fn run(
         .map(|t| t.claims.clone())
         .unwrap_or_default();
 
+    // Ship 3: prime the per-session binding buffer from the thread's
+    // persistent store. Each primitive dispatch in this turn appends
+    // here (via the tool adapter); the policy gate's binding leg
+    // reads from this buffer; session-end writes the buffer back to
+    // the thread.
+    let initial_bindings = state
+        .agent_threads
+        .lock()
+        .get(&thread_id)
+        .map(|t| t.bindings.clone())
+        .unwrap_or_default();
+    {
+        let mut buf = state.agent_bindings.lock();
+        buf.insert(session_id.clone(), initial_bindings);
+    }
+
     // ----- ship 2.6 narrative-retry loop ----------------------------------
     //
     // Up to MAX_NARRATIVE_ATTEMPTS rig.prompt() calls per turn. Retry
@@ -342,8 +359,10 @@ async fn run(
             break Ok(());
         }
 
-        // Run the narrative gate. Reference set = accumulated claims
-        // (this turn, all attempts) + thread history.
+        // Run the three-verdict narrative gate (ship 2.7). Reference
+        // set = accumulated claims (this turn, all attempts) + thread
+        // history. Returns merged verdict + per-leg breakdown +
+        // raw LLM extraction (for ledger replay).
         info!(
             %session_id,
             %thread_id,
@@ -354,18 +373,40 @@ async fn run(
             thread_history_claims = thread_history_claims.len(),
             "narrative emitted; gating",
         );
-        let verdict = state
+        let binding_snapshot = state
+            .agent_bindings
+            .lock()
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default();
+        let gate_result = state
             .agent_policy
-            .check_narrative(trimmed, &accumulated_claims, &thread_history_claims)
+            .check_narrative(
+                trimmed,
+                &accumulated_claims,
+                &thread_history_claims,
+                &binding_snapshot,
+            )
             .await;
+        let verdict = gate_result.verdict.clone();
+        let breakdown = gate_result.breakdown.clone();
+        let raw_extraction = gate_result.raw_extraction.clone();
+        let breakdown_dev_str = breakdown.format_for_dev();
 
-        // Ledger PolicyVerdict for this attempt.
+        // Ledger PolicyVerdict for this attempt  extended with the
+        // per-leg breakdown + raw extraction so ship 6's eval can
+        // assert per-extractor correctness on golden questions. Ship
+        // 3 adds `binding_call_ids` so adversarial replay can ask
+        // "what primitives did this verdict's binding leg see".
         let verdict_payload = serde_json::json!({
             "target": "narrative",
             "verdict": &verdict,
             "thread_id": &thread_id,
             "turn": turn,
             "attempt": attempt,
+            "breakdown": &breakdown,
+            "raw_extraction": &raw_extraction,
+            "binding_call_ids": binding_snapshot.call_ids(),
         })
         .to_string();
         let _ = state
@@ -389,7 +430,7 @@ async fn run(
                         text: trimmed.to_string(),
                     })
                     .await;
-                    break Ok(());
+                break Ok(());
             }
             crate::agent::types::PolicyVerdict::Retracted { reason } => {
                 last_retract_reason = Some(reason.clone());
@@ -398,6 +439,7 @@ async fn run(
                     %thread_id,
                     attempt,
                     reason = %reason,
+                    breakdown = %breakdown_dev_str,
                     claims_already_emitted = accumulated_claims.len(),
                     "narrative retracted by policy",
                 );
@@ -429,9 +471,9 @@ async fn run(
                             attempt_text.clone(),
                         )),
                     });
-                    // The retry-feedback message names the rule that
-                    // tripped (server-side; the user never sees this)
-                    // so the model can self-correct without us
+                    // The retry-feedback message names the rules
+                    // that tripped (server-side; the user never sees
+                    // this) so the model can self-correct without
                     // rewriting prompt v2 every iteration.
                     prompt_for_attempt = format!(
                         "Your previous response was retracted by the output policy. Reason: {reason}. Retry the user's question, this time staying within the rules: numbers in narrative must come from cited Claims (this turn or prior turns of the thread); do not compute new numbers; stay in domain (Solana on-chain graph analysis); decline politely if the question is out of scope; do not name the underlying LLM."
@@ -443,11 +485,12 @@ async fn run(
                 // No retry path. Two cases:
                 if claims_committed {
                     // Claim card carries the answer; surface
-                    // narrative as retracted so the user sees
-                    // policy intervened on the prose. The friendly
-                    // `reason` positions the Claim above as the real
-                    // output; the raw constitution `reason` only
-                    // appears in `debug_reason` when dev-mode is on.
+                    // narrative as retracted so the user sees policy
+                    // intervened on the prose. Friendly `reason`
+                    // positions the Claim above as the real output;
+                    // the dev-mode `debug_reason` carries the
+                    // three-extractor breakdown so disagreement is
+                    // visible inline.
                     let _ = sse
                         .send(SseFrame::NarrativeRetracted {
                             text: trimmed.to_string(),
@@ -455,7 +498,7 @@ async fn run(
                                 "Interpretation withheld; the structured profile above carries the verifiable answer."
                                     .to_string(),
                             debug_reason: if debug_public {
-                                Some(reason.clone())
+                                Some(breakdown_dev_str.clone())
                             } else {
                                 None
                             },
@@ -464,11 +507,15 @@ async fn run(
                 } else {
                     // Exhausted retries with nothing to show.
                     // Friendly error, no specifics. Dev-mode field
-                    // carries the last retract reason for the dev
-                    // to see inline.
-                    send_friendly_error(&sse, debug_public, Some(reason.as_str())).await;
+                    // carries the breakdown for inline visibility.
+                    send_friendly_error(
+                        &sse,
+                        debug_public,
+                        Some(breakdown_dev_str.as_str()),
+                    )
+                    .await;
                 }
-                    break Ok(());
+                break Ok(());
             }
         }
     };
@@ -480,6 +527,11 @@ async fn run(
     // resolve "it" / "this" on a turn-1 follow-up. Also persist any
     // approved Claims onto thread.claims for the next narrative
     // gate's lenient reference set.
+    // Ship 3: pull the per-session binding buffer out before we
+    // touch the thread map so we can fold it back into thread state
+    // under the same lock as the message / claim updates.
+    let final_bindings = state.agent_bindings.lock().remove(&session_id);
+
     if result.is_ok() {
         let mut threads = state.agent_threads.lock();
         if let Some(thread) = threads.get_mut(&thread_id) {
@@ -500,7 +552,21 @@ async fn run(
                     thread.claims.drain(0..drop);
                 }
             }
+            // Ship 3: persist the binding store back. The buffer
+            // includes any new bindings recorded during this turn
+            // so a follow-up turn's binding leg can validate
+            // against them. Ring buffer eviction (cap
+            // MAX_THREAD_BINDINGS) already happened in `record`.
+            if let Some(bindings) = final_bindings {
+                thread.bindings = bindings;
+            }
         }
+    } else {
+        // Failed turn: still drop the per-session buffer so it
+        // doesn't leak across sessions. Already removed above; the
+        // thread's persistent bindings stay as they were before
+        // this turn started.
+        drop(final_bindings);
     }
 
     // ----- "synthesizing" Progress (best effort) --------------------------
@@ -719,7 +785,41 @@ impl ToolDyn for PrimitiveAdapter {
 
             // Ledger ToolResult + return.
             match dispatch_result {
-                Ok(DispatchOutput { value_json, .. }) => {
+                Ok(DispatchOutput {
+                    value_json,
+                    provenance,
+                    ..
+                }) => {
+                    // Ship 3: record a binding for the per-session
+                    // buffer. emit_claim is itself a primitive but
+                    // its provenance is empty + its output is a
+                    // `{claim_id, policy}` object that contains no
+                    // audit-class numbers; recording it is harmless
+                    // and keeps the path uniform. Future ships can
+                    // skip emit_claim explicitly if the noise hurts.
+                    let captured_at_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    let call_id = format!(
+                        "{}:{}",
+                        self.primitive.name(),
+                        ulid::Ulid::new()
+                    );
+                    let binding = build_binding(
+                        self.primitive.name(),
+                        call_id,
+                        captured_at_ms,
+                        &value_json,
+                        &provenance,
+                    );
+                    {
+                        let mut buf = self.state.agent_bindings.lock();
+                        buf.entry(self.session_id.clone())
+                            .or_insert_with(PrimitiveBindingStore::new)
+                            .record(binding);
+                    }
+
                     let result_str = value_json.to_string();
                     let _ = self
                         .state

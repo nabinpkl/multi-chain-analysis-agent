@@ -39,23 +39,31 @@ pub use types::{
     TimeScope, ViewContext,
 };
 
-/// Build the primitive registry with the ship-1 set: `wallet_profile`
-/// (the only feature primitive) and `emit_claim` (claim emission
-/// infrastructure that hooks the output policy).
+/// Build the primitive registry. Ship 3 set: `wallet_profile`,
+/// `community_summary` (both real, Live-arm), and `emit_claim` (claim
+/// emission infrastructure that hooks the output policy).
 pub fn build_registry() -> PrimitiveRegistry {
     let mut r = PrimitiveRegistry::new();
     r.register(primitives::WalletProfilePrimitive);
+    r.register(primitives::CommunitySummaryPrimitive);
     r.register(primitives::EmitClaimPrimitive);
     r
 }
 
 /// Pre-register the per-primitive stubs that exist independently of
-/// whether the primitive is hit. Currently: the `wallet_profile`
-/// Range arm. Called once at boot so the stub banner sees the entry
-/// even if nobody calls Range yet.
+/// whether the primitive is hit. Ship 3 adds the `community_summary`
+/// Range arm alongside the existing `wallet_profile` Range arm.
+/// Called once at boot so the stub banner lists them even when
+/// nobody calls Range yet.
 pub fn register_primitive_stubs(stubs: &StubRegistry) {
     stubs.register(StubInfo {
         name: "primitive.wallet_profile.range_arm",
+        component: "primitive",
+        reason: "warehouse path lands in ship 5; Live arm fully implemented",
+        promoted_in_ship: 5,
+    });
+    stubs.register(StubInfo {
+        name: "primitive.community_summary.range_arm",
         component: "primitive",
         reason: "warehouse path lands in ship 5; Live arm fully implemented",
         promoted_in_ship: 5,
@@ -102,6 +110,13 @@ pub struct AgentThread {
     /// bounded; the persistent-memory layer named by the
     /// `thread.in_memory_only` stub will eventually replace this.
     pub claims: Vec<crate::agent::types::Claim>,
+    /// Ship 3 primitive-binding ledger. Every successful primitive
+    /// dispatch in this thread gets recorded here; the policy gate's
+    /// binding leg checks claim numbers + provenance refs against
+    /// this store so fabricated values retract before the user sees
+    /// them. Bounded by `primitives::MAX_THREAD_BINDINGS` (FIFO
+    /// drop). In-memory only, same as `messages` and `claims`.
+    pub bindings: primitives::PrimitiveBindingStore,
 }
 
 /// FIFO cap on `AgentThread.claims`. 20 covers ~5-10 turns of a
@@ -117,6 +132,7 @@ impl AgentThread {
             started_at_ms,
             turn_count: 0,
             claims: Vec::new(),
+            bindings: primitives::PrimitiveBindingStore::new(),
         }
     }
 }

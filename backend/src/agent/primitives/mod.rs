@@ -18,9 +18,17 @@ use tokio::sync::mpsc;
 use super::types::{Claim, CostClass, DataSource, ProvenanceRef, SubgraphSlice};
 use crate::state::AppState;
 
+pub mod binding_store;
+pub mod community_summary;
 pub mod emit_claim;
 pub mod wallet_profile;
 
+pub use binding_store::{
+    build_binding, BindingEntities, PrimitiveBinding, PrimitiveBindingStore, MAX_THREAD_BINDINGS,
+};
+pub use community_summary::{
+    CommunitySummaryInput, CommunitySummaryOutput, CommunitySummaryPrimitive, TopWallet,
+};
 pub use emit_claim::{EmitClaimInput, EmitClaimPrimitive};
 pub use wallet_profile::{WalletProfileInput, WalletProfileOutput, WalletProfilePrimitive};
 

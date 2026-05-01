@@ -105,19 +105,41 @@ auto-retracted by the output policy.\
 
         // 2. Output policy gate. Ship 2 promoted this from the
         //    always-approve stub to a real cheap-model call against
-        //    the constitution. `check_claim` is the per-Claim entry
-        //    point; the parallel `check_narrative` runs in `loop.rs`
-        //    after rig returns the model's free-form prose.
-        let verdict = ctx.state.agent_policy.check_claim(&claim).await;
+        //    the constitution. Ship 3 added the binding leg, which
+        //    consults the per-session binding store on AppState
+        //    (populated by the loop adapter on each successful
+        //    primitive dispatch). `check_claim` is the per-Claim
+        //    entry point; the parallel `check_narrative` runs in
+        //    `loop.rs` after rig returns the model's free-form
+        //    prose.
+        let binding_snapshot = ctx
+            .state
+            .agent_bindings
+            .lock()
+            .get(&ctx.session_id)
+            .cloned()
+            .unwrap_or_default();
+        let claim_result = ctx
+            .state
+            .agent_policy
+            .check_claim(&claim, &binding_snapshot)
+            .await;
+        let verdict = claim_result.verdict.clone();
+        let breakdown = claim_result.breakdown.clone();
         claim.policy_verdict = verdict.clone();
 
         // 3. Write ledger events. Ship 2 added `target` to the
         //    PolicyVerdict payload so replay can tell which channel
-        //    each verdict gated (claim vs narrative).
+        //    each verdict gated (claim vs narrative). Ship 3 adds
+        //    the per-leg `breakdown` (constitution + binding) plus
+        //    the binding-store call_ids so eval replay can assert
+        //    "this claim's binding leg saw these primitives".
         let policy_payload = serde_json::json!({
             "target": "claim",
             "verdict": &verdict,
             "claim_id": &claim_id,
+            "breakdown": &breakdown,
+            "binding_call_ids": binding_snapshot.call_ids(),
         })
         .to_string();
         if let Err(e) = ctx

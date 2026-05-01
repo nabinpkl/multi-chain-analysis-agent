@@ -9,7 +9,10 @@
 //! (don't compute, just restate). The cross-check is the safety net
 //! that catches drift even when the primary slips.
 //!
-//! Public entry: `cross_check(narrative, claims) -> Result<(), RetractReason>`.
+//! Public entry: `cross_check(narrative, claims, extra_source, config)
+//! -> Result<(), RetractReason>`. `extra_source` (ship 3) carries
+//! primitive-binding numbers; pass `&[]` for callers that only want
+//! claim-driven cross-check.
 //! Returns `Ok(())` if every extracted narrative number has a match
 //! within tolerance in at least one cited Claim's number set; returns
 //! `Err(RetractReason)` naming the first un-sourced number found.
@@ -127,15 +130,22 @@ fn format_number(v: f64) -> String {
 /// `provenance[].Number{value}`, then runs the shared compare via
 /// `cross_check_extracted_pair`. Returns `Err` if any narrative
 /// number lacks a same-unit-class match within tolerance.
+///
+/// `extra_source` carries primitive-binding numbers (ship 3) so
+/// narrative numbers paraphrasing real primitive output get
+/// approved even when the model didn't restate the value inside a
+/// Claim's prose. Pass an empty slice for callers that don't want
+/// that behavior.
 pub fn cross_check(
     narrative: &str,
     claims: &[Claim],
+    extra_source: &[ExtractedNumber],
     config: CrosscheckConfig,
 ) -> Result<(), RetractReason> {
     let narr_numbers = extract_from_text(narrative);
     let claim_numbers: Vec<ExtractedNumber> =
         claims.iter().flat_map(extract_from_claim).collect();
-    cross_check_extracted_pair(&narr_numbers, &claim_numbers, config)
+    cross_check_extracted_pair(&narr_numbers, &claim_numbers, extra_source, config)
 }
 
 /// Compare two pre-extracted number sets. Shared by the regex
@@ -147,11 +157,15 @@ pub fn cross_check(
 /// matching means.
 ///
 /// Returns `Ok(())` when every narrative number matches at least one
-/// claim number on the same `unit_class` within tolerance. Returns
-/// the first unsourced narrative number on `Err`.
+/// claim number OR `extra_source` number on the same `unit_class`
+/// within tolerance. `extra_source` (ship 3) is the primitive-
+/// binding store's number set; passing an empty slice preserves the
+/// pre-ship-3 behavior. Returns the first unsourced narrative
+/// number on `Err`.
 pub fn cross_check_extracted_pair(
     narrative_numbers: &[ExtractedNumber],
     claim_numbers: &[ExtractedNumber],
+    extra_source: &[ExtractedNumber],
     config: CrosscheckConfig,
 ) -> Result<(), RetractReason> {
     if narrative_numbers.is_empty() {
@@ -159,7 +173,7 @@ pub fn cross_check_extracted_pair(
         return Ok(());
     }
     for n in narrative_numbers {
-        if !has_match(n, claim_numbers, config) {
+        if !has_match(n, claim_numbers, config) && !has_match(n, extra_source, config) {
             return Err(RetractReason::Unsourced {
                 value: n.value,
                 unit_class: n.unit_class,
@@ -174,7 +188,7 @@ pub fn cross_check_extracted_pair(
 /// compare. The `phrase` field is debugging context only  surfaced
 /// in dev-mode `debug_*` fields so the dev can verify what the LLM
 /// thought it saw  and discarded during compare.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct LlmExtractedNumber {
     pub value: f64,
     pub unit_class: String,
@@ -662,7 +676,7 @@ mod tests {
         let claim = mk_claim("", "5,123 SOL volume", vec![]);
         // Bare "about 5k" = 5000, claim has 5123. ±15% of 5123 ≈ 768.
         // |5000 - 5123| = 123, well within 15%. Approve.
-        assert!(cross_check("about 5k SOL inflow", &[claim], cfg()).is_ok());
+        assert!(cross_check("about 5k SOL inflow", &[claim], &[], cfg()).is_ok());
     }
 
     #[test]
@@ -670,14 +684,14 @@ mod tests {
         let claim = mk_claim("", "5,000 SOL volume", vec![]);
         // Declarative "5,800 SOL" vs claim 5,000. ±10% of 5000 = 500.
         // |5800 - 5000| = 800, exceeds 10%. Should retract.
-        let res = cross_check("5,800 SOL was sent", &[claim], cfg());
+        let res = cross_check("5,800 SOL was sent", &[claim], &[], cfg());
         assert!(res.is_err(), "expected retract, got {:?}", res);
     }
 
     #[test]
     fn community_id_match() {
         let claim = mk_claim("", "Wallet X is in community 42", vec![]);
-        assert!(cross_check("placed in community 42 of the live graph", &[claim], cfg()).is_ok());
+        assert!(cross_check("placed in community 42 of the live graph", &[claim], &[], cfg()).is_ok());
     }
 
     #[test]
@@ -686,6 +700,7 @@ mod tests {
         let res = cross_check(
             "the wallet belongs to community 1977 inside the live graph",
             &[claim],
+            &[],
             cfg(),
         );
         assert!(res.is_err(), "expected retract, got {:?}", res);
@@ -695,14 +710,14 @@ mod tests {
     fn unsourced_number_retracts() {
         let claim = mk_claim("", "Wallet X moved 12,300 SOL inbound", vec![]);
         // Narrative invents 50,000.
-        let res = cross_check("X moved roughly 50,000 SOL", &[claim], cfg());
+        let res = cross_check("X moved roughly 50,000 SOL", &[claim], &[], cfg());
         assert!(res.is_err(), "expected retract, got {:?}", res);
     }
 
     #[test]
     fn no_numbers_passes() {
         let claim = mk_claim("", "anything", vec![]);
-        assert!(cross_check("looks like a hub but no numbers", &[claim], cfg()).is_ok());
+        assert!(cross_check("looks like a hub but no numbers", &[claim], &[], cfg()).is_ok());
     }
 
     #[test]
@@ -710,7 +725,7 @@ mod tests {
         // 12,300 in narrative refers to connections (Count); claim
         // has 12,300 SOL. Should NOT match because unit classes differ.
         let claim = mk_claim("", "Wallet X moved 12,300 SOL inbound", vec![]);
-        let res = cross_check("the wallet has 12,300 connections", &[claim], cfg());
+        let res = cross_check("the wallet has 12,300 connections", &[claim], &[], cfg());
         assert!(
             res.is_err(),
             "expected retract on unit-class mismatch, got {:?}",
@@ -722,7 +737,7 @@ mod tests {
     fn structured_support_numbers_are_source() {
         // Body has no numbers; support_numbers carry the truth.
         let claim = mk_claim("", "see counts", vec![("connections".into(), 73.0)]);
-        assert!(cross_check("about 73 connections in the window", &[claim], cfg()).is_ok());
+        assert!(cross_check("about 73 connections in the window", &[claim], &[], cfg()).is_ok());
     }
 
     #[test]
@@ -730,7 +745,7 @@ mod tests {
         // Two claims; narrative cites a number from the second.
         let c1 = mk_claim("", "5,000 SOL inflow", vec![]);
         let c2 = mk_claim("", "Wallet X has 73 connections", vec![]);
-        assert!(cross_check("about 73 connections", &[c1, c2], cfg()).is_ok());
+        assert!(cross_check("about 73 connections", &[c1, c2], &[], cfg()).is_ok());
     }
 
     #[test]
@@ -738,7 +753,24 @@ mod tests {
         // "Wallet X is a hub with 3 of these characteristics": 3 is too
         // small / context-free to audit. Should not retract.
         let claim = mk_claim("", "Wallet X has 73 connections", vec![]);
-        assert!(cross_check("X has 3 distinguishing properties", &[claim], cfg()).is_ok());
+        assert!(cross_check("X has 3 distinguishing properties", &[claim], &[], cfg()).is_ok());
+    }
+
+    #[test]
+    fn extra_source_satisfies_narrative_when_claims_dont() {
+        // Ship 3: a narrative number can be sourced from primitive
+        // bindings even when the model didn't restate the value
+        // inside a Claim's prose. Here the claim has no numeric
+        // content, but the binding-source carries `73 connections`,
+        // so the cross-check approves.
+        let claim = mk_claim("looks like a hub", "no numbers in body", vec![]);
+        let extras = vec![ExtractedNumber {
+            value: 73.0,
+            unit_class: UnitClass::Count,
+            hedged: false,
+        }];
+        let res = cross_check("about 73 connections", &[claim], &extras, cfg());
+        assert!(res.is_ok(), "expected approve via extras, got {:?}", res);
     }
 
     #[test]
@@ -761,7 +793,7 @@ mod tests {
         let narr =
             "fueL3hBZjLLLJHiFH9cqZoozTG3XQZ53diwFPwbzNim is acting as a token-mint authority. \
              It has zero SOL movement but a high SPL degree (73) consistent with token mint behavior.";
-        let res = cross_check(narr, &[claim], cfg());
+        let res = cross_check(narr, &[claim], &[], cfg());
         assert!(
             res.is_ok(),
             "address-digit Sol-poisoning regressed; got {:?}",

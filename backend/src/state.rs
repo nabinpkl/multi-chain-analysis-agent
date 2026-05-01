@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use crate::agent::{
     AgentClient, AgentThread, BudgetGate, Ledger, OutputPolicy, PrimitiveRegistry, StubRegistry,
 };
+use crate::agent::primitives::PrimitiveBindingStore;
 use crate::agent::types::Claim;
 use crate::analytics::{AnalyticsChannels, AnalyticsSnapshot};
 use crate::api::agent::AgentSessions;
@@ -90,6 +91,15 @@ pub struct AppState {
     /// session_id (per-turn handle, NOT thread_id, because each turn
     /// gets a fresh narrative gate scope).
     pub agent_claims_emitted: Arc<parking_lot::Mutex<HashMap<String, Vec<Claim>>>>,
+    /// Ship 3 per-session primitive-binding buffer. Loop session-start
+    /// loads `thread.bindings` here keyed by session_id; each
+    /// primitive dispatch appends; emit_claim's `check_claim` and
+    /// the loop's `check_narrative` both read from it; loop
+    /// session-end writes back to `thread.bindings` and drains.
+    /// Same per-turn lifecycle pattern as `agent_claims_emitted` so
+    /// session_id is the only handle surfaces (claim emission, tool
+    /// dispatch, gate) need.
+    pub agent_bindings: Arc<parking_lot::Mutex<HashMap<String, PrimitiveBindingStore>>>,
     /// Ship 2.6.1 dev-mode toggle. When true, SSE error / narrative-
     /// retracted frames carry diagnostic detail fields the frontend
     /// renders inline. When false (prod default), wire is fully
@@ -161,6 +171,7 @@ impl AppState {
             agent_stubs,
             agent_threads: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             agent_claims_emitted: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            agent_bindings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             agent_debug_public: agent_config.debug_public,
         };
         (state, analytics_senders)
