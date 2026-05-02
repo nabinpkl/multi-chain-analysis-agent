@@ -92,6 +92,24 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  agent-service:
+    container_name: multichain-agent-service
+    build:
+      context: ./agent-service
+      dockerfile: Dockerfile
+    ports:
+      - "8003:8003"
+    env_file:
+      - ./.env
+    environment:
+      # Rust data plane URL (intra-compose hostname).
+      - DATA_PLANE_URL=http://api:8002
+      # AGENT_API_KEY (OpenRouter) is sourced from the project .env above.
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
   tunnel:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped

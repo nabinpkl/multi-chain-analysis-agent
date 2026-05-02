@@ -1,0 +1,26 @@
+[project]
+name = "agent-service"
+version = "0.1.0"
+description = "Python agent plane for multi-chain-analysis-engine. Pydantic AI orchestration, calls Rust data plane on :8002 for primitives."
+requires-python = ">=3.12"
+dependencies = [
+    # Pydantic AI native OpenRouter provider lives in this slim install.
+    # Per the migration plan we use OpenRouter free-tier for both
+    # primary (nemotron) and policy (gpt-oss) models.
+    "pydantic-ai-slim[openai]>=1.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sse-starlette>=2.1",
+    "httpx>=0.27",
+    "structlog>=24.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_service"]
+
+[tool.uv]
+package = true

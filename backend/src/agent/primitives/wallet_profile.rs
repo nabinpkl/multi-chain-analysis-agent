@@ -16,6 +16,7 @@ use crate::agent::types::{CostClass, DataSource, NodeStatsWire, ProvenanceRef, T
 use crate::analytics::NodeRole;
 use crate::analytics::snapshot::snapshot_window;
 use crate::graph::window::window_index;
+use crate::state::AppState;
 
 const TOP_K_COUNTERPARTIES: usize = 8;
 
@@ -113,164 +114,175 @@ Always read the <context> block for the focused wallet before guessing.\
         ctx: &PrimitiveCtx<'_>,
         input: Self::Input,
     ) -> Result<PrimitiveOutput<Self::Output>, PrimitiveError> {
-        // Range arm stub. Hits the stub registry counter and returns
-        // a structured NotImplemented; the loop surfaces this to the
-        // model as a tool result so it can react.
-        if let TimeScope::Range { .. } = &input.time_scope {
-            ctx.state
-                .agent_stubs
-                .hit("primitive.wallet_profile.range_arm");
-            return Err(PrimitiveError::NotImplemented {
-                reason: "wallet_profile Range arm (warehouse path)".into(),
-                ship: 5,
-            });
-        }
+        compute(ctx.state, input).await
+    }
+}
 
-        // Live arm: brief read lock, snapshot, fold to wire shape,
-        // release lock, build provenance off-lock. Always operate on
-        // the 60s window (idx 1) so per-node stats are computed over
-        // a useful slice; the 10s window is too thin and the longer
-        // windows are heavier to snapshot.
-        let live_window_idx = window_index(60).unwrap_or(1);
-
-        let snap_data = {
-            let g = ctx.state.graph.read();
-            let idx = match g.lookup_idx(&input.addr) {
-                Some(i) => i,
-                None => {
-                    return Err(PrimitiveError::NotInWindow {
-                        addr: input.addr.clone(),
-                    });
-                }
-            };
-            let snapshot = snapshot_window(&g, live_window_idx);
-            let stats = snapshot
-                .node_stats
-                .get(&idx)
-                .copied()
-                .unwrap_or_default();
-            let neighbors: Vec<(u32, f64, Option<String>)> = snapshot
-                .adj
-                .get(&idx)
-                .map(|m| {
-                    let mut v: Vec<(u32, f64)> =
-                        m.iter().map(|(&n, &w)| (n, w)).collect();
-                    v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-                    v.truncate(TOP_K_COUNTERPARTIES);
-                    v.into_iter()
-                        .map(|(n, w)| (n, w, g.lookup_pubkey(n).map(|s| s.to_string())))
-                        .collect()
-                })
-                .unwrap_or_default();
-            SnapData {
-                idx,
-                stats,
-                neighbors,
-            }
-        };
-
-        // Read role + community from analytics watch snapshot. Safe
-        // off-lock; this is a separate channel.
-        let analytics_snap = ctx
-            .state
-            .analytics
-            .snapshots[live_window_idx]
-            .borrow()
-            .clone();
-        let role = analytics_snap.roles.get(&snap_data.idx).copied();
-        let community_id = analytics_snap.labels.get(&snap_data.idx).copied();
-
-        // Build provenance off-lock.
-        let mut provenance: Vec<ProvenanceRef> = Vec::new();
-        provenance.push(ProvenanceRef::Wallet {
-            addr: input.addr.clone(),
-            idx: Some(snap_data.idx),
+/// Pure compute fn for `wallet_profile`. Phase 0 of the Python-agent
+/// migration calls this directly from `POST /primitive/wallet_profile`
+/// without going through the `Primitive` trait. The trait `execute`
+/// above is a thin wrapper retained while the Rust agent loop is still
+/// alive (deleted in Phase C).
+pub async fn compute(
+    state: &AppState,
+    input: WalletProfileInput,
+) -> Result<PrimitiveOutput<WalletProfileOutput>, PrimitiveError> {
+    // Range arm stub. Hits the stub registry counter and returns
+    // a structured NotImplemented; the loop surfaces this to the
+    // model as a tool result so it can react.
+    if let TimeScope::Range { .. } = &input.time_scope {
+        state
+            .agent_stubs
+            .hit("primitive.wallet_profile.range_arm");
+        return Err(PrimitiveError::NotImplemented {
+            reason: "wallet_profile Range arm (warehouse path)".into(),
+            ship: 5,
         });
-        for (n_idx, _w, pubkey) in &snap_data.neighbors {
-            if let Some(addr) = pubkey {
-                provenance.push(ProvenanceRef::Wallet {
-                    addr: addr.clone(),
-                    idx: Some(*n_idx),
+    }
+
+    // Live arm: brief read lock, snapshot, fold to wire shape,
+    // release lock, build provenance off-lock. Always operate on
+    // the 60s window (idx 1) so per-node stats are computed over
+    // a useful slice; the 10s window is too thin and the longer
+    // windows are heavier to snapshot.
+    let live_window_idx = window_index(60).unwrap_or(1);
+
+    let snap_data = {
+        let g = state.graph.read();
+        let idx = match g.lookup_idx(&input.addr) {
+            Some(i) => i,
+            None => {
+                return Err(PrimitiveError::NotInWindow {
+                    addr: input.addr.clone(),
                 });
             }
-        }
-        if let Some(c) = community_id {
-            provenance.push(ProvenanceRef::Community { id: c });
-        }
-        let mut support_addrs: Vec<String> = snap_data
-            .neighbors
-            .iter()
-            .filter_map(|(_, _, a)| a.clone())
-            .collect();
-        support_addrs.push(input.addr.clone());
-        // Build provenance chip rows for every audit-class stat the
-        // model can cite. Names match `NodeStatsWire` field names so
-        // they classify identically (Sol for the `*_volume_lamports`
-        // family via "volume"+"lamport" substring; Count for the
-        // `*degree` family) in `binding_store::build_binding`. With
-        // these as provenance entries, the structural value-compare
-        // gate finds a matching `ExtractedNumber` in the binding store
-        // for any chip the model emits  no Raw-class skip loophole.
-        provenance.push(ProvenanceRef::Number {
-            metric: "total_volume_lamports".into(),
-            value: snap_data.stats.volume,
-            support: support_addrs.clone(),
-        });
-        provenance.push(ProvenanceRef::Number {
-            metric: "in_volume_lamports".into(),
-            value: snap_data.stats.in_vol,
-            support: support_addrs.clone(),
-        });
-        provenance.push(ProvenanceRef::Number {
-            metric: "out_volume_lamports".into(),
-            value: snap_data.stats.out_vol,
-            support: support_addrs.clone(),
-        });
-        provenance.push(ProvenanceRef::Number {
-            metric: "bidir_volume_lamports".into(),
-            value: snap_data.stats.bidir_vol,
-            support: support_addrs.clone(),
-        });
-        provenance.push(ProvenanceRef::Number {
-            metric: "degree".into(),
-            value: snap_data.stats.degree as f64,
-            support: support_addrs.clone(),
-        });
-        provenance.push(ProvenanceRef::Number {
-            metric: "sol_degree".into(),
-            value: snap_data.stats.sol_degree as f64,
-            support: support_addrs.clone(),
-        });
-        provenance.push(ProvenanceRef::Number {
-            metric: "spl_degree".into(),
-            value: snap_data.stats.spl_degree as f64,
-            support: support_addrs,
-        });
-
-        let top_counterparties: Vec<TopCounterparty> = snap_data
-            .neighbors
-            .iter()
-            .filter_map(|(_, w, addr)| addr.as_ref().map(|a| TopCounterparty {
-                addr: a.clone(),
-                volume: *w,
-            }))
-            .collect();
-
-        let value = WalletProfileOutput {
-            addr: input.addr,
-            role,
-            community_id,
-            stats: NodeStatsWire::from(&snap_data.stats),
-            top_counterparties,
-            age_in_window_secs: 0, // v0 placeholder; needs first-seen tracking
         };
+        let snapshot = snapshot_window(&g, live_window_idx);
+        let stats = snapshot
+            .node_stats
+            .get(&idx)
+            .copied()
+            .unwrap_or_default();
+        let neighbors: Vec<(u32, f64, Option<String>)> = snapshot
+            .adj
+            .get(&idx)
+            .map(|m| {
+                let mut v: Vec<(u32, f64)> =
+                    m.iter().map(|(&n, &w)| (n, w)).collect();
+                v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                v.truncate(TOP_K_COUNTERPARTIES);
+                v.into_iter()
+                    .map(|(n, w)| (n, w, g.lookup_pubkey(n).map(|s| s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        SnapData {
+            idx,
+            stats,
+            neighbors,
+        }
+    };
 
-        Ok(PrimitiveOutput {
-            value,
-            provenance,
-            subgraph_slice: None,
-        })
+    // Read role + community from analytics watch snapshot. Safe
+    // off-lock; this is a separate channel.
+    let analytics_snap = state
+        .analytics
+        .snapshots[live_window_idx]
+        .borrow()
+        .clone();
+    let role = analytics_snap.roles.get(&snap_data.idx).copied();
+    let community_id = analytics_snap.labels.get(&snap_data.idx).copied();
+
+    // Build provenance off-lock.
+    let mut provenance: Vec<ProvenanceRef> = Vec::new();
+    provenance.push(ProvenanceRef::Wallet {
+        addr: input.addr.clone(),
+        idx: Some(snap_data.idx),
+    });
+    for (n_idx, _w, pubkey) in &snap_data.neighbors {
+        if let Some(addr) = pubkey {
+            provenance.push(ProvenanceRef::Wallet {
+                addr: addr.clone(),
+                idx: Some(*n_idx),
+            });
+        }
     }
+    if let Some(c) = community_id {
+        provenance.push(ProvenanceRef::Community { id: c });
+    }
+    let mut support_addrs: Vec<String> = snap_data
+        .neighbors
+        .iter()
+        .filter_map(|(_, _, a)| a.clone())
+        .collect();
+    support_addrs.push(input.addr.clone());
+    // Build provenance chip rows for every audit-class stat the
+    // model can cite. Names match `NodeStatsWire` field names so
+    // they classify identically (Sol for the `*_volume_lamports`
+    // family via "volume"+"lamport" substring; Count for the
+    // `*degree` family) in `binding_store::build_binding`. With
+    // these as provenance entries, the structural value-compare
+    // gate finds a matching `ExtractedNumber` in the binding store
+    // for any chip the model emits  no Raw-class skip loophole.
+    provenance.push(ProvenanceRef::Number {
+        metric: "total_volume_lamports".into(),
+        value: snap_data.stats.volume,
+        support: support_addrs.clone(),
+    });
+    provenance.push(ProvenanceRef::Number {
+        metric: "in_volume_lamports".into(),
+        value: snap_data.stats.in_vol,
+        support: support_addrs.clone(),
+    });
+    provenance.push(ProvenanceRef::Number {
+        metric: "out_volume_lamports".into(),
+        value: snap_data.stats.out_vol,
+        support: support_addrs.clone(),
+    });
+    provenance.push(ProvenanceRef::Number {
+        metric: "bidir_volume_lamports".into(),
+        value: snap_data.stats.bidir_vol,
+        support: support_addrs.clone(),
+    });
+    provenance.push(ProvenanceRef::Number {
+        metric: "degree".into(),
+        value: snap_data.stats.degree as f64,
+        support: support_addrs.clone(),
+    });
+    provenance.push(ProvenanceRef::Number {
+        metric: "sol_degree".into(),
+        value: snap_data.stats.sol_degree as f64,
+        support: support_addrs.clone(),
+    });
+    provenance.push(ProvenanceRef::Number {
+        metric: "spl_degree".into(),
+        value: snap_data.stats.spl_degree as f64,
+        support: support_addrs,
+    });
+
+    let top_counterparties: Vec<TopCounterparty> = snap_data
+        .neighbors
+        .iter()
+        .filter_map(|(_, w, addr)| addr.as_ref().map(|a| TopCounterparty {
+            addr: a.clone(),
+            volume: *w,
+        }))
+        .collect();
+
+    let value = WalletProfileOutput {
+        addr: input.addr,
+        role,
+        community_id,
+        stats: NodeStatsWire::from(&snap_data.stats),
+        top_counterparties,
+        age_in_window_secs: 0, // v0 placeholder; needs first-seen tracking
+    };
+
+    Ok(PrimitiveOutput {
+        value,
+        provenance,
+        subgraph_slice: None,
+    })
 }
 
 struct SnapData {
