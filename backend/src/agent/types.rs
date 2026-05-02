@@ -83,7 +83,7 @@ pub struct AgentSwitches {
     /// readability pass: parallels `dont_fabricate` (negative-
     /// space behavior contract) and a viewer flipping it can
     /// predict the agent will repeat itself when it's off.
-    #[serde(default = "default_true", alias = "incremental_answers")]
+    #[serde(default = "default_true")]
     pub dont_repeat_yourself: bool,
 }
 
