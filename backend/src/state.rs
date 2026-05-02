@@ -10,7 +10,7 @@ use crate::agent::{
     AgentClient, AgentThread, BudgetGate, Ledger, OutputPolicy, PrimitiveRegistry, StubRegistry,
 };
 use crate::agent::primitives::PrimitiveBindingStore;
-use crate::agent::types::Claim;
+use crate::agent::types::{AgentSwitches, Claim};
 use crate::analytics::{AnalyticsChannels, AnalyticsSnapshot};
 use crate::api::agent::AgentSessions;
 use crate::config::Config;
@@ -100,6 +100,30 @@ pub struct AppState {
     /// session_id is the only handle surfaces (claim emission, tool
     /// dispatch, gate) need.
     pub agent_bindings: Arc<parking_lot::Mutex<HashMap<String, PrimitiveBindingStore>>>,
+    /// Ship 3.5 per-session ablation switches. Loop session-start
+    /// pulls switches off the request and stores here keyed by
+    /// session_id; emit_claim's `check_claim` and the loop's
+    /// `check_narrative` both read from it; loop session-end
+    /// drains. Mirrors the `agent_bindings` pattern so primitives
+    /// only need session_id to look up gate config.
+    pub agent_switches: Arc<parking_lot::Mutex<HashMap<String, AgentSwitches>>>,
+    /// Ship 3.5 per-session `show_trace` flag. True when the
+    /// request asked for the builder view; gates whether
+    /// `SseFrame::GatePath` frames are pushed onto the SSE wire.
+    /// Path is always built and ledgered regardless; this is
+    /// wire-only.
+    pub agent_show_trace: Arc<parking_lot::Mutex<HashMap<String, bool>>>,
+    /// Ship 4 per-session tool-call recorder. The PrimitiveAdapter
+    /// appends a `TurnToolCallRecord` here for every primitive
+    /// dispatch whose `diff_spec()` is non-empty (i.e. primitives
+    /// whose outputs are replay-meaningful; emit_claim is naturally
+    /// excluded). At session end the loop drains this buffer into
+    /// `AgentThread.tool_calls_per_turn[turn]` so a future repeat-
+    /// of-this-turn can replay against fresh data. Same per-turn
+    /// lifecycle pattern as `agent_bindings`.
+    pub agent_tool_calls: Arc<
+        parking_lot::Mutex<HashMap<String, Vec<crate::agent::TurnToolCallRecord>>>,
+    >,
     /// Ship 2.6.1 dev-mode toggle. When true, SSE error / narrative-
     /// retracted frames carry diagnostic detail fields the frontend
     /// renders inline. When false (prod default), wire is fully
@@ -172,6 +196,9 @@ impl AppState {
             agent_threads: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             agent_claims_emitted: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             agent_bindings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            agent_switches: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            agent_show_trace: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            agent_tool_calls: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             agent_debug_public: agent_config.debug_public,
         };
         (state, analytics_senders)

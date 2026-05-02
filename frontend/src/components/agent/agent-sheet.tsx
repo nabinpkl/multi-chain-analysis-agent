@@ -1,13 +1,16 @@
 "use client";
 
 import { useGraphFocus } from "@/stores/use-graph-focus";
+import { useAgentSwitches } from "@/stores/use-agent-switches";
 import type { AgentStreamState } from "@/hooks/use-agent-stream";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AgentEmptyState } from "./agent-empty-state";
 import { AgentClaimList } from "./agent-claim-list";
 import { AgentInput } from "./agent-input";
+import { BuilderViewToggle } from "./builder-view-toggle";
 import { ProgressStrip } from "./progress-strip";
 import { StubBanner } from "./stub-banner";
+import { SwitchPanel } from "./switch-panel";
 
 /**
  * Right-side overlay panel for the agent. Per D-3 + D-5 in
@@ -32,6 +35,7 @@ export function AgentSheet({
   agentStream: AgentStreamState;
 }) {
   const focusedAddr = useGraphFocus((s) => s.focusedAddr);
+  const builderViewOn = useAgentSwitches((s) => s.builderViewOn);
   const { status, turns, progress, threadId, turn, ask, reset } = agentStream;
   const inFlight = status.kind === "sending" || status.kind === "streaming";
   const showTurnChip = threadId !== null && (turn > 0 || turns.length > 0);
@@ -52,17 +56,22 @@ export function AgentSheet({
                 </span>
               ) : null}
             </span>
-            <button
-              onClick={reset}
-              disabled={status.kind === "idle" && turns.length === 0}
-              className="text-[0.6rem] uppercase tracking-[1.5px] text-mca-muted hover:text-mca-text transition-colors px-2 py-1 border border-mca-border rounded disabled:opacity-30 disabled:hover:text-mca-muted"
-              title="start a new thread"
-            >
-              new
-            </button>
+            <div className="flex items-center gap-3">
+              <BuilderViewToggle />
+              <button
+                onClick={reset}
+                disabled={status.kind === "idle" && turns.length === 0}
+                className="text-[0.6rem] uppercase tracking-[1.5px] text-mca-muted hover:text-mca-text transition-colors px-2 py-1 border border-mca-border rounded disabled:opacity-30 disabled:hover:text-mca-muted"
+                title="start a new thread"
+              >
+                new
+              </button>
+            </div>
           </div>
           <FocusHeader focusedAddr={focusedAddr} />
         </header>
+
+        {builderViewOn ? <SwitchPanel /> : null}
 
         <StubBanner enabled={open} />
 

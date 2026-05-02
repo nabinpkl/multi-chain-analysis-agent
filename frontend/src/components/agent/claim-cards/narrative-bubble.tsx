@@ -1,37 +1,41 @@
 "use client";
 
+import type { ProvenanceRef } from "@/lib/generated/ProvenanceRef";
+import { renderTextWithRefs } from "./render-with-refs";
+
 /**
  * Free-form interpretation prose from the agent. Ship 1.6 introduced
- * this channel to let the model talk in natural language instead of
- * cramming everything into a Claim card. Visually distinct from
+ * this channel; ship 2 added the constitution gate; ship 5a extended
+ * the wire shape to carry typed provenance so `${ref:N}` chips render
+ * inline (same mechanism as Claim cards). Visually distinct from
  * `ProfileCard` (lighter chrome, dashed left edge, italic-leaning
  * type) so the user can tell at a glance what was measured (Claim)
  * versus what is the model's interpretation (Narrative).
  *
- * Ship 2 added the constitution gate. When the gate retracts a
- * narrative, the same payload arrives with `retractedReason` set: we
- * still show the user the text (visible retraction beats silent
- * removal) but in a struck-through amber treatment with the gate's
- * one-sentence reason below it. Mirrors the `RetractedCard` styling
- * on the Claim channel so the two retraction surfaces are visually
- * coherent.
+ * When the gate retracts a narrative, the same payload arrives with
+ * `retractedReason` set: we still show the user the text (visible
+ * retraction beats silent removal) but in a struck-through amber
+ * treatment with the gate's one-sentence reason below it. Mirrors
+ * the `RetractedCard` styling on the Claim channel.
  *
- * Ship 2.6.1: `retractedDebug` is the raw constitution reason,
- * present only when the backend was started with
- * `AGENT_DEBUG_PUBLIC=1`. Rendered as a small monospace block under
- * the friendly `retractedReason` so the dev sees what the gate
- * actually flagged without leaking it to prod users.
+ * `retractedDebug` is the raw constitution reason, present only
+ * when the backend was started with `AGENT_DEBUG_PUBLIC=1` (ship
+ * 2.6.1).
  *
- * No markdown rendering yet: prints text verbatim with whitespace
- * preserved. Markdown / link safety would land alongside an
- * equivalent claim-body rendering treatment.
+ * Ship 5a `provenance` is the typed ProvenanceRef array assembled
+ * from this turn's emitted Claims (concatenated provenance arrays).
+ * `${ref:N}` tokens in `text` resolve to `provenance[N]` and render
+ * as `ProvenanceChip` inline. Empty provenance + plain prose still
+ * renders unchanged (descriptive narrative without citations).
  */
 export function NarrativeBubble({
   text,
+  provenance,
   retractedReason,
   retractedDebug,
 }: {
   text: string;
+  provenance: ProvenanceRef[];
   retractedReason: string | null;
   retractedDebug: string | null;
 }) {
@@ -44,7 +48,7 @@ export function NarrativeBubble({
           </span>
         </div>
         <p className="text-sm text-mca-muted leading-relaxed whitespace-pre-wrap line-through italic">
-          {text}
+          {renderTextWithRefs(text, provenance)}
         </p>
         <p className="text-[0.6rem] uppercase tracking-[1.5px] text-amber-500/80 pt-1 border-t border-mca-border">
           <span className="text-mca-text normal-case tracking-normal">{retractedReason}</span>
@@ -64,7 +68,7 @@ export function NarrativeBubble({
         interpretation
       </div>
       <p className="text-sm text-mca-text/90 leading-relaxed whitespace-pre-wrap italic">
-        {text}
+        {renderTextWithRefs(text, provenance)}
       </p>
       <p className="text-[0.55rem] uppercase tracking-[1.5px] text-mca-dim pt-1">
         model interpretation. verify via cited data.

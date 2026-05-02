@@ -98,6 +98,30 @@ implemented error you should surface in your answer.\
         CostClass::Cheap
     }
 
+    /// Ship 4: declare which output fields the diff walker should
+    /// compare. Volumes use default tolerance (10%); size + edge
+    /// count are exact-compare counts. `top_wallets` is set-membership
+    /// by `addr`; ordering shifts (rotation in/out of top-K) surface
+    /// as added/removed pairs only when membership actually changes.
+    /// `community_id` is omitted because it's the focus identifier;
+    /// always equal by construction.
+    fn diff_spec(&self) -> Vec<(&'static str, crate::agent::diff::FieldKind)> {
+        use crate::agent::diff::FieldKind;
+        vec![
+            ("size", FieldKind::Count),
+            ("total_volume", FieldKind::number_default()),
+            ("internal_volume", FieldKind::number_default()),
+            ("external_volume", FieldKind::number_default()),
+            ("edge_count", FieldKind::Count),
+            (
+                "top_wallets",
+                FieldKind::EntitySet {
+                    key: "addr".to_string(),
+                },
+            ),
+        ]
+    }
+
     async fn execute(
         &self,
         ctx: &PrimitiveCtx<'_>,

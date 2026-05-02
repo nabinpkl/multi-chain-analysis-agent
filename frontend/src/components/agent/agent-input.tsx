@@ -4,6 +4,7 @@ import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useGraphFocus } from "@/stores/use-graph-focus";
+import { useAgentSwitches } from "@/stores/use-agent-switches";
 import type { AgentRequest } from "@/lib/generated/AgentRequest";
 import type { AgentStatus } from "@/hooks/use-agent-stream";
 
@@ -24,6 +25,8 @@ export function AgentInput({
   const [text, setText] = useState("");
   const focusedAddr = useGraphFocus((s) => s.focusedAddr);
   const selection = useGraphFocus((s) => s.selection);
+  const switches = useAgentSwitches((s) => s.switches);
+  const builderViewOn = useAgentSwitches((s) => s.builderViewOn);
 
   const inFlight = status.kind === "sending" || status.kind === "streaming";
 
@@ -34,6 +37,11 @@ export function AgentInput({
     // `thread_id` is overwritten by `useAgentStream` with the
     // currently-tracked threadId before POST. We send null here as a
     // safe default that satisfies the typed shape.
+    //
+    // Ship 3.5: switches + show_trace come from the per-page
+    // zustand store. `show_trace` mirrors the builder-view toggle
+    // so the backend skips emitting GatePath frames for casual
+    // visitors (clean wire by default).
     const request: AgentRequest = {
       user_question: trimmed,
       context: {
@@ -42,6 +50,8 @@ export function AgentInput({
         selection: selection.map((addr) => ({ kind: "wallet" as const, id: addr })),
       },
       thread_id: null,
+      switches,
+      show_trace: builderViewOn,
     };
     onSend(request);
     setText("");

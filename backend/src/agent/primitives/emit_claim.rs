@@ -105,13 +105,12 @@ auto-retracted by the output policy.\
 
         // 2. Output policy gate. Ship 2 promoted this from the
         //    always-approve stub to a real cheap-model call against
-        //    the constitution. Ship 3 added the binding leg, which
-        //    consults the per-session binding store on AppState
-        //    (populated by the loop adapter on each successful
-        //    primitive dispatch). `check_claim` is the per-Claim
-        //    entry point; the parallel `check_narrative` runs in
-        //    `loop.rs` after rig returns the model's free-form
-        //    prose.
+        //    the constitution. Ship 3 added the binding leg. Ship
+        //    3.5 reorganized the legs around three switches and
+        //    added the path-trace shape on the result. The gate
+        //    now consults both the per-session binding store and
+        //    the per-session switch state (populated by the loop
+        //    adapter at session start).
         let binding_snapshot = ctx
             .state
             .agent_bindings
@@ -119,29 +118,62 @@ auto-retracted by the output policy.\
             .get(&ctx.session_id)
             .cloned()
             .unwrap_or_default();
+        let switches_snapshot = ctx
+            .state
+            .agent_switches
+            .lock()
+            .get(&ctx.session_id)
+            .cloned()
+            .unwrap_or_default();
         let claim_result = ctx
             .state
             .agent_policy
-            .check_claim(&claim, &binding_snapshot)
+            .check_claim(&claim, &binding_snapshot, &switches_snapshot)
             .await;
         let verdict = claim_result.verdict.clone();
         let breakdown = claim_result.breakdown.clone();
+        let path = claim_result.path.clone();
         claim.policy_verdict = verdict.clone();
 
         // 3. Write ledger events. Ship 2 added `target` to the
         //    PolicyVerdict payload so replay can tell which channel
-        //    each verdict gated (claim vs narrative). Ship 3 adds
-        //    the per-leg `breakdown` (constitution + binding) plus
-        //    the binding-store call_ids so eval replay can assert
-        //    "this claim's binding leg saw these primitives".
+        //    each verdict gated (claim vs narrative). Ship 3 added
+        //    the per-leg `breakdown` and binding-store call_ids.
+        //    Ship 3.5 adds `switches` (the configuration the gate
+        //    ran under) and `path` (the executed steps), so replay
+        //    can reconstruct the gate run end-to-end.
         let policy_payload = serde_json::json!({
             "target": "claim",
             "verdict": &verdict,
             "claim_id": &claim_id,
             "breakdown": &breakdown,
             "binding_call_ids": binding_snapshot.call_ids(),
+            "switches": &switches_snapshot,
+            "path": &path,
         })
         .to_string();
+
+        // 3.5. Surface the path on the SSE wire if the request
+        // asked for the builder view. Path is always built; this
+        // toggle just gates whether the visitor sees it. Cheap to
+        // skip when off  the GatePath frame is dropped before
+        // serialization rather than serialized-then-not-sent.
+        if ctx
+            .state
+            .agent_show_trace
+            .lock()
+            .get(&ctx.session_id)
+            .copied()
+            .unwrap_or(false)
+        {
+            if let Err(e) = ctx
+                .sse
+                .send(SseFrame::GatePath(path.clone()))
+                .await
+            {
+                warn!(error = %e, "SSE GatePath push failed (receiver dropped)");
+            }
+        }
         if let Err(e) = ctx
             .state
             .agent_ledger

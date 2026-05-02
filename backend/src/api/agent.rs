@@ -198,9 +198,7 @@ fn frame_to_event(frame: SseFrame) -> Result<Event, Infallible> {
                 .event("error")
                 .data(format!("serialize Progress failed: {e}")),
         },
-        SseFrame::Narrative { text } => match serde_json::to_string(&serde_json::json!({
-            "text": text,
-        })) {
+        SseFrame::Narrative(payload) => match serde_json::to_string(payload) {
             Ok(json) => Event::default().event("Narrative").data(json),
             Err(e) => Event::default()
                 .event("error")
@@ -244,6 +242,24 @@ fn frame_to_event(frame: SseFrame) -> Result<Event, Infallible> {
                     .data(format!("serialize Error failed: {e}")),
             }
         }
+        SseFrame::GatePath(path) => match serde_json::to_string(path) {
+            Ok(json) => Event::default().event("GatePath").data(json),
+            Err(e) => Event::default()
+                .event("error")
+                .data(format!("serialize GatePath failed: {e}")),
+        },
+        SseFrame::NoMovement(payload) => match serde_json::to_string(payload) {
+            Ok(json) => Event::default().event("NoMovement").data(json),
+            Err(e) => Event::default()
+                .event("error")
+                .data(format!("serialize NoMovement failed: {e}")),
+        },
+        SseFrame::ChangedSince(payload) => match serde_json::to_string(payload) {
+            Ok(json) => Event::default().event("ChangedSince").data(json),
+            Err(e) => Event::default()
+                .event("error")
+                .data(format!("serialize ChangedSince failed: {e}")),
+        },
     };
     Ok(ev)
 }

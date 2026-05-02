@@ -43,8 +43,13 @@ impl BudgetGate {
         stubs.register(StubInfo {
             name: "budget.always_allow",
             component: "cost_gate",
-            reason: "principal hashing + multi-axis buckets + pre-flight land in ship 4",
-            promoted_in_ship: 4,
+            // Ship 4 deliberately scoped to "incremental answers" only;
+            // multi-axis quota plumbing (principal hashing, bucket
+            // budgets, pre-flight reservation, customer-facing budget
+            // footer) deferred. Promotion ship bumps to "future" until
+            // a real load / abuse vector justifies the work.
+            reason: "multi-axis quota plumbing deferred from ship 4; incremental answers shipped instead. principal hashing + buckets + pre-flight land when real load demands; for now self-imposed RPC + free-tier ceilings hold",
+            promoted_in_ship: 99,
         });
         Self { stubs }
     }

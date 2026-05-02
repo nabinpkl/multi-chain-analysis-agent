@@ -15,7 +15,10 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::mpsc;
 
-use super::types::{Claim, CostClass, DataSource, ProvenanceRef, SubgraphSlice};
+use super::types::{
+    ChangedSince, Claim, CostClass, DataSource, GatePath, NarrativeWithRefs, NoMovement,
+    ProvenanceRef, SubgraphSlice,
+};
 use crate::state::AppState;
 
 pub mod binding_store;
@@ -54,14 +57,14 @@ pub struct PrimitiveCtx<'a> {
 pub enum SseFrame {
     Claim(Claim),
     Progress { phase: String, detail: String },
-    /// Free-form interpretive prose. Carries the model's natural reply
-    /// text (the string returned by `rig::prompt(...).await`) so the
-    /// frontend can render it as an "interpretation" bubble alongside
-    /// the structured Claim cards. Ship 1.6 introduced this channel.
-    /// Ship 2 added the constitution gate: only narrative that the
-    /// gate approves arrives as `Narrative`; gate-retracted narrative
-    /// arrives as `NarrativeRetracted` instead.
-    Narrative { text: String },
+    /// Free-form interpretive prose. Ship 1.6 introduced this
+    /// channel; ship 2 added the constitution gate; ship 5a extended
+    /// the wire shape from `{ text }` to `NarrativeWithRefs { text,
+    /// provenance }` so the frontend can render `${ref:N}` chips
+    /// inline (same mechanism as Claim profile cards). Only narrative
+    /// the gate approves arrives as `Narrative`; gate-retracted
+    /// narrative arrives as `NarrativeRetracted` instead.
+    Narrative(NarrativeWithRefs),
     /// Narrative the constitution gate retracted (ship 2). Carries the
     /// original text alongside a friendly user-facing `reason`.
     ///
@@ -90,6 +93,25 @@ pub enum SseFrame {
         message: String,
         debug_message: Option<String>,
     },
+    /// Ship 3.5 builder-view trace. Emitted on gate completion
+    /// when the request's `show_trace=true`. Carries the
+    /// executed path through one channel's gate (claim or
+    /// narrative) so the frontend can render the timeline in
+    /// `GatePathTimeline.tsx`. Capped at 32 steps to bound
+    /// runaway. Trace is always built and ledgered regardless;
+    /// the frame is wire-only.
+    GatePath(GatePath),
+    /// Ship 4 (`dont_repeat_yourself` switch): agent recognized a
+    /// repeat question, re-fetched the prior turn's primitives,
+    /// deterministically diffed, and the diff was empty. No LLM
+    /// narrative call ran on this path; the bubble carries a
+    /// "covered this in turn N, no movement since" pointer.
+    NoMovement(NoMovement),
+    /// Ship 4 (`dont_repeat_yourself` switch): agent recognized a
+    /// repeat question, re-fetched, diffed, and the diff was non-
+    /// empty. A small narrative call described the changes; this
+    /// frame carries both the typed `Delta` and the prose.
+    ChangedSince(ChangedSince),
 }
 
 pub type ClaimSink = mpsc::Sender<SseFrame>;
@@ -136,6 +158,22 @@ pub trait Primitive: Send + Sync {
         ctx: &PrimitiveCtx<'_>,
         input: Self::Input,
     ) -> Result<PrimitiveOutput<Self::Output>, PrimitiveError>;
+
+    /// Ship 4: declare the field-by-field comparison strategy so the
+    /// repeat-detect / diff path can decide what's "meaningfully
+    /// changed" between this primitive's prior and current outputs.
+    /// Each entry is a (dotted_field_path, FieldKind) pair walked by
+    /// `agent::diff::diff_outputs`. Default is empty; primitives that
+    /// want incremental-answer support override.
+    ///
+    /// Empty spec means "this primitive's outputs always count as
+    /// unchanged on a repeat" (no fields the diff cares about). The
+    /// loop interprets that as a no-change short-circuit, so an empty
+    /// spec is fine for primitives like `emit_claim` whose output
+    /// isn't replay-meaningful.
+    fn diff_spec(&self) -> Vec<(&'static str, crate::agent::diff::FieldKind)> {
+        Vec::new()
+    }
 }
 
 /// Type-erased primitive for the registry. Uses serde_json::Value as
@@ -147,6 +185,10 @@ pub trait ErasedPrimitive: Send + Sync {
     fn data_source(&self) -> DataSource;
     fn cost_class(&self) -> CostClass;
     fn input_schema(&self) -> Value;
+    /// Ship 4: erased projection of `Primitive::diff_spec`. Returned
+    /// as an owned Vec so the trait stays object-safe (associated
+    /// types vary across primitives).
+    fn diff_spec(&self) -> Vec<(&'static str, crate::agent::diff::FieldKind)>;
     async fn execute_erased(
         &self,
         ctx: &PrimitiveCtx<'_>,
@@ -183,6 +225,9 @@ where
     fn input_schema(&self) -> Value {
         let s = schema_for!(P::Input);
         serde_json::to_value(s).unwrap_or_else(|_| Value::Object(Default::default()))
+    }
+    fn diff_spec(&self) -> Vec<(&'static str, crate::agent::diff::FieldKind)> {
+        Primitive::diff_spec(self)
     }
 
     async fn execute_erased(

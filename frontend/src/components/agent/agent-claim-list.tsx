@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { Claim } from "@/lib/generated/Claim";
 import type { AgentStatus, ChatTurn } from "@/hooks/use-agent-stream";
+import { useAgentSwitches } from "@/stores/use-agent-switches";
 import { ProfileCard } from "./claim-cards/profile-card";
 import {
   ComparisonCard,
@@ -14,6 +15,8 @@ import {
 import { UserMessageCard } from "./claim-cards/user-message-card";
 import { NarrativeBubble } from "./claim-cards/narrative-bubble";
 import { SubgraphModal } from "./provenance/subgraph-modal";
+import { GatePathTimeline } from "./gate-path-timeline";
+import { DiffBubble } from "./diff-bubble";
 
 /**
  * Conversation-shaped renderer. Each ChatTurn renders as:
@@ -35,33 +38,59 @@ export function AgentClaimList({
   status: AgentStatus;
 }) {
   const [modalSlice, setModalSlice] = useState<Claim | null>(null);
+  const builderViewOn = useAgentSwitches((s) => s.builderViewOn);
 
   return (
     <>
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-        {turns.map((turn) => {
+        {turns.map((turn, turnIdx) => {
           const pending =
-            turn.claim === null && turn.narrative === null && turn.error === null;
+            turn.claim === null &&
+            turn.narrative === null &&
+            turn.error === null &&
+            turn.diffReply === null;
+          // turn-anchor-N is the scroll target for DiffBubble's
+          // "↑ turn N" chip. Indexed by position so the chip can
+          // use the prior_turn id (turn count from backend)
+          // directly.
+          const anchorId = `turn-anchor-${turnIdx}`;
           return (
-            <div key={turn.id} className="space-y-2">
+            <div key={turn.id} id={anchorId} className="space-y-2 scroll-mt-4">
               <UserMessageCard
                 text={turn.userText}
                 pending={pending}
                 errorMessage={turn.error}
                 errorDebug={turn.errorDebug}
               />
-              {turn.claim ? (
-                <ClaimRender
-                  claim={turn.claim}
-                  onModalRequest={() => setModalSlice(turn.claim)}
+              {turn.diffReply ? (
+                <DiffBubble
+                  diffReply={turn.diffReply}
+                  onScrollToTurn={(t) => scrollToTurn(t)}
                 />
-              ) : null}
-              {turn.narrative ? (
-                <NarrativeBubble
-                  text={turn.narrative}
-                  retractedReason={turn.narrativeRetractedReason}
-                  retractedDebug={turn.narrativeRetractedDebug}
-                />
+              ) : (
+                <>
+                  {turn.claim ? (
+                    <ClaimRender
+                      claim={turn.claim}
+                      onModalRequest={() => setModalSlice(turn.claim)}
+                    />
+                  ) : null}
+                  {turn.narrative ? (
+                    <NarrativeBubble
+                      text={turn.narrative}
+                      provenance={turn.narrativeProvenance}
+                      retractedReason={turn.narrativeRetractedReason}
+                      retractedDebug={turn.narrativeRetractedDebug}
+                    />
+                  ) : null}
+                </>
+              )}
+              {builderViewOn && turn.gatePaths.length > 0 ? (
+                <div className="space-y-1.5 pt-1">
+                  {turn.gatePaths.map((path, i) => (
+                    <GatePathTimeline key={`${turn.id}-path-${i}`} path={path} />
+                  ))}
+                </div>
               ) : null}
             </div>
           );
@@ -81,6 +110,13 @@ export function AgentClaimList({
       />
     </>
   );
+}
+
+function scrollToTurn(turn: number): void {
+  const el = document.getElementById(`turn-anchor-${turn}`);
+  if (el) {
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 }
 
 function ClaimRender({

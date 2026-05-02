@@ -4,5 +4,18 @@
  * Wire-friendly mirror of `analytics::snapshot::NodeStats`. Defined
  * here (rather than ts-rs-deriving the analytics type) to keep the
  * agent's wire shapes self-contained.
+ *
+ * Field names use the descriptive `*_volume_lamports` form (not the
+ * internal `in_vol`/`out_vol` short keys) so that
+ * `policy_crosscheck::classify_metric` resolves them to
+ * `UnitClass::Sol` (substring match on "volume" + "lamport"). This
+ * matters because `binding_store::build_binding` walks the JSON
+ * output and stores each `Number` entry under whatever class
+ * `classify_metric(field_name)` returns. With short keys, the
+ * volumes landed in `UnitClass::Raw` and the structural value-compare
+ * gate (`policy_structural::verify_chip_values`) silently skipped
+ * them. Now they classify as Sol consistently end-to-end: primitive
+ * JSON output, the model's `${ref:N}` Number provenance, and the
+ * gate's lookup all use the same unit-class taxonomy.
  */
-export type NodeStatsWire = { degree: number, volume: number, in_vol: number, out_vol: number, bidir_vol: number, sol_degree: number, spl_degree: number, };
+export type NodeStatsWire = { degree: number, total_volume_lamports: number, in_volume_lamports: number, out_volume_lamports: number, bidir_volume_lamports: number, sol_degree: number, spl_degree: number, };

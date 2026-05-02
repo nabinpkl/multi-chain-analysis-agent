@@ -27,13 +27,18 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use super::client::AgentClient;
+use super::diff::diff_outputs;
 use super::ledger::{LedgerEventDraft, LedgerEventKind};
 use super::primitives::{
     build_binding, ClaimSink, DispatchOutput, ErasedPrimitive, PrimitiveBindingStore, PrimitiveCtx,
     PrimitiveError, SseFrame,
 };
 use super::prompt::active_prompt;
-use super::types::{AgentRequest, CostClass};
+use super::repeat_detector::detect_repeat;
+use super::types::{
+    AgentRequest, ChangedSince, CostClass, Delta, FieldDelta, GatePath, NoMovement, PathState,
+    PathStep, PolicyVerdict,
+};
 use crate::state::AppState;
 
 const MAX_TURNS: usize = 8;
@@ -212,6 +217,147 @@ async fn run(
         buf.insert(session_id.clone(), initial_bindings);
     }
 
+    // Ship 3.5: stash the request's switches + show_trace into the
+    // per-session buffers. emit_claim and the narrative gate read
+    // from session_id keyed buffers; both drain at session end.
+    {
+        let mut buf = state.agent_switches.lock();
+        buf.insert(session_id.clone(), request.switches.clone());
+    }
+    {
+        let mut buf = state.agent_show_trace.lock();
+        buf.insert(session_id.clone(), request.show_trace);
+    }
+    let session_switches = request.switches.clone();
+    let show_trace = request.show_trace;
+
+    // ----- ship 4 dont_repeat_yourself branch ----------------------------
+    //
+    // When `dont_repeat_yourself` is on AND the thread has prior turns,
+    // run the repeat detector. If it fires and the user didn't ask for
+    // an explicit refresh, replay the prior turn's primitives, diff
+    // against the captured outputs, and emit either NoMovement (empty
+    // diff) or ChangedSince (small narrative on the changed set).
+    // Either path bypasses the constitution gate; the input to
+    // narration is grounded primitive output, no fabrication surface.
+    //
+    // Failure modes (LLM error, primitive error during replay, schema
+    // drift) all fall through to the normal main loop so the user
+    // never sees a stuck turn from repeat detection.
+    let prior_user_questions: std::collections::HashMap<u32, String> = state
+        .agent_threads
+        .lock()
+        .get(&thread_id)
+        .map(|t| t.user_questions_per_turn.clone())
+        .unwrap_or_default();
+
+    let diff_outcome = if session_switches.dont_repeat_yourself
+        && !prior_user_questions.is_empty()
+    {
+        try_diff_path(
+            &state,
+            &thread_id,
+            turn,
+            &request.user_question,
+            &session_switches,
+            show_trace,
+            &session_id,
+            &sse,
+            &prior_user_questions,
+        )
+        .await
+    } else {
+        DiffOutcome::FellThrough {
+            note: if session_switches.dont_repeat_yourself {
+                "no prior turns".into()
+            } else {
+                "switch off".into()
+            },
+        }
+    };
+
+    if let DiffOutcome::Handled = &diff_outcome {
+        // Persist this turn's question + the replayed tool-call
+        // records back to the thread so future repeats can replay
+        // against this turn too. Drain per-session buffers exactly
+        // like the main-path does at session end.
+        let drained_records = state.agent_tool_calls.lock().remove(&session_id);
+        let final_bindings = state.agent_bindings.lock().remove(&session_id);
+        state.agent_switches.lock().remove(&session_id);
+        state.agent_show_trace.lock().remove(&session_id);
+
+        {
+            let mut threads = state.agent_threads.lock();
+            if let Some(thread) = threads.get_mut(&thread_id) {
+                thread.record_turn_user_question(turn, request.user_question.clone());
+                if let Some(records) = drained_records {
+                    for rec in records {
+                        thread.record_turn_tool_call(turn, rec);
+                    }
+                }
+                thread.turn_count = turn.saturating_add(1);
+                if let Some(b) = final_bindings {
+                    thread.bindings = b;
+                }
+            }
+        }
+
+        // Ledger session-end + Done are emitted by the SSE handler
+        // wrapper; we just need to write the SessionEnded ledger row
+        // and return cleanly. Mirror the main-path's bookkeeping.
+        let elapsed_ms = started.elapsed().as_millis().min(u32::MAX as u128) as u32;
+        let _ = state
+            .agent_ledger
+            .write(LedgerEventDraft {
+                session_id: session_id.clone(),
+                kind: LedgerEventKind::SessionEnded,
+                principal_hash,
+                payload: serde_json::json!({
+                    "elapsed_ms": elapsed_ms,
+                    "ok": true,
+                    "thread_id": thread_id,
+                    "turn": turn,
+                    "dont_repeat_yourself": true,
+                })
+                .to_string(),
+                pre_estimate_units: 0,
+                post_actual_units: 0,
+                cost_relevant: false,
+            })
+            .await;
+        state.agent_ledger.drop_session(&session_id);
+        info!(%session_id, %thread_id, turn, elapsed_ms, "agent session done (dont_repeat_yourself path)");
+        return Ok(());
+    }
+
+    // FellThrough: surface the path-trace step so the builder view
+    // shows "dont_repeat_yourself: n/a (reason)" before the gate
+    // legs run on the main path.
+    if let DiffOutcome::FellThrough { note } = &diff_outcome {
+        if show_trace {
+            let n = note.clone();
+            let detail = if n == "switch off" {
+                "switch off"
+            } else {
+                "no repeat detected"
+            };
+            let path = GatePath {
+                channel: "narrative".into(),
+                switches: session_switches.clone(),
+                steps: vec![PathStep {
+                    stage: "narrative.dont_repeat_yourself".into(),
+                    state: PathState::NotApplicable {
+                        detail: detail.into(),
+                    },
+                    elapsed_us: 0,
+                    note: n,
+                }],
+                final_verdict: PolicyVerdict::Approved,
+            };
+            let _ = sse.send(SseFrame::GatePath(path)).await;
+        }
+    }
+
     // ----- ship 2.6 narrative-retry loop ----------------------------------
     //
     // Up to MAX_NARRATIVE_ATTEMPTS rig.prompt() calls per turn. Retry
@@ -386,18 +532,36 @@ async fn run(
                 &accumulated_claims,
                 &thread_history_claims,
                 &binding_snapshot,
+                &session_switches,
             )
             .await;
         let verdict = gate_result.verdict.clone();
         let breakdown = gate_result.breakdown.clone();
         let raw_extraction = gate_result.raw_extraction.clone();
-        let breakdown_dev_str = breakdown.format_for_dev();
+        let path = gate_result.path.clone();
+        // Ship 2.6.1 dev-mode debug string: format the breakdown
+        // legs into a one-line summary the SSE NarrativeRetracted
+        // / Error frames can carry on `debug_*`. Ship 3.5 reads
+        // from the typed breakdown rather than the old format_for_dev.
+        let breakdown_dev_str = format!(
+            "stay-in-role: {} | dont-fabricate: {} | cross-check.paraphrase: {} | cross-check.ground-truth: {}",
+            sub_label(&breakdown.stay_in_role),
+            sub_label(&breakdown.dont_fabricate),
+            sub_label(&breakdown.cross_check.paraphrase_aware_match),
+            sub_label(&breakdown.cross_check.ground_truth_match),
+        );
 
-        // Ledger PolicyVerdict for this attempt  extended with the
-        // per-leg breakdown + raw extraction so ship 6's eval can
-        // assert per-extractor correctness on golden questions. Ship
-        // 3 adds `binding_call_ids` so adversarial replay can ask
-        // "what primitives did this verdict's binding leg see".
+        // Ship 3.5: surface the path on the SSE wire when the
+        // request asked for the builder view. Always built;
+        // toggle is wire-only.
+        if show_trace {
+            let _ = sse.send(SseFrame::GatePath(path.clone())).await;
+        }
+
+        // Ledger PolicyVerdict for this attempt. Ship 3.5 extends
+        // the payload with `switches` (gate config) and `path`
+        // (executed steps) so replay can reconstruct the gate run
+        // end-to-end across switch combinations.
         let verdict_payload = serde_json::json!({
             "target": "narrative",
             "verdict": &verdict,
@@ -407,6 +571,8 @@ async fn run(
             "breakdown": &breakdown,
             "raw_extraction": &raw_extraction,
             "binding_call_ids": binding_snapshot.call_ids(),
+            "switches": &session_switches,
+            "path": &path,
         })
         .to_string();
         let _ = state
@@ -425,10 +591,20 @@ async fn run(
         match verdict {
             crate::agent::types::PolicyVerdict::Approved => {
                 last_retract_reason = None;
+                // Ship 5a: assemble narrative provenance by
+                // concatenating this turn's accumulated claims'
+                // provenance arrays in emission order. The model
+                // uses `${ref:N}` indices that count across this
+                // assembled vec; prompt v4 documents the rule.
+                let narrative_provenance =
+                    assemble_narrative_provenance(&accumulated_claims);
                 let _ = sse
-                    .send(SseFrame::Narrative {
-                        text: trimmed.to_string(),
-                    })
+                    .send(SseFrame::Narrative(
+                        crate::agent::types::NarrativeWithRefs {
+                            text: trimmed.to_string(),
+                            provenance: narrative_provenance,
+                        },
+                    ))
                     .await;
                 break Ok(());
             }
@@ -532,6 +708,18 @@ async fn run(
     // under the same lock as the message / claim updates.
     let final_bindings = state.agent_bindings.lock().remove(&session_id);
 
+    // Ship 3.5: drain the per-session switch + show_trace buffers
+    // so they don't leak into the next session. These are
+    // request-scoped; nothing to fold into thread state.
+    state.agent_switches.lock().remove(&session_id);
+    state.agent_show_trace.lock().remove(&session_id);
+
+    // Ship 4: drain the per-session tool-call buffer. On success we
+    // fold it into AgentThread.tool_calls_per_turn[turn] so a future
+    // repeat-of-this-turn can replay the same primitive calls
+    // against fresh data.
+    let drained_tool_calls = state.agent_tool_calls.lock().remove(&session_id);
+
     if result.is_ok() {
         let mut threads = state.agent_threads.lock();
         if let Some(thread) = threads.get_mut(&thread_id) {
@@ -560,13 +748,25 @@ async fn run(
             if let Some(bindings) = final_bindings {
                 thread.bindings = bindings;
             }
+            // Ship 4: persist this turn's question + tool-call
+            // records so a future repeat-of-this-turn can fire the
+            // dont_repeat_yourself diff path.
+            // evict_oldest_turn_if_needed() bounds both maps inside
+            // the AgentThread methods.
+            thread.record_turn_user_question(turn, request.user_question.clone());
+            if let Some(records) = drained_tool_calls {
+                for rec in records {
+                    thread.record_turn_tool_call(turn, rec);
+                }
+            }
         }
     } else {
-        // Failed turn: still drop the per-session buffer so it
-        // doesn't leak across sessions. Already removed above; the
-        // thread's persistent bindings stay as they were before
-        // this turn started.
+        // Failed turn: still drop the per-session buffers so they
+        // don't leak across sessions. Already removed above; the
+        // thread's persistent bindings + tool-calls stay as they
+        // were before this turn started.
         drop(final_bindings);
+        drop(drained_tool_calls);
     }
 
     // ----- "synthesizing" Progress (best effort) --------------------------
@@ -771,6 +971,11 @@ impl ToolDyn for PrimitiveAdapter {
                 sse: self.sse.clone(),
             };
 
+            // Ship 4: clone for the post-dispatch tool-call record;
+            // execute_erased consumes the argument. Keeping the
+            // original `parsed` lets us stash exactly what the model
+            // sent into the replay buffer.
+            let parsed_for_record = parsed.clone();
             let dispatch_result = self
                 .primitive
                 .execute_erased(&ctx, parsed)
@@ -808,7 +1013,7 @@ impl ToolDyn for PrimitiveAdapter {
                     );
                     let binding = build_binding(
                         self.primitive.name(),
-                        call_id,
+                        call_id.clone(),
                         captured_at_ms,
                         &value_json,
                         &provenance,
@@ -818,6 +1023,25 @@ impl ToolDyn for PrimitiveAdapter {
                         buf.entry(self.session_id.clone())
                             .or_insert_with(PrimitiveBindingStore::new)
                             .record(binding);
+                    }
+
+                    // Ship 4: capture a tool-call record for the
+                    // per-session buffer if this primitive's outputs
+                    // are replay-meaningful (non-empty `diff_spec`).
+                    // emit_claim's diff_spec is empty by default so
+                    // it's naturally excluded; replaying it would
+                    // double-fire Claim frames anyway.
+                    if !self.primitive.diff_spec().is_empty() {
+                        let record = crate::agent::TurnToolCallRecord {
+                            primitive_name: self.primitive.name().to_string(),
+                            args_json: parsed_for_record,
+                            output_json: value_json.clone(),
+                            call_id,
+                        };
+                        let mut buf = self.state.agent_tool_calls.lock();
+                        buf.entry(self.session_id.clone())
+                            .or_default()
+                            .push(record);
                     }
 
                     let result_str = value_json.to_string();
@@ -889,6 +1113,35 @@ fn sha256_hex(bytes: &[u8]) -> String {
     super::ledger::event::hex_encode(&digest)
 }
 
+/// Ship 5a: build the narrative-side provenance array by
+/// concatenating each claim's provenance entries in emission order.
+/// The model's `${ref:N}` indices in the narrative resolve against
+/// the resulting flat vec. Prompt v4 documents the assembly rule
+/// (refs count across all this turn's claims, in the order the
+/// claims were emitted) so the model can reason about which N
+/// points where. Returns an empty vec when no claims were emitted
+/// this turn; the structural gate then has nothing to validate
+/// (and a narrative containing `${ref:N}` would fail placeholder
+/// validation, which is correct).
+fn assemble_narrative_provenance(
+    claims: &[crate::agent::types::Claim],
+) -> Vec<crate::agent::types::ProvenanceRef> {
+    claims
+        .iter()
+        .flat_map(|c| c.provenance.iter().cloned())
+        .collect()
+}
+
+/// One-word label for a `SubVerdict`. Used in the dev-mode
+/// breakdown string for `debug_reason` / `debug_message`.
+fn sub_label(v: &super::policy::SubVerdict) -> &'static str {
+    match v {
+        super::policy::SubVerdict::Approved => "approved",
+        super::policy::SubVerdict::Retracted { .. } => "retracted",
+        super::policy::SubVerdict::NotApplicable { .. } => "n/a",
+    }
+}
+
 /// Generic user-facing error after exhausting narrative retries
 /// (ship 2.6). Deliberately category-free: leaking which constitution
 /// rule retracted means leaking the gate's shape, which is a defense
@@ -911,4 +1164,361 @@ async fn send_friendly_error(sse: &ClaimSink, debug_public: bool, last_reason: O
             },
         })
         .await;
+}
+
+// ============================================================================
+// Ship 4: dont_repeat_yourself diff path
+// ============================================================================
+
+/// What `try_diff_path` returns. `Handled` means the function emitted
+/// `NoMovement` or `ChangedSince` and the loop should finalize without
+/// running the main flow. `FellThrough` means either the switch is
+/// off, no repeat was detected, the user explicitly asked for refresh,
+/// or a replay step failed; the main loop should run normally.
+enum DiffOutcome {
+    Handled,
+    FellThrough { note: String },
+}
+
+/// Pre-loop branch realizing the `dont_repeat_yourself` switch. Runs
+/// the repeat detector, on a hit replays the prior turn's primitives,
+/// deterministically diffs the fresh outputs against the captured
+/// prior outputs, and emits the appropriate SSE frame. Bypasses the
+/// constitution gate by design: the diff is grounded in real
+/// primitive output, the narrative call (when one fires) describes
+/// only the typed Delta. Risk #3 in the plan names this trade
+/// explicitly.
+#[allow(clippy::too_many_arguments)]
+async fn try_diff_path(
+    state: &AppState,
+    thread_id: &str,
+    turn: u32,
+    user_question: &str,
+    switches: &super::types::AgentSwitches,
+    show_trace: bool,
+    session_id: &str,
+    sse: &ClaimSink,
+    prior_user_questions: &std::collections::HashMap<u32, String>,
+) -> DiffOutcome {
+    let started = std::time::Instant::now();
+
+    // 1. Run the repeat detector via the cheap policy model.
+    let client = match &state.agent_client {
+        Some(c) => c,
+        None => {
+            return DiffOutcome::FellThrough {
+                note: "agent client unset".into(),
+            }
+        }
+    };
+    let outcome = detect_repeat(prior_user_questions, user_question, client).await;
+
+    // 2. Branch: not a repeat, or explicit refresh -> fall through.
+    let prior_turn = match outcome.repeat_of_turn {
+        Some(n) => n,
+        None => {
+            return DiffOutcome::FellThrough {
+                note: outcome.reason,
+            };
+        }
+    };
+    if outcome.user_explicitly_wants_refresh {
+        return DiffOutcome::FellThrough {
+            note: format!("explicit refresh asked (would have detected repeat of turn {prior_turn})"),
+        };
+    }
+
+    // 3. Look up turn N's tool-call records. If empty, fall through
+    // (nothing to replay against).
+    let prior_records: Vec<super::TurnToolCallRecord> = state
+        .agent_threads
+        .lock()
+        .get(thread_id)
+        .and_then(|t| t.tool_calls_per_turn.get(&prior_turn).cloned())
+        .unwrap_or_default();
+    if prior_records.is_empty() {
+        return DiffOutcome::FellThrough {
+            note: format!("repeat of turn {prior_turn} but no replay-meaningful tool calls captured"),
+        };
+    }
+
+    let _ = sse
+        .send(SseFrame::Progress {
+            phase: "replaying".into(),
+            detail: format!(
+                "re-fetching turn {} ({} primitive call{}) for delta check",
+                prior_turn,
+                prior_records.len(),
+                if prior_records.len() == 1 { "" } else { "s" },
+            ),
+        })
+        .await;
+
+    // 4. Replay each prior record. Re-dispatch through the registry
+    // with the same args, capture fresh outputs, also record into the
+    // per-session binding store + tool-call buffer so this turn's
+    // state mirrors what a normal main-loop turn would produce.
+    let session_started_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let principal_hash = [0u8; 32];
+
+    let mut aggregate_changed: Vec<FieldDelta> = Vec::new();
+    let mut aggregate_unchanged: u32 = 0;
+    let mut primitives_replayed: Vec<String> = Vec::new();
+
+    for prior in &prior_records {
+        let primitive = match state.agent_registry.get(&prior.primitive_name) {
+            Some(p) => p.clone(),
+            None => {
+                warn!(
+                    primitive = %prior.primitive_name,
+                    "diff replay: primitive missing from registry; falling through"
+                );
+                return DiffOutcome::FellThrough {
+                    note: format!("primitive '{}' missing", prior.primitive_name),
+                };
+            }
+        };
+
+        let ctx = PrimitiveCtx {
+            state,
+            session_id: session_id.to_string(),
+            principal_hash,
+            session_started_at_ms,
+            sse: sse.clone(),
+        };
+
+        let dispatch = match primitive.execute_erased(&ctx, prior.args_json.clone()).await {
+            Ok(d) => d,
+            Err(e) => {
+                warn!(
+                    primitive = %prior.primitive_name,
+                    error = %e,
+                    "diff replay: primitive failed; falling through to main loop"
+                );
+                return DiffOutcome::FellThrough {
+                    note: format!("replay of '{}' failed: {e}", prior.primitive_name),
+                };
+            }
+        };
+
+        // Diff prior.output_json vs dispatch.value_json via the
+        // primitive's diff_spec. Each FieldDelta carries the
+        // primitive name so multi-primitive replays group cleanly.
+        let spec = primitive.diff_spec();
+        let one = diff_outputs(
+            &prior.primitive_name,
+            &spec
+                .iter()
+                .map(|(p, k)| (*p, k.clone()))
+                .collect::<Vec<_>>(),
+            &prior.output_json,
+            &dispatch.value_json,
+        );
+        aggregate_changed.extend(one.changed);
+        aggregate_unchanged = aggregate_unchanged.saturating_add(one.unchanged_field_count);
+        primitives_replayed.push(prior.primitive_name.clone());
+
+        // Mirror the adapter's binding-store + tool-call recording so
+        // a follow-up turn's binding leg sees fresh data and a future
+        // repeat-of-this-turn can replay against this turn's outputs.
+        let captured_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let new_call_id = format!("{}:{}", prior.primitive_name, ulid::Ulid::new());
+        let binding = build_binding(
+            &prior.primitive_name,
+            new_call_id.clone(),
+            captured_at_ms,
+            &dispatch.value_json,
+            &dispatch.provenance,
+        );
+        {
+            let mut buf = state.agent_bindings.lock();
+            buf.entry(session_id.to_string())
+                .or_insert_with(PrimitiveBindingStore::new)
+                .record(binding);
+        }
+        if !primitive.diff_spec().is_empty() {
+            let record = super::TurnToolCallRecord {
+                primitive_name: prior.primitive_name.clone(),
+                args_json: prior.args_json.clone(),
+                output_json: dispatch.value_json.clone(),
+                call_id: new_call_id,
+            };
+            let mut buf = state.agent_tool_calls.lock();
+            buf.entry(session_id.to_string()).or_default().push(record);
+        }
+    }
+
+    let delta = Delta {
+        changed: aggregate_changed,
+        unchanged_field_count: aggregate_unchanged,
+    };
+
+    let elapsed_us = started.elapsed().as_micros().min(u32::MAX as u128) as u32;
+    let path_note = if delta.changed.is_empty() {
+        format!(
+            "repeat of turn {prior_turn}: no movement ({} field{} unchanged)",
+            delta.unchanged_field_count,
+            if delta.unchanged_field_count == 1 { "" } else { "s" },
+        )
+    } else {
+        format!(
+            "repeat of turn {prior_turn}: {} changed, {} unchanged",
+            delta.changed.len(),
+            delta.unchanged_field_count,
+        )
+    };
+    let path = GatePath {
+        channel: "narrative".into(),
+        switches: switches.clone(),
+        steps: vec![PathStep {
+            stage: "narrative.dont_repeat_yourself".into(),
+            state: PathState::Approved,
+            elapsed_us,
+            note: path_note.clone(),
+        }],
+        final_verdict: PolicyVerdict::Approved,
+    };
+
+    // 5. Branch on diff size: empty -> short-circuit no LLM call;
+    // non-empty -> small narrative call.
+    if delta.changed.is_empty() {
+        let _ = sse
+            .send(SseFrame::NoMovement(NoMovement {
+                prior_turn,
+                primitives_replayed: primitives_replayed.clone(),
+            }))
+            .await;
+        if show_trace {
+            let _ = sse.send(SseFrame::GatePath(path.clone())).await;
+        }
+    } else {
+        let prose = match narrate_delta(client, prior_turn, &delta).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "narrate_delta call failed; emitting structured delta with fallback prose"
+                );
+                fallback_prose(prior_turn, &delta)
+            }
+        };
+        let _ = sse
+            .send(SseFrame::ChangedSince(ChangedSince {
+                prior_turn,
+                delta: delta.clone(),
+                prose,
+            }))
+            .await;
+        if show_trace {
+            let _ = sse.send(SseFrame::GatePath(path.clone())).await;
+        }
+    }
+
+    // Ledger row so replay sees the diff decision. Mirrors the
+    // PolicyVerdict ledger pattern for the main path.
+    let payload = serde_json::json!({
+        "kind": "dont_repeat_yourself",
+        "prior_turn": prior_turn,
+        "thread_id": thread_id,
+        "turn": turn,
+        "delta": &delta,
+        "primitives_replayed": &primitives_replayed,
+        "switches": switches,
+        "path": &path,
+    })
+    .to_string();
+    let _ = state
+        .agent_ledger
+        .write(LedgerEventDraft {
+            session_id: session_id.to_string(),
+            kind: LedgerEventKind::PolicyVerdict,
+            principal_hash,
+            payload,
+            pre_estimate_units: 0,
+            post_actual_units: 0,
+            cost_relevant: false,
+        })
+        .await;
+
+    info!(
+        %session_id,
+        %thread_id,
+        turn,
+        prior_turn,
+        changed = delta.changed.len(),
+        unchanged = delta.unchanged_field_count,
+        "dont_repeat_yourself path completed"
+    );
+
+    DiffOutcome::Handled
+}
+
+const NARRATE_DELTA_SYSTEM: &str = r#"You narrate a SHORT delta between a prior agent answer and the freshly re-fetched primitive outputs from the same Solana on-chain query. The user asked the same question again; you describe ONLY what changed since the prior turn.
+
+Rules:
+- Be brief. One sentence per changed field at most.
+- Reference 'turn N' so the user can scroll back to the original.
+- Don't restate values that didn't change.
+- Don't invent context. Only describe the typed Delta you receive.
+- No greeting, no apology, no preamble. Start with the substance.
+
+Output plain prose; no JSON, no markdown lists, no headers."#;
+
+async fn narrate_delta(
+    client: &AgentClient,
+    prior_turn: u32,
+    delta: &Delta,
+) -> Result<String> {
+    let user_prompt = format!(
+        "Prior turn id: {prior_turn}\n\nDelta (these fields changed):\n{}\n\n{} other fields stayed the same.",
+        serde_json::to_string_pretty(&delta.changed).unwrap_or_else(|_| "[]".into()),
+        delta.unchanged_field_count,
+    );
+    let raw = client
+        .complete_policy(NARRATE_DELTA_SYSTEM, &user_prompt)
+        .await?;
+    Ok(raw.trim().to_string())
+}
+
+/// Pure-Rust fallback prose when the narrate-delta LLM call fails.
+/// One sentence per changed field. Better than empty prose; the user
+/// at least sees what moved.
+fn fallback_prose(prior_turn: u32, delta: &Delta) -> String {
+    use super::types::FieldChange;
+    let mut parts: Vec<String> = Vec::new();
+    parts.push(format!(
+        "Since turn {prior_turn} ({} field{} changed, {} unchanged):",
+        delta.changed.len(),
+        if delta.changed.len() == 1 { "" } else { "s" },
+        delta.unchanged_field_count,
+    ));
+    for fd in &delta.changed {
+        let line = match &fd.change {
+            FieldChange::NumberMoved { prior, current, pct } => format!(
+                "  {} moved {:.2} -> {:.2} ({:+.1}%)",
+                fd.field_path,
+                prior,
+                current,
+                pct * 100.0,
+            ),
+            FieldChange::CountChanged { prior, current } => format!(
+                "  {} changed {} -> {}",
+                fd.field_path, prior, current,
+            ),
+            FieldChange::SetChanged { added, removed } => format!(
+                "  {} membership shifted: +{} -{}",
+                fd.field_path,
+                added.len(),
+                removed.len(),
+            ),
+        };
+        parts.push(line);
+    }
+    parts.join("\n")
 }

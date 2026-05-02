@@ -21,9 +21,20 @@ pub const PROMPT_V2_TAG: &str = "system_v2";
 /// not yet cross-checked against cited Claims (ship 2 closes this).
 pub const PROMPT_V2_TEXT: &str = include_str!("prompt_v2.txt");
 
-/// Active prompt accessor. Adding a v3 means adding a const + a match
+pub const PROMPT_V4_TAG: &str = "system_v4";
+
+/// Ship 5a prompt. Adds the citation-discipline rule: every audit-
+/// class number in claim body_markdown OR narrative MUST appear as a
+/// `${ref:N}` placeholder pointing at a provenance entry. Bare audit
+/// numbers retract via the constitution gate (Rule 5 in policy v4).
+/// Documents the narrative provenance assembly rule (refs count
+/// across this turn's claims in emission order). Adds the
+/// `community_summary` primitive to the tool catalog.
+pub const PROMPT_V4_TEXT: &str = include_str!("prompt_v4.txt");
+
+/// Active prompt accessor. Adding a v5 means adding a const + a match
 /// arm here; sessions can be replayed against the exact prompt
 /// version their ledger references.
 pub fn active_prompt() -> (&'static str, &'static str) {
-    (PROMPT_V2_TAG, PROMPT_V2_TEXT)
+    (PROMPT_V4_TAG, PROMPT_V4_TEXT)
 }

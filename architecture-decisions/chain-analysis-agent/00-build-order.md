@@ -338,6 +338,7 @@ to its own file only if the section grows past readable.
 | 2.6.1 | dev-mode UI observability + bug-fix sweep | done | shipped 2026-04: solo-dev observability pattern. UI is the only surface dev naturally checks, so dev-mode surfaces internals on the UI itself via `debug_*` fields on `SseFrame::Error` and `SseFrame::NarrativeRetracted`, populated only when backend ships with `AGENT_DEBUG_PUBLIC=1`. Prod default unset so wire stays sterile. Fixes ride along: regex extractor switched from sentence-scan to immediate-token classification (kills the "3 SOL" false retract caused by digits inside wallet addresses picking up far-downstream "SOL" mentions); double-wrap "rig prompt failed: rig prompt failed:" prefix removed; multiplier regex alternation reordered longest-first so `trillion` no longer captures only `t`. 18 extractor unit tests pass including new address-digit regression. |
 | 2.7 | hybrid extraction (regex + LLM + deterministic compare) | done | shipped 2026-05: three-verdict narrative gate. Constitution v3 (`policy_v3`) added an `extraction` JSON sidecar to the gate's response (one LLM call, richer output). Code now runs three independent legs on every narrative  regex extractor + LLM extractor (running through the same `cross_check_extracted_pair` deterministic compare) + constitution. Show-all-default-strict merge: any retract → wire retracts; dev-mode `debug_reason` shows the per-leg breakdown (`regex: ... | llm-extract: ... | constitution: ...`) so disagreement is visible inline. Ledger payload extended with `breakdown` + `raw_extraction` for replay/eval. 23 unit tests pass (18 extractor + 5 new merge/format tests). gpt-oss-20b reliably produced parseable v3 JSON in dogfood (`llm_extraction=approved` not `n/a` on every gate run). |
 | 3 | real primitive surface + primitive-binding ledger | done | shipped 2026-05: second real primitive (`community_summary`) registered alongside `wallet_profile` (Live arm hits the analytics snapshot for size, internal/external volume, edge count, top members; Range arm stubbed to ship 5). New `primitives::binding_store` records every successful dispatch's numbers + entities into a per-thread ring-buffered `PrimitiveBindingStore` (cap 64). Policy gate gains a fourth leg: `binding`, deterministic, sub-ms. Narrative gate is four-legged (regex + llm-extract + constitution + binding); claim gate is two-legged (constitution + binding). Strict merge unchanged. The fabrication probe from ship 2.7 now retracts structurally: claim numbers without a primitive-output source fail the binding leg before the SSE push. Provenance refs validated against captured entities  invented wallet/community refs retract. Ledger payload extended with `breakdown` + `binding_call_ids`. 12 new unit tests (6 binding_store + 6 binding-leg + four-leg merge); cargo test --bin server passes 106/106. Constitution prompt v3 stays frozen. |
+| 3.5 | agent switches + path trace + dual view | done | shipped 2026-05: legibility ship. Six ships of guard layers shipped invisibly because all guards always run at the wire; ship 3.5 carves the gate into runtime ablation switches so visitors can flip guards on/off and see which one prevents which failure class. Three concrete switches as durable behavior contracts (not ship checkpoints): `stay_in_role` (identity, conduct, scope; today realized by constitution leg + prompt v2), `dont_fabricate` (numbers + entities trace to real tool output; today realized by binding leg), `cross_check` with three sub-modes forming a chain of consistency strength (`text_match` regex prose-vs-claim, `paraphrase_aware_match` LLM extractor, `ground_truth_match` stub returning NotApplicable with detail "not implemented yet (lands in ship 5: warehouse primitives)"). Six presets describe kinds of agent (raw LLM → agent without grounding → non-fabricating → + text → + paraphrase (production) → + ground-truth (future)). Defaults reproduce ship 3 production behavior. New types: `AgentSwitches`, `CrossCheckSwitches`, `PathStep`, `GatePath`, `SubVerdict::NotApplicable { detail }`. `AgentRequest` gains `switches` + `show_trace` (both `#[serde(default)]`). Per-session `agent_switches` + `agent_show_trace` buffers on AppState mirror the `agent_bindings` pattern. `PathBuilder` records execution order + per-step verdicts + notes (capped at 32 steps); `guarded(on, &mut path, stage, f)` helper realizes skip-when-off → `NotApplicable { detail: "switch off" }`; `needs_llm_call` short-circuits the gate LLM call when no LLM-dependent switch is on (raw-LLM preset has zero gate-side overhead). `FourVerdictResult` deleted; replaced by `NarrativeBreakdown` + `ClaimBreakdown` with switch-named fields. `SseFrame::GatePath` new variant emitted only when `show_trace=true` (saves bytes for casual visitors); trace always built and ledgered regardless. Ledger PolicyVerdict payload extended with `switches` + `path` for replay. Frontend dual-view: default = customer-only single column (clean, what users see in prod); header `BuilderViewToggle` + (i) popover explains the project is a builder portfolio (not a product) and what flipping the toggle reveals; on-state surfaces `SwitchPanel` (5 toggles + 6 presets, behavior-focused tooltips, no ship references) above the chat and `GatePathTimeline` per-turn (color-coded ✓/✗/, cross-check sub-modes indented). Zustand `use-agent-switches` store owns the 5 booleans + builderViewOn + preset application; sends switches + show_trace on every AgentRequest. New living doc `docs/architecture/switches.md` is the implementation map per switch; future ships strengthening a switch (e.g. prompt-injection hardening under `stay_in_role`) append to this doc rather than spawning a new switch. SECURITY note added near `AgentSwitches`: switches reachable from any client; project is portfolio not product, internals explicitly not hidden. cargo test --bin server passes 110/110 (4 new policy tests for switch off paths + needs_llm_call short-circuit + PathBuilder cap + ts-rs export round-trip); pnpm tsc --noEmit clean; docker boots cleanly. |
 | 4 | cost framework | not started | |
 | 5 | warehouse primitives | not started | |
 | 6 | eval suite | not started | |
@@ -763,6 +764,81 @@ Changes for next ships:
   output. Strict claims rule was the explicit choice; if dogfood
   surfaces real interpretation suffering, ship 4 introduces
   computed_from provenance. Park; watch.
+
+### Ship 3.5 (mid-ship insertion), 2026-05
+
+What surprised:
+
+- The decision that paid off most was treating switches as durable
+  behavior contracts, not ship checkpoints. Early drafts had
+  per-leg toggles ("constitution", "regex extractor", "LLM
+  extractor", "binding") that read as plumbing, not behavior.
+  Reframing to "stay in role / don't fabricate / cross check"
+  made the panel readable to a non-engineer hiring manager
+  while staying honest about what the runtime does. Tooltips
+  describe behavior + failure mode; ship history is implementation
+  detail that lives in `docs/architecture/switches.md`. Same
+  toggle survives when a future ship adds prompt-injection
+  hardening under `stay_in_role` or a third extractor under
+  `cross_check`.
+- The `cross_check` sub-mode split (text → paraphrase → ground-
+  truth) where ground-truth is a stub came out of a separate
+  insight: the recall-vs-source-of-truth distinction is itself
+  the demo. Text and paraphrase modes both depend on chat
+  history (recall); ground-truth hits the warehouse directly.
+  Three independent toggles, not a 4-level radio, because the
+  *disagreement* between them is what surfaces guard value.
+  Ship 5's warehouse primitives now have a clean wiring slot
+  with the panel shape already stable.
+- Default-on-customer-view + opt-in builder view (toggle + (i))
+  was a late call and the right one. Earlier draft shoved the
+  switch panel in front of every visitor on page load. The flip:
+  default is what a customer would see in prod (clean, single
+  column, no internals); the (i) explains the project is a
+  builder portfolio not a product, and the toggle reveals the
+  panel + per-turn trace timeline. More honest about intent
+  than hiding internals, less aggressive than forcing the
+  builder lens. The `show_trace` wire field tracks the toggle
+  so casual visitors don't pay the GatePath bytes.
+- `needs_llm_call` short-circuit was free latency. When neither
+  `stay_in_role` nor `cross_check.paraphrase_aware_match` is on,
+  the gate's LLM call is skipped entirely. Raw-LLM preset has
+  zero gate-side overhead, which makes the "watch the agent
+  gain a guardrail per click" demo feel real instead of
+  costing the same on every preset.
+- `PathBuilder` capped at 32 steps was paranoia that paid for
+  itself: the loop runs the gate per claim and per narrative
+  retry, and an unbounded path step list would have been a slow
+  leak. 32 is plenty for the current 5-switch surface; if a
+  future ship adds a sixth switch with 4 sub-modes, revisit the
+  cap before the limit silently truncates real traces.
+- Dropping `FourVerdictResult` outright (no compat layer) was the
+  right call per AGENTS.md. The new `NarrativeBreakdown` /
+  `ClaimBreakdown` field names match panel labels match wire
+  shape match prose. One vocabulary across the stack; renames
+  free.
+
+Changes for next ships:
+
+- Ship 4's cost framework should attribute budget per-switch
+  too, since switch presets are now first-class. The "raw LLM"
+  preset costs less than "production"; the panel could surface
+  per-preset cost once buckets exist, making the cost framework
+  itself legible the same way the gate became legible this ship.
+- Ship 5's warehouse primitives land into `cross_check.
+  ground_truth_match`'s already-wired stub slot. Replace the
+  `NotApplicable { detail: "not implemented yet (lands in ship
+  5: warehouse primitives)" }` with the real warehouse re-query;
+  no other plumbing changes. Update `docs/architecture/
+  switches.md`'s ground-truth section from "current status:
+  stub" to the implementation map.
+- Ship 6's eval suite should fixture each preset × probe combo
+  as a regression target. The probe matrix in this ship's plan
+  (`/Users/nabin/.claude/plans/harmonic-brewing-muffin.md`) is
+  the seed: "tell me about a wallet not in window" should
+  retract under `dont_fabricate` on, approve under `dont_
+  fabricate` off; "the wallet has 33 connections" should
+  surface text-vs-paraphrase disagreement when both are on.
 
 ## Known issues (parked, not blocking)
 

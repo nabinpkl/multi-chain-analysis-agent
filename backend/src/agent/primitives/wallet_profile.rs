@@ -12,9 +12,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{Primitive, PrimitiveCtx, PrimitiveError, PrimitiveOutput};
-use crate::agent::types::{
-    CostClass, DataSource, NodeStatsWire, NumberRef, ProvenanceRef, TimeScope,
-};
+use crate::agent::types::{CostClass, DataSource, NodeStatsWire, ProvenanceRef, TimeScope};
 use crate::analytics::NodeRole;
 use crate::analytics::snapshot::snapshot_window;
 use crate::graph::window::window_index;
@@ -80,6 +78,34 @@ Always read the <context> block for the focused wallet before guessing.\
 
     fn cost_class(&self) -> CostClass {
         CostClass::Cheap
+    }
+
+    /// Ship 4: declare which output fields the diff walker should
+    /// compare on a repeat-question replay. SOL volumes use the
+    /// default tolerance (10%) so a few-percent drift in a 60s window
+    /// is noise; degrees and counterparty membership are compared
+    /// strictly. `addr`, `role`, `community_id`, `age_in_window_secs`
+    /// are intentionally absent: addr is the focus (always equal by
+    /// construction); role/community_id are categorical and rarely
+    /// shift mid-window without a primitive value-change worth
+    /// reporting separately; age is monotone, always "changed."
+    fn diff_spec(&self) -> Vec<(&'static str, crate::agent::diff::FieldKind)> {
+        use crate::agent::diff::FieldKind;
+        vec![
+            ("stats.degree", FieldKind::Count),
+            ("stats.total_volume_lamports", FieldKind::number_default()),
+            ("stats.in_volume_lamports", FieldKind::number_default()),
+            ("stats.out_volume_lamports", FieldKind::number_default()),
+            ("stats.bidir_volume_lamports", FieldKind::number_default()),
+            ("stats.sol_degree", FieldKind::Count),
+            ("stats.spl_degree", FieldKind::Count),
+            (
+                "top_counterparties",
+                FieldKind::EntitySet {
+                    key: "addr".to_string(),
+                },
+            ),
+        ]
     }
 
     async fn execute(
@@ -177,35 +203,49 @@ Always read the <context> block for the focused wallet before guessing.\
             .filter_map(|(_, _, a)| a.clone())
             .collect();
         support_addrs.push(input.addr.clone());
+        // Build provenance chip rows for every audit-class stat the
+        // model can cite. Names match `NodeStatsWire` field names so
+        // they classify identically (Sol for the `*_volume_lamports`
+        // family via "volume"+"lamport" substring; Count for the
+        // `*degree` family) in `binding_store::build_binding`. With
+        // these as provenance entries, the structural value-compare
+        // gate finds a matching `ExtractedNumber` in the binding store
+        // for any chip the model emits  no Raw-class skip loophole.
         provenance.push(ProvenanceRef::Number {
-            metric: "volume".into(),
+            metric: "total_volume_lamports".into(),
             value: snap_data.stats.volume,
+            support: support_addrs.clone(),
+        });
+        provenance.push(ProvenanceRef::Number {
+            metric: "in_volume_lamports".into(),
+            value: snap_data.stats.in_vol,
+            support: support_addrs.clone(),
+        });
+        provenance.push(ProvenanceRef::Number {
+            metric: "out_volume_lamports".into(),
+            value: snap_data.stats.out_vol,
+            support: support_addrs.clone(),
+        });
+        provenance.push(ProvenanceRef::Number {
+            metric: "bidir_volume_lamports".into(),
+            value: snap_data.stats.bidir_vol,
             support: support_addrs.clone(),
         });
         provenance.push(ProvenanceRef::Number {
             metric: "degree".into(),
             value: snap_data.stats.degree as f64,
+            support: support_addrs.clone(),
+        });
+        provenance.push(ProvenanceRef::Number {
+            metric: "sol_degree".into(),
+            value: snap_data.stats.sol_degree as f64,
+            support: support_addrs.clone(),
+        });
+        provenance.push(ProvenanceRef::Number {
+            metric: "spl_degree".into(),
+            value: snap_data.stats.spl_degree as f64,
             support: support_addrs,
         });
-
-        let _support_numbers: Vec<NumberRef> = vec![
-            NumberRef {
-                metric: "volume".into(),
-                value: snap_data.stats.volume,
-            },
-            NumberRef {
-                metric: "degree".into(),
-                value: snap_data.stats.degree as f64,
-            },
-            NumberRef {
-                metric: "in_vol".into(),
-                value: snap_data.stats.in_vol,
-            },
-            NumberRef {
-                metric: "out_vol".into(),
-                value: snap_data.stats.out_vol,
-            },
-        ];
 
         let top_counterparties: Vec<TopCounterparty> = snap_data
             .neighbors

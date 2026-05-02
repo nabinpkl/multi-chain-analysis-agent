@@ -5,6 +5,11 @@ import type { AgentRequest } from "@/lib/generated/AgentRequest";
 import type { AgentSessionStarted } from "@/lib/generated/AgentSessionStarted";
 import type { Claim } from "@/lib/generated/Claim";
 import type { AgentDone } from "@/lib/generated/AgentDone";
+import type { ChangedSince } from "@/lib/generated/ChangedSince";
+import type { GatePath } from "@/lib/generated/GatePath";
+import type { NarrativeWithRefs } from "@/lib/generated/NarrativeWithRefs";
+import type { NoMovement } from "@/lib/generated/NoMovement";
+import type { ProvenanceRef } from "@/lib/generated/ProvenanceRef";
 import type { ProgressEvent } from "@/components/agent/progress-strip";
 
 const DEFAULT_API_URL = "http://localhost:8002";
@@ -48,10 +53,38 @@ export interface ChatTurn {
   sentAtMs: number;
   claim: Claim | null;
   narrative: string | null;
+  /**
+   * Ship 5a: typed citation array assembled by the backend from
+   * this turn's emitted Claims (concatenated provenance arrays in
+   * emission order). The narrative bubble passes this to
+   * `renderTextWithRefs` to substitute `${ref:N}` chips inline.
+   * Empty when the model emitted no audit chips (descriptive-only
+   * narrative).
+   */
+  narrativeProvenance: ProvenanceRef[];
   narrativeRetractedReason: string | null;
   narrativeRetractedDebug: string | null;
   error: string | null;
   errorDebug: string | null;
+  /**
+   * Ship 3.5 builder-view trace. Only populated when the request
+   * was sent with `show_trace: true`. One entry per channel
+   * (claim / narrative); a turn may have either, both, or
+   * neither.
+   */
+  gatePaths: GatePath[];
+  /**
+   * Ship 4 `dont_repeat_yourself` payload. Mutually exclusive
+   * with the normal claim/narrative path (a turn that took the
+   * diff path has diffReply set and claim/narrative null). The
+   * renderer uses this to show "no movement since turn N" or
+   * "changed since turn N: X" bubble in place of the regular
+   * claim/narrative.
+   */
+  diffReply:
+    | { kind: "no-movement"; payload: NoMovement }
+    | { kind: "changed-since"; payload: ChangedSince }
+    | null;
 }
 
 /**
@@ -108,10 +141,13 @@ export function useAgentStream() {
         sentAtMs: Date.now(),
         claim: null,
         narrative: null,
+        narrativeProvenance: [],
         narrativeRetractedReason: null,
         narrativeRetractedDebug: null,
         error: null,
         errorDebug: null,
+        gatePaths: [],
+        diffReply: null,
       };
       setTurns((prev) => [...prev, newTurn]);
       setStatus({ kind: "sending" });
@@ -188,8 +224,12 @@ export function useAgentStream() {
       es.addEventListener("Narrative", (ev) => {
         const data = (ev as MessageEvent<string>).data;
         try {
-          const parsed = JSON.parse(data) as { text?: string };
+          // Ship 5a wire shape: NarrativeWithRefs { text, provenance }.
+          // `provenance` is the assembled typed citation array used
+          // by the bubble to render `${ref:N}` chips.
+          const parsed = JSON.parse(data) as Partial<NarrativeWithRefs>;
           const text = parsed.text ?? "";
+          const provenance = parsed.provenance ?? [];
           if (!text) return;
           setTurns((prev) => {
             const idx = prev.findIndex((t) => t.id === turnId);
@@ -199,7 +239,11 @@ export function useAgentStream() {
             // append (a streamed-token shape), but ship 1.6 sends
             // one frame per turn.
             if (next[idx].narrative === null) {
-              next[idx] = { ...next[idx], narrative: text };
+              next[idx] = {
+                ...next[idx],
+                narrative: text,
+                narrativeProvenance: provenance,
+              };
             }
             return next;
           });
@@ -256,6 +300,69 @@ export function useAgentStream() {
         markTurnError(turnId, msg, debug);
       });
 
+      es.addEventListener("GatePath", (ev) => {
+        const data = (ev as MessageEvent<string>).data;
+        try {
+          const path = JSON.parse(data) as GatePath;
+          setTurns((prev) => {
+            const idx = prev.findIndex((t) => t.id === turnId);
+            if (idx === -1) return prev;
+            const next = prev.slice();
+            next[idx] = {
+              ...next[idx],
+              gatePaths: [...next[idx].gatePaths, path],
+            };
+            return next;
+          });
+        } catch {
+          // skip malformed payloads
+        }
+      });
+
+      es.addEventListener("NoMovement", (ev) => {
+        const data = (ev as MessageEvent<string>).data;
+        try {
+          const payload = JSON.parse(data) as NoMovement;
+          setTurns((prev) => {
+            const idx = prev.findIndex((t) => t.id === turnId);
+            if (idx === -1) return prev;
+            const next = prev.slice();
+            // Only attach if no diffReply yet AND this turn hasn't
+            // already rendered a regular claim/narrative.
+            if (next[idx].diffReply === null) {
+              next[idx] = {
+                ...next[idx],
+                diffReply: { kind: "no-movement", payload },
+              };
+            }
+            return next;
+          });
+        } catch {
+          // skip malformed payloads
+        }
+      });
+
+      es.addEventListener("ChangedSince", (ev) => {
+        const data = (ev as MessageEvent<string>).data;
+        try {
+          const payload = JSON.parse(data) as ChangedSince;
+          setTurns((prev) => {
+            const idx = prev.findIndex((t) => t.id === turnId);
+            if (idx === -1) return prev;
+            const next = prev.slice();
+            if (next[idx].diffReply === null) {
+              next[idx] = {
+                ...next[idx],
+                diffReply: { kind: "changed-since", payload },
+              };
+            }
+            return next;
+          });
+        } catch {
+          // skip malformed payloads
+        }
+      });
+
       es.addEventListener("Done", (ev) => {
         const data = (ev as MessageEvent<string>).data;
         try {
@@ -278,7 +385,12 @@ export function useAgentStream() {
           const idx = prev.findIndex((t) => t.id === turnId);
           if (idx === -1) return prev;
           const t = prev[idx];
-          if (t.claim !== null || t.narrative !== null || t.error !== null) {
+          if (
+            t.claim !== null ||
+            t.narrative !== null ||
+            t.error !== null ||
+            t.diffReply !== null
+          ) {
             return prev;
           }
           const next = prev.slice();
