@@ -7,6 +7,18 @@
 default:
     @just --list
 
+# Run the full agent-service pytest suite. Wiring-only; no LLM calls.
+# Per phase A.5 the baseline budget is <5s; longer than that means a
+# real OpenRouter call snuck past the TestModel boundary.
+test:
+    cd agent-service && uv run pytest -v
+
+test-unit:
+    cd agent-service && uv run pytest tests/unit -v
+
+test-integration:
+    cd agent-service && uv run pytest tests/integration -v
+
 # Regenerate every wire-type artifact in the right order.
 #
 # Today (Phase A) this runs the Rust → Python pydantic flow. Phase B.2
@@ -35,7 +47,8 @@ regen-shared-types:
         --use-standard-collections \
         --use-union-operator \
         --target-python-version 3.12 \
-        --use-double-quotes
+        --use-double-quotes \
+        --disable-timestamp
     @echo ">> writing wire/shared/__init__.py re-export shim"
     cd agent-service && uv run python scripts/build_shared_init.py
     @echo ">> wire types regenerated"

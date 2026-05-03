@@ -22,6 +22,13 @@ dev = [
     # converts them to pydantic v2 models in
     # `src/agent_service/wire/shared.py`.
     "datamodel-code-generator>=0.27",
+    # Phase A.5: pytest layer. Wiring-only; no LLM calls. The total
+    # baseline-test runtime budget is <5s, which is also our smoke
+    # check that no real OpenRouter call has snuck in.
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "pytest-httpx>=0.30",
+    "dirty-equals>=0.8",
 ]
 
 [build-system]
@@ -33,3 +40,14 @@ packages = ["src/agent_service"]
 
 [tool.uv]
 package = true
+
+[tool.pytest.ini_options]
+# `auto` means async test functions and fixtures don't need
+# `@pytest.mark.asyncio`. Keeps the test surface clean.
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# Surface DeprecationWarning so codegen / pydantic / pydantic-ai
+# version drift bubbles up as a test signal, not silent rot.
+filterwarnings = [
+    "error::DeprecationWarning:agent_service.*",
+]
