@@ -1,0 +1,24 @@
+{
+  "additionalProperties": false,
+  "description": "Emitted when `dont_repeat_yourself` fires AND the diff is empty.\nNo LLM narrative call happens on this path; the bubble exists so\nthe user sees closure ('we covered this in turn N, no movement\nsince').",
+  "properties": {
+    "primitives_replayed": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Primitives Replayed",
+      "type": "array"
+    },
+    "prior_turn": {
+      "minimum": 0,
+      "title": "Prior Turn",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "prior_turn",
+    "primitives_replayed"
+  ],
+  "title": "NoMovement",
+  "type": "object"
+}

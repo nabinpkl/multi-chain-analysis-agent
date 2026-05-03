@@ -1,0 +1,20 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "state": {
+      "const": "retracted",
+      "default": "retracted",
+      "title": "State",
+      "type": "string"
+    }
+  },
+  "required": [
+    "reason"
+  ],
+  "title": "PathStateRetracted",
+  "type": "object"
+}

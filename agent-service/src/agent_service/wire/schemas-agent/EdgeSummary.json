@@ -1,0 +1,25 @@
+{
+  "additionalProperties": false,
+  "description": "Subgraph edge row. `volume` in lamports.",
+  "properties": {
+    "dst": {
+      "title": "Dst",
+      "type": "string"
+    },
+    "src": {
+      "title": "Src",
+      "type": "string"
+    },
+    "volume": {
+      "title": "Volume",
+      "type": "number"
+    }
+  },
+  "required": [
+    "src",
+    "dst",
+    "volume"
+  ],
+  "title": "EdgeSummary",
+  "type": "object"
+}

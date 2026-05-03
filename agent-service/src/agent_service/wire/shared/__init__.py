@@ -5,11 +5,15 @@ its per-type submodule. DO NOT HAND-EDIT; rerun
 
 from __future__ import annotations
 
+from .ClaimKind import ClaimKind
 from .CommunitySummaryInput import CommunitySummaryInput
 from .CommunitySummaryOutput import CommunitySummaryOutput
 from .CommunitySummaryRequest import CommunitySummaryRequest
+from .EmitClaimInput import EmitClaimInput
+from .EmitClaimOutput import EmitClaimOutput
 from .NodeRole import NodeRole
 from .NodeStatsWire import NodeStatsWire
+from .NumberRef import NumberRef
 from .PrimitiveResponseEnvelope import PrimitiveResponseEnvelope
 from .ProvenanceRef import ProvenanceRef
 from .SnapshotBeginResponse import SnapshotBeginResponse
@@ -23,11 +27,15 @@ from .WalletProfileOutput import WalletProfileOutput
 from .WalletProfileRequest import WalletProfileRequest
 
 __all__ = [
+    "ClaimKind",
     "CommunitySummaryInput",
     "CommunitySummaryOutput",
     "CommunitySummaryRequest",
+    "EmitClaimInput",
+    "EmitClaimOutput",
     "NodeRole",
     "NodeStatsWire",
+    "NumberRef",
     "PrimitiveResponseEnvelope",
     "ProvenanceRef",
     "SnapshotBeginResponse",

@@ -1,0 +1,9 @@
+event: Claim
+data: {"id":"01HKQ0000000000000000FIX01","session_id":"0000000000000000000000000000ffff","kind":"profile","headline":"Wallet ${ref:0} is a whale","body_markdown":"Volume ${ref:1} across ${ref:2} counterparties.","provenance":[{"kind":"wallet","addr":"DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK","idx":0},{"kind":"community","id":8},{"kind":"number","metric":"total_volume_lamports","value":80223943444.0,"support":["DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"]}],"support_numbers":[{"metric":"total_volume_lamports","value":80223943444.0}],"subgraph_slice":null,"policy_verdict":{"verdict":"approved"},"stubs_active":[],"emitted_at_ms":1500}
+
+event: Narrative
+data: {"text":"Wallet ${ref:0} is a heavy receiver in community ${ref:1} this minute.","provenance":[{"kind":"wallet","addr":"DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK","idx":0},{"kind":"community","id":8},{"kind":"number","metric":"total_volume_lamports","value":80223943444.0,"support":["DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"]}]}
+
+event: Done
+data: {"session_id":"0000000000000000000000000000ffff","elapsed_ms":4321}
+

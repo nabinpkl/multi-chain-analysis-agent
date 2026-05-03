@@ -1,0 +1,217 @@
+{
+  "$defs": {
+    "AgentSwitches": {
+      "additionalProperties": false,
+      "description": "Ship 3.5 ablation switches. Each field is a behavior contract;\nwhen true, the agent has that behavior. Defaults reproduce the\nproduction preset.",
+      "properties": {
+        "cross_check": {
+          "$ref": "#/$defs/CrossCheckSwitches"
+        },
+        "dont_fabricate": {
+          "default": true,
+          "title": "Dont Fabricate",
+          "type": "boolean"
+        },
+        "dont_repeat_yourself": {
+          "default": true,
+          "title": "Dont Repeat Yourself",
+          "type": "boolean"
+        },
+        "stay_in_role": {
+          "default": true,
+          "title": "Stay In Role",
+          "type": "boolean"
+        }
+      },
+      "title": "AgentSwitches",
+      "type": "object"
+    },
+    "CrossCheckSwitches": {
+      "additionalProperties": false,
+      "description": "`cross_check` sub-modes. Two independent toggles after ship 5a\nretired `text_match`. Both advisory in the strict merge.",
+      "properties": {
+        "ground_truth_match": {
+          "default": false,
+          "title": "Ground Truth Match",
+          "type": "boolean"
+        },
+        "paraphrase_aware_match": {
+          "default": true,
+          "title": "Paraphrase Aware Match",
+          "type": "boolean"
+        }
+      },
+      "title": "CrossCheckSwitches",
+      "type": "object"
+    },
+    "EntityRefCommunity": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minimum": 0,
+          "title": "Id",
+          "type": "integer"
+        },
+        "kind": {
+          "const": "community",
+          "default": "community",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "EntityRefCommunity",
+      "type": "object"
+    },
+    "EntityRefEdge": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "edge",
+          "default": "edge",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "EntityRefEdge",
+      "type": "object"
+    },
+    "EntityRefWallet": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "wallet",
+          "default": "wallet",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "EntityRefWallet",
+      "type": "object"
+    },
+    "ViewContext": {
+      "additionalProperties": false,
+      "description": "Structured ground-truth context the frontend builds from its own\nDOM/state. Per D-6 (overview), the context block is the strongest\ndisambiguation signal.",
+      "properties": {
+        "focus": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "community": "#/$defs/EntityRefCommunity",
+                  "edge": "#/$defs/EntityRefEdge",
+                  "wallet": "#/$defs/EntityRefWallet"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/EntityRefWallet"
+                },
+                {
+                  "$ref": "#/$defs/EntityRefEdge"
+                },
+                {
+                  "$ref": "#/$defs/EntityRefCommunity"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Focus"
+        },
+        "live_window_secs": {
+          "minimum": 0,
+          "title": "Live Window Secs",
+          "type": "integer"
+        },
+        "selection": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "community": "#/$defs/EntityRefCommunity",
+                "edge": "#/$defs/EntityRefEdge",
+                "wallet": "#/$defs/EntityRefWallet"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/EntityRefWallet"
+              },
+              {
+                "$ref": "#/$defs/EntityRefEdge"
+              },
+              {
+                "$ref": "#/$defs/EntityRefCommunity"
+              }
+            ]
+          },
+          "title": "Selection",
+          "type": "array"
+        }
+      },
+      "required": [
+        "live_window_secs"
+      ],
+      "title": "ViewContext",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "User question + ViewContext. `thread_id` is None on the first\nsend of a fresh conversation; the backend mints one and returns\nit. Subsequent follow-ups echo the prior thread_id.\n\n`switches` defaults to the production preset (everything except\n`ground_truth_match`). `show_trace` controls whether `GatePath`\nframes are emitted; trace is always built and ledgered regardless.\n\nSECURITY note (mirrored from Rust): switches are reachable from\nany client. Project is a builder portfolio, not a product; we\nexplicitly do not hide internals. If this code ever serves real\nend-user traffic, lock the switch surface server-side.",
+  "properties": {
+    "context": {
+      "$ref": "#/$defs/ViewContext"
+    },
+    "show_trace": {
+      "default": false,
+      "title": "Show Trace",
+      "type": "boolean"
+    },
+    "switches": {
+      "$ref": "#/$defs/AgentSwitches"
+    },
+    "thread_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Thread Id"
+    },
+    "user_question": {
+      "title": "User Question",
+      "type": "string"
+    }
+  },
+  "required": [
+    "user_question",
+    "context"
+  ],
+  "title": "AgentRequest",
+  "type": "object"
+}

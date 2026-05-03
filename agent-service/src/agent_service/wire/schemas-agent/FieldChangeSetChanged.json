@@ -1,0 +1,32 @@
+{
+  "additionalProperties": false,
+  "description": "Entity-list field where membership changed. `added`/`removed`\ncarry the keys (typically wallet addresses).",
+  "properties": {
+    "added": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Added",
+      "type": "array"
+    },
+    "kind": {
+      "const": "set_changed",
+      "default": "set_changed",
+      "title": "Kind",
+      "type": "string"
+    },
+    "removed": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Removed",
+      "type": "array"
+    }
+  },
+  "required": [
+    "added",
+    "removed"
+  ],
+  "title": "FieldChangeSetChanged",
+  "type": "object"
+}

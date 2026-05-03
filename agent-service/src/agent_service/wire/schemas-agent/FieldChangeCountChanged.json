@@ -1,0 +1,26 @@
+{
+  "additionalProperties": false,
+  "description": "Count-class field where any delta is meaningful.",
+  "properties": {
+    "current": {
+      "title": "Current",
+      "type": "number"
+    },
+    "kind": {
+      "const": "count_changed",
+      "default": "count_changed",
+      "title": "Kind",
+      "type": "string"
+    },
+    "prior": {
+      "title": "Prior",
+      "type": "number"
+    }
+  },
+  "required": [
+    "prior",
+    "current"
+  ],
+  "title": "FieldChangeCountChanged",
+  "type": "object"
+}

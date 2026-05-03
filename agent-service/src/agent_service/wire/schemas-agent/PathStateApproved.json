@@ -1,0 +1,13 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "state": {
+      "const": "approved",
+      "default": "approved",
+      "title": "State",
+      "type": "string"
+    }
+  },
+  "title": "PathStateApproved",
+  "type": "object"
+}

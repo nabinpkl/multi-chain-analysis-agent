@@ -46,16 +46,16 @@ def test_turn_begin_called_once_per_turn(test_app, with_happy_path_primitives):
     with app.state.agent.override(model=test_model):
         ask = test_app.post(
             "/agent/ask",
-            json={
-                "question": "Profile this wallet",
-                "focus_addr": canned.WALLET_PROFILE_ADDR,
-            },
+            json=canned.make_ask_payload("Profile this wallet"),
         ).json()
         events = _consume_sse(test_app, ask["session_id"])
 
-    # Final frame is `done`.
-    assert events[-1]["event"] == "done"
-    assert events[-1]["data"] == {"ok": True}
+    # Final frame is the `Done` event carrying AgentDone.
+    assert events[-1]["event"] == "Done"
+    done_payload = events[-1]["data"]
+    assert done_payload["session_id"] == ask["session_id"]
+    assert isinstance(done_payload["elapsed_ms"], int)
+    assert done_payload["elapsed_ms"] >= 0
 
     requests = with_happy_path_primitives.get_requests()
     begin_calls = [r for r in requests if r.url.path == "/turn/begin"]
@@ -68,10 +68,7 @@ def test_turn_end_carries_lease_id(test_app, with_happy_path_primitives):
     """The /turn/end body must include the snapshot_id from /turn/begin."""
     test_model = TestModel(call_tools=[])
     with app.state.agent.override(model=test_model):
-        ask = test_app.post(
-            "/agent/ask",
-            json={"question": "q", "focus_addr": "X"},
-        ).json()
+        ask = test_app.post("/agent/ask", json=canned.make_ask_payload("q")).json()
         _consume_sse(test_app, ask["session_id"])
 
     requests = with_happy_path_primitives.get_requests()
@@ -87,10 +84,7 @@ def test_primitive_calls_carry_lease_id(test_app, with_happy_path_primitives):
     real-Rust call would 410 Gone."""
     test_model = TestModel(call_tools=["wallet_profile"])
     with app.state.agent.override(model=test_model):
-        ask = test_app.post(
-            "/agent/ask",
-            json={"question": "q", "focus_addr": canned.WALLET_PROFILE_ADDR},
-        ).json()
+        ask = test_app.post("/agent/ask", json=canned.make_ask_payload("q")).json()
         _consume_sse(test_app, ask["session_id"])
 
     requests = with_happy_path_primitives.get_requests()
@@ -123,14 +117,11 @@ def test_turn_end_fires_even_when_agent_raises(test_app, mock_data_plane, monkey
 
     monkeypatch.setattr(app.state.agent, "run", _boom)
 
-    ask = test_app.post(
-        "/agent/ask",
-        json={"question": "q", "focus_addr": "X"},
-    ).json()
+    ask = test_app.post("/agent/ask", json=canned.make_ask_payload("q")).json()
     events = _consume_sse(test_app, ask["session_id"])
 
-    # Event stream got an error frame followed by done.
-    error_events = [e for e in events if e["event"] == "error"]
+    # Event stream got an Error frame followed by Done.
+    error_events = [e for e in events if e["event"] == "Error"]
     assert len(error_events) == 1
 
     # Critically: /turn/end was still called.

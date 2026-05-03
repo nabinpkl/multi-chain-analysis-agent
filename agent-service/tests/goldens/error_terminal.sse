@@ -1,0 +1,6 @@
+event: Error
+data: {"message":"The agent could not complete this turn. Please try again."}
+
+event: Done
+data: {"session_id":"0000000000000000000000000000ffff","elapsed_ms":4321}
+

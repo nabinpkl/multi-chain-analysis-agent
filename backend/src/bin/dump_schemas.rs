@@ -66,10 +66,14 @@ fn main() -> Result<()> {
     // Inventory. Keep alphabetically sorted within each category.
     //
     // Re-exports of pre-existing types:
+    dump_schema::<ClaimKind>(&out_dir, "ClaimKind")?;
     dump_schema::<CommunitySummaryInput>(&out_dir, "CommunitySummaryInput")?;
     dump_schema::<CommunitySummaryOutput>(&out_dir, "CommunitySummaryOutput")?;
+    dump_schema::<EmitClaimInput>(&out_dir, "EmitClaimInput")?;
+    dump_schema::<EmitClaimOutput>(&out_dir, "EmitClaimOutput")?;
     dump_schema::<NodeRole>(&out_dir, "NodeRole")?;
     dump_schema::<NodeStatsWire>(&out_dir, "NodeStatsWire")?;
+    dump_schema::<NumberRef>(&out_dir, "NumberRef")?;
     dump_schema::<ProvenanceRef>(&out_dir, "ProvenanceRef")?;
     dump_schema::<SubgraphSlice>(&out_dir, "SubgraphSlice")?;
     dump_schema::<TimeScope>(&out_dir, "TimeScope")?;

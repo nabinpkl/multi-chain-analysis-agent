@@ -1,0 +1,13 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "verdict": {
+      "const": "approved",
+      "default": "approved",
+      "title": "Verdict",
+      "type": "string"
+    }
+  },
+  "title": "PolicyVerdictApproved",
+  "type": "object"
+}

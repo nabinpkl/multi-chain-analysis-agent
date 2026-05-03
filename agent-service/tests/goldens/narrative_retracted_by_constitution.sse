@@ -1,0 +1,6 @@
+event: NarrativeRetracted
+data: {"reason":"I could not verify that statement against the data I fetched.","text":"I detected unusual MEV activity on this wallet."}
+
+event: Done
+data: {"session_id":"0000000000000000000000000000ffff","elapsed_ms":4321}
+

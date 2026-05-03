@@ -1,0 +1,6 @@
+event: NoMovement
+data: {"prior_turn":1,"primitives_replayed":["wallet_profile"]}
+
+event: Done
+data: {"session_id":"0000000000000000000000000000ffff","elapsed_ms":4321}
+

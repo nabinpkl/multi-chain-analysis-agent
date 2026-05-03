@@ -1,0 +1,20 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "kind": {
+      "const": "wallet",
+      "default": "wallet",
+      "title": "Kind",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "title": "EntityRefWallet",
+  "type": "object"
+}

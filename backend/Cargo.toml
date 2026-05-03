@@ -60,3 +60,5 @@ sha2 = "0.10"
 # Numerical cross-check (ship 2.5): regex extracts numbers from
 # narrative + claim sources. rust-lang maintained, stable since 2014.
 regex = "1"
+buffa = "0.4.0"
+buffa-types = "0.4.0"

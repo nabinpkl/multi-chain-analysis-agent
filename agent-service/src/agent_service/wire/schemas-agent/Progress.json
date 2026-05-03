@@ -1,0 +1,20 @@
+{
+  "additionalProperties": false,
+  "description": "Lightweight progress ping. Phase + detail are free-form strings\nthe frontend can render as a status line.",
+  "properties": {
+    "detail": {
+      "title": "Detail",
+      "type": "string"
+    },
+    "phase": {
+      "title": "Phase",
+      "type": "string"
+    }
+  },
+  "required": [
+    "phase",
+    "detail"
+  ],
+  "title": "Progress",
+  "type": "object"
+}

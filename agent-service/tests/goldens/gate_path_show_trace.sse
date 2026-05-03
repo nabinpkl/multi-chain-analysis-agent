@@ -1,0 +1,6 @@
+event: GatePath
+data: {"channel":"narrative","switches":{"stay_in_role":true,"dont_fabricate":true,"cross_check":{"paraphrase_aware_match":true,"ground_truth_match":false},"dont_repeat_yourself":true},"steps":[{"stage":"narrative.stay_in_role","state":{"state":"approved"},"elapsed_us":1234,"note":"constitution leg approved"},{"stage":"narrative.dont_fabricate","state":{"state":"approved"},"elapsed_us":567,"note":"all narrative numbers found in binding store"}],"final_verdict":{"verdict":"approved"}}
+
+event: Done
+data: {"session_id":"0000000000000000000000000000ffff","elapsed_ms":4321}
+

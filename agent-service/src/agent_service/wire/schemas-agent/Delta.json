@@ -1,0 +1,158 @@
+{
+  "$defs": {
+    "FieldChangeCountChanged": {
+      "additionalProperties": false,
+      "description": "Count-class field where any delta is meaningful.",
+      "properties": {
+        "current": {
+          "title": "Current",
+          "type": "number"
+        },
+        "kind": {
+          "const": "count_changed",
+          "default": "count_changed",
+          "title": "Kind",
+          "type": "string"
+        },
+        "prior": {
+          "title": "Prior",
+          "type": "number"
+        }
+      },
+      "required": [
+        "prior",
+        "current"
+      ],
+      "title": "FieldChangeCountChanged",
+      "type": "object"
+    },
+    "FieldChangeNumberMoved": {
+      "additionalProperties": false,
+      "description": "Numeric field outside per-class tolerance. `pct` is the signed\npercent change; 0.0 when prior is 0.",
+      "properties": {
+        "current": {
+          "title": "Current",
+          "type": "number"
+        },
+        "kind": {
+          "const": "number_moved",
+          "default": "number_moved",
+          "title": "Kind",
+          "type": "string"
+        },
+        "pct": {
+          "title": "Pct",
+          "type": "number"
+        },
+        "prior": {
+          "title": "Prior",
+          "type": "number"
+        }
+      },
+      "required": [
+        "prior",
+        "current",
+        "pct"
+      ],
+      "title": "FieldChangeNumberMoved",
+      "type": "object"
+    },
+    "FieldChangeSetChanged": {
+      "additionalProperties": false,
+      "description": "Entity-list field where membership changed. `added`/`removed`\ncarry the keys (typically wallet addresses).",
+      "properties": {
+        "added": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Added",
+          "type": "array"
+        },
+        "kind": {
+          "const": "set_changed",
+          "default": "set_changed",
+          "title": "Kind",
+          "type": "string"
+        },
+        "removed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Removed",
+          "type": "array"
+        }
+      },
+      "required": [
+        "added",
+        "removed"
+      ],
+      "title": "FieldChangeSetChanged",
+      "type": "object"
+    },
+    "FieldDelta": {
+      "additionalProperties": false,
+      "description": "One field's change between prior turn's primitive output and the\nfreshly re-fetched output. `field_path` is dotted (e.g.\n`stats.in_volume_lamports`). `primitive` is the producing primitive\nname (e.g. `wallet_profile`).",
+      "properties": {
+        "change": {
+          "discriminator": {
+            "mapping": {
+              "count_changed": "#/$defs/FieldChangeCountChanged",
+              "number_moved": "#/$defs/FieldChangeNumberMoved",
+              "set_changed": "#/$defs/FieldChangeSetChanged"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/FieldChangeNumberMoved"
+            },
+            {
+              "$ref": "#/$defs/FieldChangeSetChanged"
+            },
+            {
+              "$ref": "#/$defs/FieldChangeCountChanged"
+            }
+          ],
+          "title": "Change"
+        },
+        "field_path": {
+          "title": "Field Path",
+          "type": "string"
+        },
+        "primitive": {
+          "title": "Primitive",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field_path",
+        "primitive",
+        "change"
+      ],
+      "title": "FieldDelta",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Full diff result. `unchanged_field_count` powers the builder-view\nchip ('2 changed / 4 unchanged'); only structurally-changed fields\nappear in `changed`.",
+  "properties": {
+    "changed": {
+      "items": {
+        "$ref": "#/$defs/FieldDelta"
+      },
+      "title": "Changed",
+      "type": "array"
+    },
+    "unchanged_field_count": {
+      "minimum": 0,
+      "title": "Unchanged Field Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "changed",
+    "unchanged_field_count"
+  ],
+  "title": "Delta",
+  "type": "object"
+}

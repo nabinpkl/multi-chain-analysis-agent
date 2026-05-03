@@ -1,0 +1,21 @@
+{
+  "additionalProperties": false,
+  "description": "Final SSE event payload. Emitted as the `Done` event by the SSE\nhandler. `elapsed_ms` is u32 in Rust (caps at ~50 days).",
+  "properties": {
+    "elapsed_ms": {
+      "minimum": 0,
+      "title": "Elapsed Ms",
+      "type": "integer"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "elapsed_ms"
+  ],
+  "title": "AgentDone",
+  "type": "object"
+}

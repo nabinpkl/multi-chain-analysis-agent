@@ -1,0 +1,20 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "kind": {
+      "const": "edge",
+      "default": "edge",
+      "title": "Kind",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "title": "EntityRefEdge",
+  "type": "object"
+}

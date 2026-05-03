@@ -194,3 +194,257 @@ def test_community_summary_request_accepts_dict_input():
     }
     req = CommunitySummaryRequest.model_validate(body)
     assert req.snapshot_id == canned.VALID_SNAPSHOT_ID
+
+
+# ---------------------------------------------------------------------------
+# Phase I.1 agent-only wire types
+# ---------------------------------------------------------------------------
+
+
+def test_agent_request_round_trip():
+    """Full AgentRequest with ViewContext + switches + show_trace."""
+    from agent_service.wire.agent import AgentRequest
+
+    payload = {
+        "user_question": "Profile this wallet",
+        "context": {
+            "live_window_secs": 60,
+            "focus": {"kind": "wallet", "id": "X"},
+            "selection": [],
+        },
+        "show_trace": False,
+    }
+    req = AgentRequest.model_validate(payload)
+    assert req.context.focus.kind == "wallet"
+    # Switches default to production preset.
+    assert req.switches.stay_in_role is True
+    assert req.switches.dont_fabricate is True
+    assert req.switches.dont_repeat_yourself is True
+    assert req.switches.cross_check.paraphrase_aware_match is True
+    assert req.switches.cross_check.ground_truth_match is False
+
+
+def test_agent_request_rejects_extra_fields():
+    """`extra='forbid'`: a typo like `focus_addr` (the old Phase 0
+    field) is a 422 instead of silent drop."""
+    from agent_service.wire.agent import AgentRequest
+    import pydantic
+
+    bad = {
+        "user_question": "q",
+        "context": {"live_window_secs": 60, "focus": None, "selection": []},
+        "focus_addr": "X",
+    }
+    with pytest.raises(pydantic.ValidationError):
+        AgentRequest.model_validate(bad)
+
+
+def test_claim_full_shape_round_trip():
+    """Full Claim shape matching Rust agent::types::Claim."""
+    from agent_service.wire.agent import Claim
+
+    payload = {
+        "id": "01HKQ0000000000000000FIX01",
+        "session_id": "0000000000000000000000000000ffff",
+        "kind": "profile",
+        "headline": "Wallet ${ref:0} dominates",
+        "body_markdown": "Volume ${ref:1} lamports.",
+        "provenance": [
+            {"kind": "wallet", "addr": "X", "idx": 0},
+            {
+                "kind": "number",
+                "metric": "total_volume_lamports",
+                "value": 1.0,
+                "support": ["X"],
+            },
+        ],
+        "support_numbers": [{"metric": "vol", "value": 1.0}],
+        "subgraph_slice": None,
+        "policy_verdict": {"verdict": "approved"},
+        "stubs_active": [],
+        "emitted_at_ms": 100,
+    }
+    claim = Claim.model_validate(payload)
+    assert claim.kind == "profile"
+    assert claim.policy_verdict.verdict == "approved"
+    assert claim.emitted_at_ms == 100
+    # Round-trip preserves discriminator tag.
+    again = Claim.model_validate_json(claim.model_dump_json())
+    assert again.policy_verdict.verdict == "approved"
+
+
+def test_policy_verdict_retracted_round_trip():
+    """`{"verdict": "retracted", "reason": "..."}` resolves to the
+    PolicyVerdictRetracted variant via discriminator."""
+    from agent_service.wire.agent import Claim
+
+    base = {
+        "id": "x",
+        "session_id": "y",
+        "kind": "profile",
+        "headline": "h",
+        "body_markdown": "b",
+        "provenance": [],
+        "support_numbers": [],
+        "subgraph_slice": None,
+        "policy_verdict": {"verdict": "retracted", "reason": "out of bounds"},
+        "stubs_active": [],
+        "emitted_at_ms": 0,
+    }
+    claim = Claim.model_validate(base)
+    assert claim.policy_verdict.verdict == "retracted"
+    assert claim.policy_verdict.reason == "out of bounds"
+
+
+def test_path_state_three_variants_round_trip():
+    """All three PathState variants resolve via the `state` discriminator."""
+    from agent_service.wire.agent import PathStep
+
+    for payload in [
+        {"stage": "x", "state": {"state": "approved"}, "elapsed_us": 1, "note": "n"},
+        {
+            "stage": "x",
+            "state": {"state": "retracted", "reason": "r"},
+            "elapsed_us": 1,
+            "note": "n",
+        },
+        {
+            "stage": "x",
+            "state": {"state": "not_applicable", "detail": "d"},
+            "elapsed_us": 1,
+            "note": "n",
+        },
+    ]:
+        step = PathStep.model_validate(payload)
+        assert step.state.state == payload["state"]["state"]
+
+
+def test_field_change_three_kinds_round_trip():
+    """FieldChange discriminator dispatches on `kind`."""
+    from agent_service.wire.agent import FieldDelta
+
+    for payload in [
+        {
+            "field_path": "x",
+            "primitive": "wallet_profile",
+            "change": {"kind": "number_moved", "prior": 1.0, "current": 2.0, "pct": 1.0},
+        },
+        {
+            "field_path": "y",
+            "primitive": "wallet_profile",
+            "change": {"kind": "set_changed", "added": ["A"], "removed": []},
+        },
+        {
+            "field_path": "z",
+            "primitive": "wallet_profile",
+            "change": {"kind": "count_changed", "prior": 1.0, "current": 3.0},
+        },
+    ]:
+        fd = FieldDelta.model_validate(payload)
+        assert fd.change.kind == payload["change"]["kind"]
+
+
+def test_constitution_verdict_lenient_parse():
+    """ConstitutionVerdict ignores extra keys (matches Rust serde
+    `default` behavior). LLM occasionally adds fields; we don't
+    crash on them."""
+    from agent_service.wire.agent import ConstitutionVerdict
+
+    # Extra `confidence` key is ignored.
+    payload = {
+        "verdict": "approve",
+        "reason": "looks fine",
+        "extraction": {"narrative_numbers": [], "claim_numbers": []},
+        "confidence": 0.9,
+    }
+    cv = ConstitutionVerdict.model_validate(payload)
+    assert cv.verdict == "approve"
+    assert cv.extraction is not None
+
+
+def test_constitution_verdict_minimal_parse():
+    """Only `verdict` is required; reason defaults to "" and
+    extraction to None. Matches Rust GateResponse."""
+    from agent_service.wire.agent import ConstitutionVerdict
+
+    cv = ConstitutionVerdict.model_validate({"verdict": "retract"})
+    assert cv.verdict == "retract"
+    assert cv.reason == ""
+    assert cv.extraction is None
+
+
+def test_entity_ref_three_kinds():
+    """EntityRef discriminator. Wallet/Edge use string id; Community
+    uses int id."""
+    from agent_service.wire.agent import (
+        EntityRefCommunity,
+        EntityRefEdge,
+        EntityRefWallet,
+        ViewContext,
+    )
+
+    ctx = ViewContext(
+        live_window_secs=60,
+        focus=EntityRefWallet(id="W"),
+        selection=[EntityRefEdge(id="0:1"), EntityRefCommunity(id=8)],
+    )
+    dump = ctx.model_dump(mode="json")
+    assert dump["focus"] == {"kind": "wallet", "id": "W"}
+    assert dump["selection"][0] == {"kind": "edge", "id": "0:1"}
+    assert dump["selection"][1] == {"kind": "community", "id": 8}
+
+
+def test_changed_since_full_round_trip():
+    """Full ship-4 ChangedSince payload."""
+    from agent_service.wire.agent import ChangedSince
+
+    payload = {
+        "prior_turn": 1,
+        "delta": {
+            "changed": [
+                {
+                    "field_path": "stats.in_volume_lamports",
+                    "primitive": "wallet_profile",
+                    "change": {
+                        "kind": "number_moved",
+                        "prior": 1.0,
+                        "current": 2.0,
+                        "pct": 1.0,
+                    },
+                }
+            ],
+            "unchanged_field_count": 4,
+        },
+        "prose": "Volume rose.",
+    }
+    cs = ChangedSince.model_validate(payload)
+    assert cs.prior_turn == 1
+    assert cs.delta.changed[0].change.kind == "number_moved"
+
+
+def test_no_movement_round_trip():
+    from agent_service.wire.agent import NoMovement
+
+    nm = NoMovement.model_validate(
+        {"prior_turn": 2, "primitives_replayed": ["wallet_profile"]}
+    )
+    assert nm.prior_turn == 2
+
+
+def test_narrative_with_refs_round_trip():
+    from agent_service.wire.agent import NarrativeWithRefs
+
+    payload = {
+        "text": "Wallet ${ref:0} is heavy.",
+        "provenance": [{"kind": "wallet", "addr": "X", "idx": 0}],
+    }
+    n = NarrativeWithRefs.model_validate(payload)
+    assert "${ref:0}" in n.text
+
+
+def test_agent_done_shape():
+    """Closer event payload: session_id + elapsed_ms (u32 in Rust)."""
+    from agent_service.wire.agent import AgentDone
+
+    d = AgentDone.model_validate({"session_id": "abc", "elapsed_ms": 1234})
+    assert d.elapsed_ms == 1234

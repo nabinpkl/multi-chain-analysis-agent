@@ -1,0 +1,21 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "from_s": {
+      "minimum": 0,
+      "title": "From S",
+      "type": "integer"
+    },
+    "to_s": {
+      "minimum": 0,
+      "title": "To S",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "from_s",
+    "to_s"
+  ],
+  "title": "TimeRangeWire",
+  "type": "object"
+}

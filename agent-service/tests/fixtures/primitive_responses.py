@@ -14,6 +14,36 @@ drift surfaces as a test failure, not silent rot.
 
 from __future__ import annotations
 
+
+# ---------------------------------------------------------------------------
+# AgentRequest helpers (Phase I locked the full ViewContext shape)
+# ---------------------------------------------------------------------------
+
+
+def make_ask_payload(
+    user_question: str = "Profile this wallet",
+    focus_addr: str | None = None,
+    *,
+    thread_id: str | None = None,
+    show_trace: bool = False,
+) -> dict:
+    """Build the JSON body for `POST /agent/ask` matching the locked
+    Phase I `AgentRequest` shape. Tests pass through this helper so a
+    future shape change updates one place, not 30 call sites."""
+    addr = focus_addr if focus_addr is not None else WALLET_PROFILE_ADDR
+    payload: dict = {
+        "user_question": user_question,
+        "context": {
+            "live_window_secs": 60,
+            "focus": {"kind": "wallet", "id": addr},
+            "selection": [],
+        },
+        "show_trace": show_trace,
+    }
+    if thread_id is not None:
+        payload["thread_id"] = thread_id
+    return payload
+
 # ---------------------------------------------------------------------------
 # Snapshot lease
 # ---------------------------------------------------------------------------

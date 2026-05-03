@@ -12,7 +12,7 @@ class Kind(StrEnum):
     wallet = "wallet"
 
 
-class ProvenanceRef6(BaseModel):
+class ProvenanceRef11(BaseModel):
     """
     `idx` is None when the wallet is not in the current live window (route to subgraph modal instead of live-graph chip).
     """
@@ -22,58 +22,58 @@ class ProvenanceRef6(BaseModel):
     kind: Kind
 
 
-class Kind6(StrEnum):
+class Kind11(StrEnum):
     edge = "edge"
 
 
-class ProvenanceRef7(BaseModel):
+class ProvenanceRef12(BaseModel):
     """
     Stable id format: `"<edge_idx>:<gen>"`.
     """
 
     dst: conint(ge=0)
     id: str
-    kind: Kind6
+    kind: Kind11
     src: conint(ge=0)
 
 
-class Kind7(StrEnum):
+class Kind12(StrEnum):
     community = "community"
 
 
-class ProvenanceRef8(BaseModel):
+class ProvenanceRef13(BaseModel):
     """
     Tagged reference back to a graph entity. The frontend's render-surface derivation picks live highlight, modal, or inline chip based on the ref shape (see plan: "Frontend render-surface derivation rule").
     """
 
     id: conint(ge=0)
-    kind: Kind7
+    kind: Kind12
 
 
-class Kind8(StrEnum):
+class Kind13(StrEnum):
     time_range = "time-range"
 
 
-class ProvenanceRef9(BaseModel):
+class ProvenanceRef14(BaseModel):
     """
     Populated by ship-5 warehouse primitives.
     """
 
     from_s: conint(ge=0)
-    kind: Kind8
+    kind: Kind13
     to_s: conint(ge=0)
 
 
-class Kind9(StrEnum):
+class Kind14(StrEnum):
     number = "number"
 
 
-class ProvenanceRef10(BaseModel):
+class ProvenanceRef15(BaseModel):
     """
     Aggregate metric reference. `support` lists EdgeIds backing the number so the user can drill in.
     """
 
-    kind: Kind9
+    kind: Kind14
     metric: str
     support: list[str]
     value: float
@@ -81,19 +81,19 @@ class ProvenanceRef10(BaseModel):
 
 class ProvenanceRef(
     RootModel[
-        ProvenanceRef6
-        | ProvenanceRef7
-        | ProvenanceRef8
-        | ProvenanceRef9
-        | ProvenanceRef10
+        ProvenanceRef11
+        | ProvenanceRef12
+        | ProvenanceRef13
+        | ProvenanceRef14
+        | ProvenanceRef15
     ]
 ):
     root: (
-        ProvenanceRef6
-        | ProvenanceRef7
-        | ProvenanceRef8
-        | ProvenanceRef9
-        | ProvenanceRef10
+        ProvenanceRef11
+        | ProvenanceRef12
+        | ProvenanceRef13
+        | ProvenanceRef14
+        | ProvenanceRef15
     ) = Field(
         ...,
         description='Tagged reference back to a graph entity. The frontend\'s render-surface derivation picks live highlight, modal, or inline chip based on the ref shape (see plan: "Frontend render-surface derivation rule").',

@@ -1,0 +1,6 @@
+event: ChangedSince
+data: {"prior_turn":1,"delta":{"changed":[{"field_path":"stats.in_volume_lamports","primitive":"wallet_profile","change":{"kind":"number_moved","prior":80000000000.0,"current":90000000000.0,"pct":0.125}},{"field_path":"top_counterparties","primitive":"wallet_profile","change":{"kind":"set_changed","added":["NEW1111111111111111111111111111111111111111"],"removed":["OLD2222222222222222222222222222222222222222"]}}],"unchanged_field_count":4},"prose":"Volume rose 12.5% since turn 1; one new counterparty appeared."}
+
+event: Done
+data: {"session_id":"0000000000000000000000000000ffff","elapsed_ms":4321}
+

@@ -1,0 +1,228 @@
+{
+  "$defs": {
+    "AgentSwitches": {
+      "additionalProperties": false,
+      "description": "Ship 3.5 ablation switches. Each field is a behavior contract;\nwhen true, the agent has that behavior. Defaults reproduce the\nproduction preset.",
+      "properties": {
+        "cross_check": {
+          "$ref": "#/$defs/CrossCheckSwitches"
+        },
+        "dont_fabricate": {
+          "default": true,
+          "title": "Dont Fabricate",
+          "type": "boolean"
+        },
+        "dont_repeat_yourself": {
+          "default": true,
+          "title": "Dont Repeat Yourself",
+          "type": "boolean"
+        },
+        "stay_in_role": {
+          "default": true,
+          "title": "Stay In Role",
+          "type": "boolean"
+        }
+      },
+      "title": "AgentSwitches",
+      "type": "object"
+    },
+    "CrossCheckSwitches": {
+      "additionalProperties": false,
+      "description": "`cross_check` sub-modes. Two independent toggles after ship 5a\nretired `text_match`. Both advisory in the strict merge.",
+      "properties": {
+        "ground_truth_match": {
+          "default": false,
+          "title": "Ground Truth Match",
+          "type": "boolean"
+        },
+        "paraphrase_aware_match": {
+          "default": true,
+          "title": "Paraphrase Aware Match",
+          "type": "boolean"
+        }
+      },
+      "title": "CrossCheckSwitches",
+      "type": "object"
+    },
+    "PathStateApproved": {
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "const": "approved",
+          "default": "approved",
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "title": "PathStateApproved",
+      "type": "object"
+    },
+    "PathStateNotApplicable": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        },
+        "state": {
+          "const": "not_applicable",
+          "default": "not_applicable",
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "detail"
+      ],
+      "title": "PathStateNotApplicable",
+      "type": "object"
+    },
+    "PathStateRetracted": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "state": {
+          "const": "retracted",
+          "default": "retracted",
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "title": "PathStateRetracted",
+      "type": "object"
+    },
+    "PathStep": {
+      "additionalProperties": false,
+      "description": "One step in the gate's execution path. Stage is a dotted id\n(e.g. `claim.stay_in_role`, `narrative.cross_check.paraphrase_aware_match`).\n`elapsed_us` is wallclock microseconds; ordering only, determinism\nnot promised.",
+      "properties": {
+        "elapsed_us": {
+          "minimum": 0,
+          "title": "Elapsed Us",
+          "type": "integer"
+        },
+        "note": {
+          "description": "Single-line note: what was checked, what verdict.",
+          "title": "Note",
+          "type": "string"
+        },
+        "stage": {
+          "title": "Stage",
+          "type": "string"
+        },
+        "state": {
+          "discriminator": {
+            "mapping": {
+              "approved": "#/$defs/PathStateApproved",
+              "not_applicable": "#/$defs/PathStateNotApplicable",
+              "retracted": "#/$defs/PathStateRetracted"
+            },
+            "propertyName": "state"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PathStateApproved"
+            },
+            {
+              "$ref": "#/$defs/PathStateRetracted"
+            },
+            {
+              "$ref": "#/$defs/PathStateNotApplicable"
+            }
+          ],
+          "title": "State"
+        }
+      },
+      "required": [
+        "stage",
+        "state",
+        "elapsed_us",
+        "note"
+      ],
+      "title": "PathStep",
+      "type": "object"
+    },
+    "PolicyVerdictApproved": {
+      "additionalProperties": false,
+      "properties": {
+        "verdict": {
+          "const": "approved",
+          "default": "approved",
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "title": "PolicyVerdictApproved",
+      "type": "object"
+    },
+    "PolicyVerdictRetracted": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "verdict": {
+          "const": "retracted",
+          "default": "retracted",
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "title": "PolicyVerdictRetracted",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Full path of one channel's gate run. Emitted as `GatePath` SSE\nframe when `AgentRequest.show_trace=true`. Trace is always built\nand ledgered; the frame is wire-only.",
+  "properties": {
+    "channel": {
+      "title": "Channel",
+      "type": "string"
+    },
+    "final_verdict": {
+      "discriminator": {
+        "mapping": {
+          "approved": "#/$defs/PolicyVerdictApproved",
+          "retracted": "#/$defs/PolicyVerdictRetracted"
+        },
+        "propertyName": "verdict"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/PolicyVerdictApproved"
+        },
+        {
+          "$ref": "#/$defs/PolicyVerdictRetracted"
+        }
+      ],
+      "title": "Final Verdict"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/$defs/PathStep"
+      },
+      "title": "Steps",
+      "type": "array"
+    },
+    "switches": {
+      "$ref": "#/$defs/AgentSwitches"
+    }
+  },
+  "required": [
+    "channel",
+    "switches",
+    "steps",
+    "final_verdict"
+  ],
+  "title": "GatePath",
+  "type": "object"
+}

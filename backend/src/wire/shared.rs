@@ -18,10 +18,13 @@
 pub use crate::agent::primitives::community_summary::{
     CommunitySummaryInput, CommunitySummaryOutput, TopWallet,
 };
+pub use crate::agent::primitives::emit_claim::{EmitClaimInput, EmitClaimOutput};
 pub use crate::agent::primitives::wallet_profile::{
     TopCounterparty, WalletProfileInput, WalletProfileOutput,
 };
-pub use crate::agent::types::{NodeStatsWire, ProvenanceRef, SubgraphSlice, TimeScope};
+pub use crate::agent::types::{
+    ClaimKind, NodeStatsWire, NumberRef, ProvenanceRef, SubgraphSlice, TimeScope,
+};
 pub use crate::analytics::roles::NodeRole;
 
 // ---------------------------------------------------------------------------

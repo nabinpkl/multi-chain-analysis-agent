@@ -1,0 +1,27 @@
+{
+  "additionalProperties": false,
+  "description": "Terminal turn-level error. The SSE handler renders this as an\n`Error` event before the closing `Done`. `debug_message` only\npopulated when AGENT_DEBUG_PUBLIC=1.",
+  "properties": {
+    "debug_message": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Debug Message"
+    },
+    "message": {
+      "title": "Message",
+      "type": "string"
+    }
+  },
+  "required": [
+    "message"
+  ],
+  "title": "Error",
+  "type": "object"
+}

@@ -1,10 +1,14 @@
-"""Phase A walking-skeleton agent. Two tools (`wallet_profile`,
-`community_summary`), one output type (`Claim`), no gate, no thread
-state, no diff. Proves the snapshot-lease end-to-end and that two
-primitives can be composed in one turn against a consistent view.
+"""Phase 0/A walking-skeleton agent. Two tools (`wallet_profile`,
+`community_summary`), `output_type=str` (free-form narrative), no
+gate, no thread state, no diff. Proves the snapshot-lease end-to-end
+and that two primitives can be composed in one turn against a
+consistent view.
 
-Phase B.1 grows this into the real loop driver with structural +
-constitution gates and proper UsageLimits.
+Phase I locked the wire shapes (full `Claim`, `NarrativeWithRefs`,
+the gate types). Phase II rewrites this file to wire `emit_claim`
+as a tool, drop `output_type=str`, load the verbatim system prompt,
+and run the actual two-channel contract. Don't enrich this file
+further; it goes away when Phase II lands.
 """
 
 from __future__ import annotations
@@ -15,7 +19,6 @@ from pydantic_ai import Agent, RunContext
 
 from .llm import primary_model
 from .primitive_client import PrimitiveClient, PrimitiveError
-from .wire import Claim
 from .wire.shared import (
     CommunitySummaryInput,
     WalletProfileInput,
@@ -43,17 +46,23 @@ SYSTEM_PROMPT = (
     "vs external volume, top members).\n\n"
     "Workflow: call `wallet_profile` for the focused wallet first. If the "
     "result includes a `community_id`, optionally follow up with "
-    "`community_summary` for context. Then return a single `Claim` "
-    "summarising what you found. Ground the summary in the values returned "
-    "by the tools. Always return via `final_result`."
+    "`community_summary` for context. Then return a single short narrative "
+    "summarising what you found, grounded in the values returned by the "
+    "tools."
 )
 
 
-def build_agent() -> Agent[AgentDeps, Claim]:
-    agent: Agent[AgentDeps, Claim] = Agent(
+def build_agent() -> Agent[AgentDeps, str]:
+    """Phase I: `output_type=str` keeps the walking-skeleton runnable
+    (TestModel can auto-generate any string) without bringing along
+    the stub Claim shape we just deleted. Phase II swaps to the real
+    contract: `output_type=str` for the narrative channel and an
+    `emit_claim` tool for typed Claim emission.
+    """
+    agent: Agent[AgentDeps, str] = Agent(
         model=primary_model(),
         deps_type=AgentDeps,
-        output_type=Claim,
+        output_type=str,
         system_prompt=SYSTEM_PROMPT,
     )
 

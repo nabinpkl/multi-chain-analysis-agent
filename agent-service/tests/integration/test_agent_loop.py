@@ -1,14 +1,16 @@
 """Tests for the Pydantic AI agent's tool wiring + output validation,
 using `TestModel` so no real LLM call is made.
 
-Verifies the entire agent stack:
+Verifies the entire agent stack (Phase 0/A walking-skeleton scope):
 - Tools are registered on the agent (TestModel auto-calls every tool
   it can see)
 - Tool deps inject correctly (PrimitiveClient + snapshot_id reach
   the tool body)
 - Tool calls reach the mocked Rust data plane via the real
   PrimitiveClient
-- Output validation produces a valid Claim
+- Output is a string (Phase I dropped the stub Claim output_type;
+  Phase II will reintroduce structured emission via the `emit_claim`
+  tool, see issue #14)
 """
 
 from __future__ import annotations
@@ -30,7 +32,8 @@ async def test_agent_dispatches_wallet_profile_tool(
     """TestModel by default calls every registered tool once. We
     verify the wallet_profile tool was dispatched, the canned mock
     response came back through PrimitiveClient, and the agent
-    produced a valid Claim."""
+    produced a string output (walking-skeleton contract; Phase II
+    grows this into structured Claim emission)."""
     agent = build_agent()
     test_model = TestModel(call_tools=["wallet_profile"])
 
@@ -46,10 +49,9 @@ async def test_agent_dispatches_wallet_profile_tool(
             deps=deps,
         )
 
-    # Output validates as Claim.
-    from agent_service.wire import Claim
-
-    assert isinstance(result.output, Claim)
+    # Output is a free-form narrative string in Phase 0/A.
+    assert isinstance(result.output, str)
+    assert result.output  # non-empty
 
     # The mocked Rust route was hit.
     primitive_calls = [
@@ -112,10 +114,8 @@ async def test_agent_handles_primitive_error_gracefully(
     with agent.override(model=test_model):
         result = await agent.run("q", deps=deps)
 
-    # The agent still produced a Claim (TestModel's default output).
-    from agent_service.wire import Claim
-
-    assert isinstance(result.output, Claim)
+    # The agent still produced a string narrative (TestModel default).
+    assert isinstance(result.output, str)
 
 
 async def test_agent_no_real_network_call(

@@ -1,0 +1,18 @@
+{
+  "additionalProperties": false,
+  "description": "`cross_check` sub-modes. Two independent toggles after ship 5a\nretired `text_match`. Both advisory in the strict merge.",
+  "properties": {
+    "ground_truth_match": {
+      "default": false,
+      "title": "Ground Truth Match",
+      "type": "boolean"
+    },
+    "paraphrase_aware_match": {
+      "default": true,
+      "title": "Paraphrase Aware Match",
+      "type": "boolean"
+    }
+  },
+  "title": "CrossCheckSwitches",
+  "type": "object"
+}
