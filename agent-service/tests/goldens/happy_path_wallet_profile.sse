@@ -1,9 +1,0 @@
-event: Progress
-data: {"detail":"reading context, choosing primitive","phase":"planning"}
-
-event: Claim
-data: {"id":"01HKQ0000000000000000FIX01","session_id":"0000000000000000000000000000ffff","kind":"profile","headline":"Whale wallet ${ref:0} dominates community ${ref:1}","body_markdown":"Wallet ${ref:0} moved ${ref:2} lamports in the live window.","provenance":[{"kind":"wallet","addr":"DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK","idx":0},{"kind":"community","id":8},{"kind":"number","metric":"total_volume_lamports","value":80223943444.0,"support":["DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"]}],"support_numbers":[{"metric":"total_volume_lamports","value":80223943444.0}],"subgraph_slice":null,"policy_verdict":{"verdict":"approved"},"stubs_active":[],"emitted_at_ms":1234}
-
-event: Done
-data: {"session_id":"0000000000000000000000000000ffff","elapsed_ms":4321}
-

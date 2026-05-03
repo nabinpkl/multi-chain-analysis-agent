@@ -42,14 +42,6 @@ regen-wire-types:
     buf generate
     @echo ">> wire types regenerated"
 
-# Regenerate the SSE goldens. Cheap (cargo bin run, no LLM, no DB).
-# Phase I.5: locked byte-for-byte SSE format the Python service must
-# match. Phase II onward uses these as oracle inputs.
-regen-sse-goldens:
-    @echo ">> dumping SSE goldens from rust"
-    cd backend && cargo run --quiet --bin dump_sse_goldens
-    @echo ">> sse goldens regenerated"
-
 # Sync prompt files from Rust source. Byte-copy; tests verify
 # divergence fails CI.
 sync-prompts:

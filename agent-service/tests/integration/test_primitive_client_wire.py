@@ -66,12 +66,14 @@ async def test_turn_lifecycle_against_live_rust(live_client):
 
 async def test_wallet_profile_not_in_window_against_live_rust(live_client):
     """Bogus addr must come back as a typed `not_in_window` error
-    (Rust 404, JSON body), proving the binary->error path works."""
+    (Rust 404, JSON body), proving the binary->error path works.
+    Uses a base58 "Z..." string that's syntactically valid but
+    cosmically unlikely to ever appear on chain."""
     lease = await live_client.begin_turn()
     try:
         with pytest.raises(PrimitiveError) as excinfo:
             await live_client.wallet_profile(
-                addr="11111111111111111111111111111111",  # system program; never in window
+                addr="ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
                 snapshot_id=lease.snapshot_id,
             )
         assert excinfo.value.kind == "not_in_window"

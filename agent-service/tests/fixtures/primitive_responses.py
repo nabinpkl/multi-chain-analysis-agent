@@ -38,21 +38,22 @@ def make_ask_payload(
     thread_id: str | None = None,
     show_trace: bool = False,
 ) -> dict:
-    """Build the JSON body for `POST /agent/ask` matching the locked
-    Phase I `AgentRequest` shape. Tests pass through this helper so a
+    """Build the JSON body for `POST /agent/ask` matching the proto
+    `AgentRequest` canonical JSON shape (camelCase, EntityRef oneof
+    as `{"wallet":{"id":...}}`). Tests pass through this helper so a
     future shape change updates one place, not 30 call sites."""
     addr = focus_addr if focus_addr is not None else WALLET_PROFILE_ADDR
     payload: dict = {
-        "user_question": user_question,
+        "userQuestion": user_question,
         "context": {
-            "live_window_secs": 60,
-            "focus": {"kind": "wallet", "id": addr},
+            "liveWindowSecs": 60,
+            "focus": {"wallet": {"id": addr}},
             "selection": [],
         },
-        "show_trace": show_trace,
+        "showTrace": show_trace,
     }
     if thread_id is not None:
-        payload["thread_id"] = thread_id
+        payload["threadId"] = thread_id
     return payload
 
 # ---------------------------------------------------------------------------

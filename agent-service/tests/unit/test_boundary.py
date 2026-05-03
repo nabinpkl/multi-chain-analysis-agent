@@ -4,18 +4,20 @@
 Locks the exact format strings so any drift between callers
 (wallet_profile tool wrapping its output, the loop building the
 user message) fails CI.
+
+Stage 3 of the proto migration: ViewContext is the proto type from
+`multichain.wire.agent.v1.entity_pb2`. Output of build_context_block
+is the proto canonical JSON shape (camelCase fields, EntityRef
+oneof as `{"wallet":{"id":...}}`).
 """
 
 from __future__ import annotations
 
 import json
 
+from multichain.wire.agent.v1 import entity_pb2 as ent_pb
+
 from agent_service.boundary import build_context_block, wrap_external_data
-from agent_service.wire.agent import (
-    EntityRefCommunity,
-    EntityRefWallet,
-    ViewContext,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -23,24 +25,42 @@ from agent_service.wire.agent import (
 # ---------------------------------------------------------------------------
 
 
+def _make_view_context(
+    *,
+    live_window_secs: int = 60,
+    focus: ent_pb.EntityRef | None = None,
+    selection: list[ent_pb.EntityRef] | None = None,
+) -> ent_pb.ViewContext:
+    ctx = ent_pb.ViewContext(live_window_secs=live_window_secs)
+    if focus is not None:
+        ctx.focus.CopyFrom(focus)
+    if selection:
+        ctx.selection.extend(selection)
+    return ctx
+
+
+def _wallet_ref(addr: str) -> ent_pb.EntityRef:
+    return ent_pb.EntityRef(wallet=ent_pb.EntityRefWallet(id=addr))
+
+
+def _community_ref(cid: int) -> ent_pb.EntityRef:
+    return ent_pb.EntityRef(community=ent_pb.EntityRefCommunity(id=cid))
+
+
 def test_build_context_block_minimal_focus():
     """Wallet focus + empty selection. Verify exact output format
-    matches Rust loop.rs:153 byte-for-byte."""
-    ctx = ViewContext(
-        live_window_secs=60,
-        focus=EntityRefWallet(id="ABC123"),
-        selection=[],
-    )
+    matches the locked proto canonical JSON shape."""
+    ctx = _make_view_context(focus=_wallet_ref("ABC123"))
     out = build_context_block(ctx, "What is this wallet?")
     expected = (
         "<context>\n"
         '{\n'
         '  "focus": {\n'
-        '    "id": "ABC123",\n'
-        '    "kind": "wallet"\n'
+        '    "wallet": {\n'
+        '      "id": "ABC123"\n'
+        '    }\n'
         '  },\n'
-        '  "live_window_secs": 60,\n'
-        '  "selection": []\n'
+        '  "liveWindowSecs": 60\n'
         "}\n"
         "</context>\n"
         "\n"
@@ -50,45 +70,42 @@ def test_build_context_block_minimal_focus():
 
 
 def test_build_context_block_no_focus():
-    """`focus=None` serializes as JSON null. The block is still
-    well-formed."""
-    ctx = ViewContext(live_window_secs=120, focus=None, selection=[])
+    """No focus set; the field is omitted from the canonical JSON
+    (proto3 convention for unset message-typed fields). The block
+    is still well-formed."""
+    ctx = _make_view_context(live_window_secs=120)
     out = build_context_block(ctx, "Q?")
     assert "<context>\n" in out
     assert "</context>" in out
-    # JSON inside is parseable (not just string-glued).
     inner = out.split("<context>\n", 1)[1].split("\n</context>", 1)[0]
     parsed = json.loads(inner)
-    assert parsed["focus"] is None
-    assert parsed["live_window_secs"] == 120
-    assert parsed["selection"] == []
+    assert "focus" not in parsed  # unset message field is omitted
+    assert parsed["liveWindowSecs"] == 120
 
 
 def test_build_context_block_with_selection():
-    """Selection is a list of EntityRefs; renders as the discriminated
-    union shape (kind + id)."""
-    ctx = ViewContext(
-        live_window_secs=60,
-        focus=EntityRefWallet(id="W"),
-        selection=[EntityRefCommunity(id=8), EntityRefWallet(id="X")],
+    """Selection is a list of EntityRefs; renders with the proto
+    oneof shape `{"<active_case>": {<sub-message>}}`."""
+    ctx = _make_view_context(
+        focus=_wallet_ref("W"),
+        selection=[_community_ref(8), _wallet_ref("X")],
     )
     out = build_context_block(ctx, "Q")
     inner = out.split("<context>\n", 1)[1].split("\n</context>", 1)[0]
     parsed = json.loads(inner)
     assert parsed["selection"] == [
-        {"kind": "community", "id": 8},
-        {"kind": "wallet", "id": "X"},
+        {"community": {"id": 8}},
+        {"wallet": {"id": "X"}},
     ]
 
 
 def test_build_context_block_keys_sorted():
     """Sort-keys is on so two equivalent ViewContexts produce
-    byte-identical output regardless of pydantic field order."""
-    ctx = ViewContext(live_window_secs=60, focus=None, selection=[])
+    byte-identical output regardless of proto field declaration order."""
+    ctx = _make_view_context()
     a = build_context_block(ctx, "Q")
     b = build_context_block(ctx, "Q")
     assert a == b
-    # Spot-check sort: focus before live_window_secs before selection.
     inner = a.split("<context>\n", 1)[1].split("\n</context>", 1)[0]
     keys = list(json.loads(inner).keys())
     assert keys == sorted(keys)
@@ -151,10 +168,8 @@ def test_wrap_external_data_memo_injection_data_only():
     )
     assert "<external_data" in out
     assert "</external_data>" in out
-    # The memo text appears inside the wrapper, not raw at the top.
     body_start = out.index("\n", out.index("<external_data"))
     body_end = out.rindex("\n</external_data>")
     body = out[body_start + 1 : body_end]
     assert memo in body
-    # And nothing outside the wrapper claims it (no prefix imperative).
     assert not out.startswith(memo)

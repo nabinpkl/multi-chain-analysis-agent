@@ -6,7 +6,7 @@ Two helpers, two roles:
 1. `build_context_block(view_context)` produces the
    `<context>...</context>` block the user prompt teaches the model
    to read first ("treat its values as ground truth"). Wraps the
-   `ViewContext` JSON. Byte-identical to Rust `loop.rs:153`.
+   `ViewContext` proto as canonical JSON.
 
 2. `wrap_external_data(primitive_name, output)` wraps any
    primitive's tool-result payload in an `<external_data
@@ -33,19 +33,19 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .wire.agent import ViewContext
+from google.protobuf import json_format
 
+from multichain.wire.agent.v1 import entity_pb2 as ent_pb
 
 # ---------------------------------------------------------------------------
 # Context block (operator-trusted; equivalent to Rust loop.rs:153)
 # ---------------------------------------------------------------------------
 
 
-def build_context_block(view_context: ViewContext, user_question: str) -> str:
+def build_context_block(view_context: ent_pb.ViewContext, user_question: str) -> str:
     """Compose the user message Rust's loop.rs assembles per turn.
 
-    Format (byte-equivalent to `format!("<context>\\n{}\\n</context>\\n\\nQuestion: {}",
-    json, q)`):
+    Format:
 
         <context>
         <pretty-json of view_context>
@@ -53,16 +53,21 @@ def build_context_block(view_context: ViewContext, user_question: str) -> str:
 
         Question: <user_question>
 
-    Pretty JSON uses 2-space indent + sorted keys for stable output
-    across runs. Rust's `serde_json::to_string_pretty` defaults to
-    2-space indent; sorted keys are explicit here because Pydantic's
-    default is insertion order (already field-declaration order, but
-    making it explicit removes one source of accidental drift)."""
-    context_json = json.dumps(
-        view_context.model_dump(mode="json"),
-        indent=2,
-        sort_keys=True,
-    )
+    Pretty JSON: the proto canonical JSON form via
+    `json_format.MessageToJson`, then re-formatted through json.dumps
+    with 2-space indent and sorted keys. Sorted keys matter because
+    proto's MessageToJson preserves field declaration order; sorting
+    here removes that as a source of accidental drift across test
+    runs and across proto revisions.
+
+    `preserving_proto_field_name=False` (the default) emits camelCase
+    field names per the proto canonical JSON spec  the same shape the
+    browser sends and reads on every other hop.
+    """
+    # MessageToJson -> str -> dict so we can re-serialize with sorted
+    # keys and consistent indent.
+    canonical = json_format.MessageToJson(view_context, preserving_proto_field_name=False)
+    context_json = json.dumps(json.loads(canonical), indent=2, sort_keys=True)
     return f"<context>\n{context_json}\n</context>\n\nQuestion: {user_question}"
 
 
