@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TimeScope",
+  "description": "Mandatory temporal frame for primitives that have one (per D-6). Externally tagged so `Live` serializes as the bare string `\"live\"` (which is what models naturally produce for unit variants) and `Range` as `{\"range\": {\"from_s\": ..., \"to_s\": ...}}`. The internally-tagged form was tried first and the model misinterpreted the schema, sending strings where objects were expected.",
+  "oneOf": [
+    {
+      "description": "Current rolling live window.",
+      "type": "string",
+      "enum": [
+        "live"
+      ]
+    },
+    {
+      "description": "Absolute block-time range. Routes to warehouse path (ship-5).",
+      "type": "object",
+      "required": [
+        "range"
+      ],
+      "properties": {
+        "range": {
+          "type": "object",
+          "required": [
+            "from_s",
+            "to_s"
+          ],
+          "properties": {
+            "from_s": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "to_s": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

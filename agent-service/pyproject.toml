@@ -15,6 +15,15 @@ dependencies = [
     "structlog>=24.4",
 ]
 
+[dependency-groups]
+dev = [
+    # Phase A of Python-agent migration: regen-wire-types pipeline.
+    # `cargo run --bin dump_schemas` writes JSON Schema files; this
+    # converts them to pydantic v2 models in
+    # `src/agent_service/wire/shared.py`.
+    "datamodel-code-generator>=0.27",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

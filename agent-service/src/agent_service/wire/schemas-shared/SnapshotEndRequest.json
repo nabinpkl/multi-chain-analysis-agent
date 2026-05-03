@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SnapshotEndRequest",
+  "description": "Body of `POST /turn/end`. Releases the snapshot eagerly. Optional; the GC sweep would clean it up within 5 minutes anyway, but eager release keeps the cache small for healthy turns.",
+  "type": "object",
+  "required": [
+    "snapshot_id"
+  ],
+  "properties": {
+    "snapshot_id": {
+      "type": "string"
+    }
+  }
+}

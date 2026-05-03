@@ -19,10 +19,19 @@ pub fn router(state: AppState) -> Router {
         .route("/agent/ask", post(agent::ask))
         .route("/agent/stream/{session_id}", get(agent::stream))
         .route("/agent/diagnostics", get(diagnostics::diagnostics))
-        // Phase 0 of Python-agent migration: cross-service primitive
-        // endpoint. Phase A adds /turn/begin, /turn/end, and a
-        // snapshot_id field on this body for cross-primitive read
-        // consistency. Phase C deletes the old /agent/* routes above.
-        .route("/primitive/wallet_profile", post(primitives::wallet_profile_route))
+        // Phase A of Python-agent migration. Snapshot lease lets the
+        // Python orchestrator pin a consistent view across multiple
+        // primitive calls in one turn. Phase C deletes the old
+        // /agent/* routes above.
+        .route("/turn/begin", post(primitives::turn_begin))
+        .route("/turn/end", post(primitives::turn_end))
+        .route(
+            "/primitive/wallet_profile",
+            post(primitives::wallet_profile_route),
+        )
+        .route(
+            "/primitive/community_summary",
+            post(primitives::community_summary_route),
+        )
         .with_state(state)
 }

@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SnapshotBeginResponse",
+  "description": "Response from `POST /turn/begin`. The Python agent stashes the `snapshot_id` and passes it on every subsequent primitive call in the same turn so reads are consistent across primitives even if new blocks ingest mid-turn.\n\n`expires_at_ms` is a wallclock floor; the actual GC sweep on the Rust side may keep the snapshot slightly longer. After this time the Python client must re-`/turn/begin`.",
+  "type": "object",
+  "required": [
+    "expires_at_ms",
+    "snapshot_id",
+    "window_secs"
+  ],
+  "properties": {
+    "expires_at_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "snapshot_id": {
+      "type": "string"
+    },
+    "window_secs": {
+      "description": "The window the snapshot was materialized at (matches the agent's live window). Phase A only supports 60s; future ships may add a `window_secs` field on the begin request to negotiate.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    }
+  }
+}

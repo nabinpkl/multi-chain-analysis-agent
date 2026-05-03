@@ -1109,6 +1109,7 @@ dependencies = [
  "axum",
  "bs58",
  "clickhouse",
+ "dashmap",
  "fastrand",
  "futures-util",
  "governor",

@@ -106,10 +106,27 @@ async def stream(session_id: str) -> EventSourceResponse:
         raise HTTPException(status_code=404, detail="session not found or already consumed")
 
     async def event_iter():
+        snapshot_id: str | None = None
         try:
             agent = app.state.agent
+            client = app.state.primitive_client
+
+            # Phase A snapshot lease: pin a consistent view across
+            # every primitive call this turn. Released in `finally`
+            # below; if the request is cancelled mid-flight, GC
+            # sweeps it within 5 minutes.
+            lease = await client.begin_turn()
+            snapshot_id = lease.snapshot_id
+            log.info(
+                "turn_begin",
+                session_id=session_id,
+                snapshot_id=snapshot_id,
+                expires_at_ms=lease.expires_at_ms,
+            )
+
             deps = AgentDeps(
-                primitive_client=app.state.primitive_client,
+                primitive_client=client,
+                snapshot_id=snapshot_id,
                 focus_addr=pending.request.focus_addr,
             )
             user_prompt = (
@@ -140,6 +157,9 @@ async def stream(session_id: str) -> EventSourceResponse:
             log.exception("agent_stream_failed", session_id=session_id)
             yield {"event": "error", "data": f'{{"message": "{type(e).__name__}: {e}"}}'}
             yield {"event": "done", "data": Done(ok=False).model_dump_json()}
+        finally:
+            if snapshot_id is not None:
+                await app.state.primitive_client.end_turn(snapshot_id)
 
     # Critical SSE headers: nginx / cloudflared / browsers won't buffer
     # if these are set. The plan calls these out as risk #1.

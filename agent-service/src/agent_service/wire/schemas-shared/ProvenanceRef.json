@@ -1,0 +1,143 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ProvenanceRef",
+  "description": "Tagged reference back to a graph entity. The frontend's render-surface derivation picks live highlight, modal, or inline chip based on the ref shape (see plan: \"Frontend render-surface derivation rule\").",
+  "oneOf": [
+    {
+      "description": "`idx` is None when the wallet is not in the current live window (route to subgraph modal instead of live-graph chip).",
+      "type": "object",
+      "required": [
+        "addr",
+        "kind"
+      ],
+      "properties": {
+        "addr": {
+          "type": "string"
+        },
+        "idx": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "wallet"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Stable id format: `\"<edge_idx>:<gen>\"`.",
+      "type": "object",
+      "required": [
+        "dst",
+        "id",
+        "kind",
+        "src"
+      ],
+      "properties": {
+        "dst": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "edge"
+          ]
+        },
+        "src": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "id",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "community"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Populated by ship-5 warehouse primitives.",
+      "type": "object",
+      "required": [
+        "from_s",
+        "kind",
+        "to_s"
+      ],
+      "properties": {
+        "from_s": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "time-range"
+          ]
+        },
+        "to_s": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    {
+      "description": "Aggregate metric reference. `support` lists EdgeIds backing the number so the user can drill in.",
+      "type": "object",
+      "required": [
+        "kind",
+        "metric",
+        "support",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "number"
+          ]
+        },
+        "metric": {
+          "type": "string"
+        },
+        "support": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      }
+    }
+  ]
+}

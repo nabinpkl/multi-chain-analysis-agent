@@ -5,19 +5,12 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 
-mod agent;
-mod analytics;
-mod api;
-mod config;
-mod domain;
-mod graph;
-mod ingest;
-mod rpc;
-mod sinks;
-mod state;
-mod store;
-mod stream;
-mod tip;
+// Phase A of Python-agent migration: modules live in the library
+// crate so other bins (`dump_schemas`) can reach them. The server
+// binary just imports.
+use multichain_engine::{
+    agent, analytics, api, config, graph, ingest, rpc, sinks, state, store, stream,
+};
 
 use config::Config;
 use rpc::RpcClient;
@@ -36,6 +29,12 @@ async fn main() -> anyhow::Result<()> {
 
     store::schema::bootstrap(&state.clickhouse).await?;
     info!("clickhouse schema bootstrapped");
+
+    // Phase A of Python-agent migration: spawn the snapshot-cache GC
+    // sweep so leased turn snapshots not released within 5 min get
+    // dropped instead of leaking. Cancelled at runtime exit.
+    agent::snapshot::spawn_gc(state.snapshot_cache.clone());
+    info!("snapshot cache gc spawned");
 
     let cors = if config.cors_origin == "*" {
         CorsLayer::permissive()

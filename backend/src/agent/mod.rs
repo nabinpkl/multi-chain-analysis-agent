@@ -21,6 +21,7 @@ pub mod primitives;
 pub mod prompt;
 pub mod repeat_detector;
 pub mod runtime;
+pub mod snapshot;
 pub mod stubs;
 pub mod types;
 

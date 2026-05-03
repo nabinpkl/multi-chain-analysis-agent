@@ -11,10 +11,12 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use std::sync::Arc;
+
 use super::{Primitive, PrimitiveCtx, PrimitiveError, PrimitiveOutput};
+use crate::agent::snapshot::{TurnSnapshot, current_time_ms};
 use crate::agent::types::{CostClass, DataSource, NodeStatsWire, ProvenanceRef, TimeScope};
 use crate::analytics::NodeRole;
-use crate::analytics::snapshot::snapshot_window;
 use crate::graph::window::window_index;
 use crate::state::AppState;
 
@@ -118,13 +120,20 @@ Always read the <context> block for the focused wallet before guessing.\
     }
 }
 
-/// Pure compute fn for `wallet_profile`. Phase 0 of the Python-agent
-/// migration calls this directly from `POST /primitive/wallet_profile`
-/// without going through the `Primitive` trait. The trait `execute`
-/// above is a thin wrapper retained while the Rust agent loop is still
-/// alive (deleted in Phase C).
-pub async fn compute(
+/// Phase A entry point for the Python-agent migration: compute a
+/// `wallet_profile` against a pre-built `TurnSnapshot`. The snapshot
+/// is owned by the caller (typically the Python orchestrator via the
+/// `/primitive/wallet_profile` route, which looks up the snapshot
+/// from the lease cache by `snapshot_id`). All graph + analytics
+/// reads happen against the owned snapshot, never touching the live
+/// `GraphState` lock or the analytics watch.
+///
+/// The Rust agent loop still calls `compute(state, input)` (below),
+/// which builds a one-shot snapshot per call to preserve existing
+/// locking semantics until Phase C deletes the loop.
+pub async fn compute_with_snapshot(
     state: &AppState,
+    snapshot: &Arc<TurnSnapshot>,
     input: WalletProfileInput,
 ) -> Result<PrimitiveOutput<WalletProfileOutput>, PrimitiveError> {
     // Range arm stub. Hits the stub registry counter and returns
@@ -140,60 +149,51 @@ pub async fn compute(
         });
     }
 
-    // Live arm: brief read lock, snapshot, fold to wire shape,
-    // release lock, build provenance off-lock. Always operate on
-    // the 60s window (idx 1) so per-node stats are computed over
-    // a useful slice; the 10s window is too thin and the longer
-    // windows are heavier to snapshot.
-    let live_window_idx = window_index(60).unwrap_or(1);
-
-    let snap_data = {
-        let g = state.graph.read();
-        let idx = match g.lookup_idx(&input.addr) {
-            Some(i) => i,
-            None => {
-                return Err(PrimitiveError::NotInWindow {
-                    addr: input.addr.clone(),
-                });
-            }
-        };
-        let snapshot = snapshot_window(&g, live_window_idx);
-        let stats = snapshot
-            .node_stats
-            .get(&idx)
-            .copied()
-            .unwrap_or_default();
-        let neighbors: Vec<(u32, f64, Option<String>)> = snapshot
-            .adj
-            .get(&idx)
-            .map(|m| {
-                let mut v: Vec<(u32, f64)> =
-                    m.iter().map(|(&n, &w)| (n, w)).collect();
-                v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-                v.truncate(TOP_K_COUNTERPARTIES);
-                v.into_iter()
-                    .map(|(n, w)| (n, w, g.lookup_pubkey(n).map(|s| s.to_string())))
-                    .collect()
-            })
-            .unwrap_or_default();
-        SnapData {
-            idx,
-            stats,
-            neighbors,
+    // Look up the focused wallet's idx in the snapshot's window-local
+    // interner. Same `NotInWindow` semantics as the pre-snapshot path
+    // (the wallet is "not in window" if it's not represented in this
+    // turn's materialized 60s slice).
+    let idx = match snapshot.addr_to_idx.get(&input.addr).copied() {
+        Some(i) => i,
+        None => {
+            return Err(PrimitiveError::NotInWindow {
+                addr: input.addr.clone(),
+            });
         }
     };
 
-    // Read role + community from analytics watch snapshot. Safe
-    // off-lock; this is a separate channel.
-    let analytics_snap = state
-        .analytics
-        .snapshots[live_window_idx]
-        .borrow()
-        .clone();
-    let role = analytics_snap.roles.get(&snap_data.idx).copied();
-    let community_id = analytics_snap.labels.get(&snap_data.idx).copied();
+    let stats = snapshot
+        .graph
+        .node_stats
+        .get(&idx)
+        .copied()
+        .unwrap_or_default();
 
-    // Build provenance off-lock.
+    // Top-K counterparties by edge weight.
+    let neighbors: Vec<(u32, f64, Option<String>)> = snapshot
+        .graph
+        .adj
+        .get(&idx)
+        .map(|m| {
+            let mut v: Vec<(u32, f64)> = m.iter().map(|(&n, &w)| (n, w)).collect();
+            v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            v.truncate(TOP_K_COUNTERPARTIES);
+            v.into_iter()
+                .map(|(n, w)| (n, w, snapshot.idx_to_addr.get(&n).cloned()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let role: Option<NodeRole> = snapshot.analytics.roles.get(&idx).copied();
+    let community_id = snapshot.analytics.labels.get(&idx).copied();
+
+    let snap_data = SnapData {
+        idx,
+        stats,
+        neighbors,
+    };
+
+    // Build provenance.
     let mut provenance: Vec<ProvenanceRef> = Vec::new();
     provenance.push(ProvenanceRef::Wallet {
         addr: input.addr.clone(),
@@ -283,6 +283,32 @@ pub async fn compute(
         provenance,
         subgraph_slice: None,
     })
+}
+
+/// Back-compat path used by the still-alive Rust agent loop. Builds a
+/// one-shot `TurnSnapshot` per call (matches pre-Phase-A locking
+/// semantics where each primitive took its own brief read lock and
+/// derived its own window snapshot) then delegates to
+/// `compute_with_snapshot`. Removed in Phase C alongside the loop.
+pub async fn compute(
+    state: &AppState,
+    input: WalletProfileInput,
+) -> Result<PrimitiveOutput<WalletProfileOutput>, PrimitiveError> {
+    let live_window_idx = window_index(60).unwrap_or(1);
+    let analytics = state
+        .analytics
+        .snapshots[live_window_idx]
+        .borrow()
+        .clone();
+    let snap = TurnSnapshot::build(
+        "oneshot".to_string(),
+        live_window_idx,
+        60,
+        current_time_ms(),
+        &state.graph,
+        analytics,
+    );
+    compute_with_snapshot(state, &snap, input).await
 }
 
 struct SnapData {

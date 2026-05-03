@@ -10,6 +10,7 @@ use crate::agent::{
     AgentClient, AgentThread, BudgetGate, Ledger, OutputPolicy, PrimitiveRegistry, StubRegistry,
 };
 use crate::agent::primitives::PrimitiveBindingStore;
+use crate::agent::snapshot::SnapshotCache;
 use crate::agent::types::{AgentSwitches, Claim};
 use crate::analytics::{AnalyticsChannels, AnalyticsSnapshot};
 use crate::api::agent::AgentSessions;
@@ -132,6 +133,12 @@ pub struct AppState {
     /// pattern: the UI is the only surface I check, so dev-mode
     /// surfaces rare events on the UI itself; prod ships sterile.
     pub agent_debug_public: bool,
+    /// Phase A of Python-agent migration: per-turn `WindowSnapshot`
+    /// lease cache. Python opens a snapshot via `POST /turn/begin`,
+    /// passes the returned `snapshot_id` on every primitive call this
+    /// turn so reads are consistent across primitives, then releases
+    /// via `POST /turn/end`. GC sweep drops anything older than 5 min.
+    pub snapshot_cache: SnapshotCache,
 }
 
 impl AppState {
@@ -200,6 +207,7 @@ impl AppState {
             agent_show_trace: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             agent_tool_calls: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             agent_debug_public: agent_config.debug_public,
+            snapshot_cache: SnapshotCache::new(),
         };
         (state, analytics_senders)
     }
