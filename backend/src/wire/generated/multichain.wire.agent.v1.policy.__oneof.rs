@@ -34,6 +34,24 @@ pub mod policy_verdict {
             Self::Some(Verdict::from(v))
         }
     }
+    impl serde::Serialize for Verdict {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            s: S,
+        ) -> ::core::result::Result<S::Ok, S::Error> {
+            use serde::ser::SerializeMap;
+            let mut map = s.serialize_map(Some(1))?;
+            match self {
+                Verdict::Approved(v) => {
+                    map.serialize_entry("approved", v)?;
+                }
+                Verdict::Retracted(v) => {
+                    map.serialize_entry("retracted", v)?;
+                }
+            }
+            map.end()
+        }
+    }
 }
 pub mod path_state {
     #[allow(unused_imports)]
@@ -77,6 +95,27 @@ pub mod path_state {
     for ::core::option::Option<State> {
         fn from(v: super::super::super::PathStateNotApplicable) -> Self {
             Self::Some(State::from(v))
+        }
+    }
+    impl serde::Serialize for State {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            s: S,
+        ) -> ::core::result::Result<S::Ok, S::Error> {
+            use serde::ser::SerializeMap;
+            let mut map = s.serialize_map(Some(1))?;
+            match self {
+                State::Approved(v) => {
+                    map.serialize_entry("approved", v)?;
+                }
+                State::Retracted(v) => {
+                    map.serialize_entry("retracted", v)?;
+                }
+                State::NotApplicable(v) => {
+                    map.serialize_entry("notApplicable", v)?;
+                }
+            }
+            map.end()
         }
     }
 }

@@ -12,13 +12,28 @@
 /// the user sees closure ("we covered this in turn N, no movement
 /// since") rather than silence.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct NoMovement {
     /// Field 1: `prior_turn`
+    #[serde(
+        rename = "priorTurn",
+        alias = "prior_turn",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub prior_turn: u32,
     /// Primitive names re-fetched and confirmed unchanged.
     ///
     /// Field 2: `primitives_replayed`
+    #[serde(
+        rename = "primitivesReplayed",
+        alias = "primitives_replayed",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub primitives_replayed: ::buffa::alloc::vec::Vec<::buffa::alloc::string::String>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -138,17 +153,55 @@ impl ::buffa::ExtensionSet for NoMovement {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for NoMovement {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __NO_MOVEMENT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.NoMovement",
+    to_json: ::buffa::type_registry::any_to_json::<NoMovement>,
+    from_json: ::buffa::type_registry::any_from_json::<NoMovement>,
+    is_wkt: false,
+};
 /// Emitted when dont_repeat_yourself fires AND the diff is non-empty.
 /// Carries the typed Delta plus the small narrative call's prose
 /// describing only what shifted since the prior turn.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct ChangedSince {
     /// Field 1: `prior_turn`
+    #[serde(
+        rename = "priorTurn",
+        alias = "prior_turn",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub prior_turn: u32,
     /// Field 2: `delta`
+    #[serde(
+        rename = "delta",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub delta: ::buffa::MessageField<Delta>,
     /// Field 3: `prose`
+    #[serde(
+        rename = "prose",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub prose: ::buffa::alloc::string::String,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -301,15 +354,49 @@ impl ::buffa::ExtensionSet for ChangedSince {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for ChangedSince {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __CHANGED_SINCE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.ChangedSince",
+    to_json: ::buffa::type_registry::any_to_json::<ChangedSince>,
+    from_json: ::buffa::type_registry::any_from_json::<ChangedSince>,
+    is_wkt: false,
+};
 /// Full diff result. unchanged_field_count powers the builder-view
 /// chip ('2 changed / 4 unchanged'); only structurally-changed fields
 /// appear in `changed`.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct Delta {
     /// Field 1: `changed`
+    #[serde(
+        rename = "changed",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub changed: ::buffa::alloc::vec::Vec<FieldDelta>,
     /// Field 2: `unchanged_field_count`
+    #[serde(
+        rename = "unchangedFieldCount",
+        alias = "unchanged_field_count",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub unchanged_field_count: u32,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -440,21 +527,59 @@ impl ::buffa::ExtensionSet for Delta {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for Delta {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __DELTA_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.Delta",
+    to_json: ::buffa::type_registry::any_to_json::<Delta>,
+    from_json: ::buffa::type_registry::any_from_json::<Delta>,
+    is_wkt: false,
+};
 /// One field's change between prior turn's primitive output and the
 /// freshly re-fetched output.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct FieldDelta {
     /// Dotted path within the primitive output (e.g.
     /// "stats.in_volume_lamports").
     ///
     /// Field 1: `field_path`
+    #[serde(
+        rename = "fieldPath",
+        alias = "field_path",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub field_path: ::buffa::alloc::string::String,
     /// Producing primitive name (e.g. "wallet_profile").
     ///
     /// Field 2: `primitive`
+    #[serde(
+        rename = "primitive",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub primitive: ::buffa::alloc::string::String,
     /// Field 3: `change`
+    #[serde(
+        rename = "change",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub change: ::buffa::MessageField<FieldChange>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -610,6 +735,26 @@ impl ::buffa::ExtensionSet for FieldDelta {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for FieldDelta {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __FIELD_DELTA_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.FieldDelta",
+    to_json: ::buffa::type_registry::any_to_json::<FieldDelta>,
+    from_json: ::buffa::type_registry::any_from_json::<FieldDelta>,
+    is_wkt: false,
+};
 /// Shape of a single field's change. Three variants matching the
 /// diff walker's FieldKind strategies (Number, EntitySet, Count).
 ///
@@ -618,8 +763,12 @@ impl ::buffa::ExtensionSet for FieldDelta {
 ///   setChanged   -\> {"setChanged":   {"added": \[...\], "removed": \[...\]}}
 ///   countChanged -\> {"countChanged": {"prior": 1, "current": 3}}
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize)]
+#[serde(default)]
 pub struct FieldChange {
+    #[serde(flatten)]
     pub change: ::core::option::Option<__buffa::oneof::field_change::Change>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -836,16 +985,159 @@ impl ::buffa::ExtensionSet for FieldChange {
         &mut self.__buffa_unknown_fields
     }
 }
+impl<'de> serde::Deserialize<'de> for FieldChange {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl<'de> serde::de::Visitor<'de> for _V {
+            type Value = FieldChange;
+            fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str("struct FieldChange")
+            }
+            #[allow(clippy::field_reassign_with_default)]
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> ::core::result::Result<FieldChange, A::Error> {
+                let mut __oneof_change: ::core::option::Option<
+                    __buffa::oneof::field_change::Change,
+                > = None;
+                while let Some(key) = map.next_key::<::buffa::alloc::string::String>()? {
+                    match key.as_str() {
+                        "numberMoved" | "number_moved" => {
+                            let v: ::core::option::Option<FieldChangeNumberMoved> = map
+                                .next_value_seed(
+                                    ::buffa::json_helpers::NullableDeserializeSeed(
+                                        ::buffa::json_helpers::DefaultDeserializeSeed::<
+                                            FieldChangeNumberMoved,
+                                        >::new(),
+                                    ),
+                                )?;
+                            if let Some(v) = v {
+                                if __oneof_change.is_some() {
+                                    return Err(
+                                        serde::de::Error::custom(
+                                            "multiple oneof fields set for 'change'",
+                                        ),
+                                    );
+                                }
+                                __oneof_change = Some(
+                                    __buffa::oneof::field_change::Change::NumberMoved(
+                                        ::buffa::alloc::boxed::Box::new(v),
+                                    ),
+                                );
+                            }
+                        }
+                        "setChanged" | "set_changed" => {
+                            let v: ::core::option::Option<FieldChangeSetChanged> = map
+                                .next_value_seed(
+                                    ::buffa::json_helpers::NullableDeserializeSeed(
+                                        ::buffa::json_helpers::DefaultDeserializeSeed::<
+                                            FieldChangeSetChanged,
+                                        >::new(),
+                                    ),
+                                )?;
+                            if let Some(v) = v {
+                                if __oneof_change.is_some() {
+                                    return Err(
+                                        serde::de::Error::custom(
+                                            "multiple oneof fields set for 'change'",
+                                        ),
+                                    );
+                                }
+                                __oneof_change = Some(
+                                    __buffa::oneof::field_change::Change::SetChanged(
+                                        ::buffa::alloc::boxed::Box::new(v),
+                                    ),
+                                );
+                            }
+                        }
+                        "countChanged" | "count_changed" => {
+                            let v: ::core::option::Option<FieldChangeCountChanged> = map
+                                .next_value_seed(
+                                    ::buffa::json_helpers::NullableDeserializeSeed(
+                                        ::buffa::json_helpers::DefaultDeserializeSeed::<
+                                            FieldChangeCountChanged,
+                                        >::new(),
+                                    ),
+                                )?;
+                            if let Some(v) = v {
+                                if __oneof_change.is_some() {
+                                    return Err(
+                                        serde::de::Error::custom(
+                                            "multiple oneof fields set for 'change'",
+                                        ),
+                                    );
+                                }
+                                __oneof_change = Some(
+                                    __buffa::oneof::field_change::Change::CountChanged(
+                                        ::buffa::alloc::boxed::Box::new(v),
+                                    ),
+                                );
+                            }
+                        }
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                let mut __r = <FieldChange as ::core::default::Default>::default();
+                __r.change = __oneof_change;
+                Ok(__r)
+            }
+        }
+        d.deserialize_map(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for FieldChange {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __FIELD_CHANGE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.FieldChange",
+    to_json: ::buffa::type_registry::any_to_json::<FieldChange>,
+    from_json: ::buffa::type_registry::any_from_json::<FieldChange>,
+    is_wkt: false,
+};
 /// Numeric field outside per-class tolerance. `pct` is the signed
 /// percent change (current - prior) / prior, or 0.0 when prior is 0.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct FieldChangeNumberMoved {
     /// Field 1: `prior`
+    #[serde(
+        rename = "prior",
+        with = "::buffa::json_helpers::double",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_f64"
+    )]
     pub prior: f64,
     /// Field 2: `current`
+    #[serde(
+        rename = "current",
+        with = "::buffa::json_helpers::double",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_f64"
+    )]
     pub current: f64,
     /// Field 3: `pct`
+    #[serde(
+        rename = "pct",
+        with = "::buffa::json_helpers::double",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_f64"
+    )]
     pub pct: f64,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -982,14 +1274,47 @@ impl ::buffa::ExtensionSet for FieldChangeNumberMoved {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for FieldChangeNumberMoved {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __FIELD_CHANGE_NUMBER_MOVED_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.FieldChangeNumberMoved",
+    to_json: ::buffa::type_registry::any_to_json::<FieldChangeNumberMoved>,
+    from_json: ::buffa::type_registry::any_from_json::<FieldChangeNumberMoved>,
+    is_wkt: false,
+};
 /// Entity-list field where membership changed. `added`/`removed`
 /// carry the keys (typically wallet addresses).
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct FieldChangeSetChanged {
     /// Field 1: `added`
+    #[serde(
+        rename = "added",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub added: ::buffa::alloc::vec::Vec<::buffa::alloc::string::String>,
     /// Field 2: `removed`
+    #[serde(
+        rename = "removed",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub removed: ::buffa::alloc::vec::Vec<::buffa::alloc::string::String>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -1112,13 +1437,46 @@ impl ::buffa::ExtensionSet for FieldChangeSetChanged {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for FieldChangeSetChanged {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __FIELD_CHANGE_SET_CHANGED_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.FieldChangeSetChanged",
+    to_json: ::buffa::type_registry::any_to_json::<FieldChangeSetChanged>,
+    from_json: ::buffa::type_registry::any_from_json::<FieldChangeSetChanged>,
+    is_wkt: false,
+};
 /// Count-class field where any delta is meaningful.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct FieldChangeCountChanged {
     /// Field 1: `prior`
+    #[serde(
+        rename = "prior",
+        with = "::buffa::json_helpers::double",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_f64"
+    )]
     pub prior: f64,
     /// Field 2: `current`
+    #[serde(
+        rename = "current",
+        with = "::buffa::json_helpers::double",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_f64"
+    )]
     pub current: f64,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -1235,3 +1593,23 @@ impl ::buffa::ExtensionSet for FieldChangeCountChanged {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for FieldChangeCountChanged {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __FIELD_CHANGE_COUNT_CHANGED_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.FieldChangeCountChanged",
+    to_json: ::buffa::type_registry::any_to_json::<FieldChangeCountChanged>,
+    from_json: ::buffa::type_registry::any_from_json::<FieldChangeCountChanged>,
+    is_wkt: false,
+};

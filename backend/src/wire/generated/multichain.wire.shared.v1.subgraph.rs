@@ -5,13 +5,31 @@
 /// Used by ship-5 for historical results that don't share layout
 /// state with the live graph.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct SubgraphSlice {
     /// Field 1: `nodes`
+    #[serde(
+        rename = "nodes",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub nodes: ::buffa::alloc::vec::Vec<NodeSummary>,
     /// Field 2: `edges`
+    #[serde(
+        rename = "edges",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub edges: ::buffa::alloc::vec::Vec<EdgeSummary>,
     /// Field 3: `time_range`
+    #[serde(
+        rename = "timeRange",
+        alias = "time_range",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub time_range: ::buffa::MessageField<TimeRange>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -183,14 +201,43 @@ impl ::buffa::ExtensionSet for SubgraphSlice {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for SubgraphSlice {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __SUBGRAPH_SLICE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.shared.v1.SubgraphSlice",
+    to_json: ::buffa::type_registry::any_to_json::<SubgraphSlice>,
+    from_json: ::buffa::type_registry::any_from_json::<SubgraphSlice>,
+    is_wkt: false,
+};
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct NodeSummary {
     /// Field 1: `addr`
+    #[serde(
+        rename = "addr",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub addr: ::buffa::alloc::string::String,
     /// None when the role is unclassified.
     ///
     /// Field 2: `role`
+    #[serde(rename = "role", skip_serializing_if = "::core::option::Option::is_none")]
     pub role: ::core::option::Option<::buffa::alloc::string::String>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -316,16 +363,54 @@ impl ::buffa::ExtensionSet for NodeSummary {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for NodeSummary {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __NODE_SUMMARY_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.shared.v1.NodeSummary",
+    to_json: ::buffa::type_registry::any_to_json::<NodeSummary>,
+    from_json: ::buffa::type_registry::any_from_json::<NodeSummary>,
+    is_wkt: false,
+};
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct EdgeSummary {
     /// Field 1: `src`
+    #[serde(
+        rename = "src",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub src: ::buffa::alloc::string::String,
     /// Field 2: `dst`
+    #[serde(
+        rename = "dst",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub dst: ::buffa::alloc::string::String,
     /// Lamports.
     ///
     /// Field 3: `volume`
+    #[serde(
+        rename = "volume",
+        with = "::buffa::json_helpers::double",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_f64"
+    )]
     pub volume: f64,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -468,14 +553,49 @@ impl ::buffa::ExtensionSet for EdgeSummary {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for EdgeSummary {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __EDGE_SUMMARY_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.shared.v1.EdgeSummary",
+    to_json: ::buffa::type_registry::any_to_json::<EdgeSummary>,
+    from_json: ::buffa::type_registry::any_from_json::<EdgeSummary>,
+    is_wkt: false,
+};
 /// Wire-friendly time range used inside a subgraph slice. Distinct from
 /// the `TimeRangeRef` ProvenanceRef variant.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct TimeRange {
     /// Field 1: `from_s`
+    #[serde(
+        rename = "fromS",
+        alias = "from_s",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub from_s: u32,
     /// Field 2: `to_s`
+    #[serde(
+        rename = "toS",
+        alias = "to_s",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub to_s: u32,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -592,3 +712,23 @@ impl ::buffa::ExtensionSet for TimeRange {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for TimeRange {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __TIME_RANGE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.shared.v1.TimeRange",
+    to_json: ::buffa::type_registry::any_to_json::<TimeRange>,
+    from_json: ::buffa::type_registry::any_from_json::<TimeRange>,
+    is_wkt: false,
+};

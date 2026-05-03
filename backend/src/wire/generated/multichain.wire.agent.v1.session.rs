@@ -9,17 +9,45 @@
 /// ground_truth_match). `show_trace` controls whether GatePath
 /// frames are emitted; trace is always built and ledgered regardless.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct AgentRequest {
     /// Field 1: `user_question`
+    #[serde(
+        rename = "userQuestion",
+        alias = "user_question",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub user_question: ::buffa::alloc::string::String,
     /// Field 2: `context`
+    #[serde(
+        rename = "context",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub context: ::buffa::MessageField<ViewContext>,
     /// Field 3: `thread_id`
+    #[serde(
+        rename = "threadId",
+        alias = "thread_id",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
     pub thread_id: ::core::option::Option<::buffa::alloc::string::String>,
     /// Field 4: `switches`
+    #[serde(
+        rename = "switches",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub switches: ::buffa::MessageField<AgentSwitches>,
     /// Field 5: `show_trace`
+    #[serde(
+        rename = "showTrace",
+        alias = "show_trace",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
     pub show_trace: bool,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -234,18 +262,58 @@ impl ::buffa::ExtensionSet for AgentRequest {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for AgentRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __AGENT_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.AgentRequest",
+    to_json: ::buffa::type_registry::any_to_json::<AgentRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<AgentRequest>,
+    is_wkt: false,
+};
 /// Returned synchronously from POST /agent/ask. `session_id` is
 /// per-turn (drives the SSE GET, ledger row group). `thread_id`
 /// is the persistent conversation handle. `turn` is 0 on the first
 /// turn, increments on follow-ups.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct AgentSessionStarted {
     /// Field 1: `session_id`
+    #[serde(
+        rename = "sessionId",
+        alias = "session_id",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub session_id: ::buffa::alloc::string::String,
     /// Field 2: `thread_id`
+    #[serde(
+        rename = "threadId",
+        alias = "thread_id",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub thread_id: ::buffa::alloc::string::String,
     /// Field 3: `turn`
+    #[serde(
+        rename = "turn",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub turn: u32,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -388,14 +456,49 @@ impl ::buffa::ExtensionSet for AgentSessionStarted {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for AgentSessionStarted {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __AGENT_SESSION_STARTED_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.AgentSessionStarted",
+    to_json: ::buffa::type_registry::any_to_json::<AgentSessionStarted>,
+    from_json: ::buffa::type_registry::any_from_json::<AgentSessionStarted>,
+    is_wkt: false,
+};
 /// Final SSE event payload. Emitted as the `done` event by the SSE
 /// handler. `elapsed_ms` is u32 (caps at ~50 days).
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct AgentDone {
     /// Field 1: `session_id`
+    #[serde(
+        rename = "sessionId",
+        alias = "session_id",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub session_id: ::buffa::alloc::string::String,
     /// Field 2: `elapsed_ms`
+    #[serde(
+        rename = "elapsedMs",
+        alias = "elapsed_ms",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub elapsed_ms: u32,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -515,3 +618,23 @@ impl ::buffa::ExtensionSet for AgentDone {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for AgentDone {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __AGENT_DONE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.AgentDone",
+    to_json: ::buffa::type_registry::any_to_json::<AgentDone>,
+    from_json: ::buffa::type_registry::any_from_json::<AgentDone>,
+    is_wkt: false,
+};

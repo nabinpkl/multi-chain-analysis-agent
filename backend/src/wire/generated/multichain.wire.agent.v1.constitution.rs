@@ -10,15 +10,32 @@
 /// ignored) because the policy LLM occasionally adds keys. The Rust
 /// side serializes strictly.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct ConstitutionVerdict {
     /// One of: "approve", "retract", "reject".
     ///
     /// Field 1: `verdict`
+    #[serde(
+        rename = "verdict",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub verdict: ::buffa::alloc::string::String,
     /// Field 2: `reason`
+    #[serde(
+        rename = "reason",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub reason: ::buffa::alloc::string::String,
     /// Field 3: `extraction`
+    #[serde(
+        rename = "extraction",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub extraction: ::buffa::MessageField<LlmExtraction>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -174,15 +191,50 @@ impl ::buffa::ExtensionSet for ConstitutionVerdict {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for ConstitutionVerdict {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __CONSTITUTION_VERDICT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.ConstitutionVerdict",
+    to_json: ::buffa::type_registry::any_to_json::<ConstitutionVerdict>,
+    from_json: ::buffa::type_registry::any_from_json::<ConstitutionVerdict>,
+    is_wkt: false,
+};
 /// Constitution gate's structured sidecar. Numbers the LLM saw in
 /// narrative + claim text, classified by unit. The structural cross-
 /// check pairs these against the binding store.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct LlmExtraction {
     /// Field 1: `narrative_numbers`
+    #[serde(
+        rename = "narrativeNumbers",
+        alias = "narrative_numbers",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub narrative_numbers: ::buffa::alloc::vec::Vec<LlmExtractedNumber>,
     /// Field 2: `claim_numbers`
+    #[serde(
+        rename = "claimNumbers",
+        alias = "claim_numbers",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub claim_numbers: ::buffa::alloc::vec::Vec<LlmExtractedNumber>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -321,19 +373,58 @@ impl ::buffa::ExtensionSet for LlmExtraction {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for LlmExtraction {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __LLM_EXTRACTION_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.LlmExtraction",
+    to_json: ::buffa::type_registry::any_to_json::<LlmExtraction>,
+    from_json: ::buffa::type_registry::any_from_json::<LlmExtraction>,
+    is_wkt: false,
+};
 /// LLM-side extracted number from constitution gate's `extraction`
 /// JSON sidecar. `phrase` is debugging context only; surfaces in
 /// dev-mode debug fields and is discarded during compare.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct LlmExtractedNumber {
     /// Field 1: `value`
+    #[serde(
+        rename = "value",
+        with = "::buffa::json_helpers::double",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_f64"
+    )]
     pub value: f64,
     /// String form of UnitClass: "sol" | "count" | "community_id" | "raw".
     ///
     /// Field 2: `unit_class`
+    #[serde(
+        rename = "unitClass",
+        alias = "unit_class",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub unit_class: ::buffa::alloc::string::String,
     /// Field 3: `phrase`
+    #[serde(
+        rename = "phrase",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub phrase: ::buffa::alloc::string::String,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -476,3 +567,23 @@ impl ::buffa::ExtensionSet for LlmExtractedNumber {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for LlmExtractedNumber {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __LLM_EXTRACTED_NUMBER_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.LlmExtractedNumber",
+    to_json: ::buffa::type_registry::any_to_json::<LlmExtractedNumber>,
+    from_json: ::buffa::type_registry::any_from_json::<LlmExtractedNumber>,
+    is_wkt: false,
+};

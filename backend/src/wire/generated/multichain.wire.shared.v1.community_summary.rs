@@ -3,11 +3,25 @@
 
 /// Input to the `community_summary` primitive.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct CommunitySummaryInput {
     /// Field 1: `community_id`
+    #[serde(
+        rename = "communityId",
+        alias = "community_id",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub community_id: u32,
     /// Field 2: `time_scope`
+    #[serde(
+        rename = "timeScope",
+        alias = "time_scope",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub time_scope: ::buffa::MessageField<TimeScope>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -137,34 +151,98 @@ impl ::buffa::ExtensionSet for CommunitySummaryInput {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for CommunitySummaryInput {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __COMMUNITY_SUMMARY_INPUT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.shared.v1.CommunitySummaryInput",
+    to_json: ::buffa::type_registry::any_to_json::<CommunitySummaryInput>,
+    from_json: ::buffa::type_registry::any_from_json::<CommunitySummaryInput>,
+    is_wkt: false,
+};
 /// Output of the `community_summary` primitive. The agent reads this
 /// to build the community-context claim.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct CommunitySummaryOutput {
     /// Field 1: `community_id`
+    #[serde(
+        rename = "communityId",
+        alias = "community_id",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub community_id: u32,
     /// Number of wallets in the community within the current scope.
     ///
     /// Field 2: `size`
+    #[serde(
+        rename = "size",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub size: u32,
     /// Sum of all internal + external edge volumes (lamports).
     ///
     /// Field 3: `total_volume`
+    #[serde(
+        rename = "totalVolume",
+        alias = "total_volume",
+        with = "::buffa::json_helpers::double",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_f64"
+    )]
     pub total_volume: f64,
     /// Edge volume strictly within the community (lamports).
     ///
     /// Field 4: `internal_volume`
+    #[serde(
+        rename = "internalVolume",
+        alias = "internal_volume",
+        with = "::buffa::json_helpers::double",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_f64"
+    )]
     pub internal_volume: f64,
     /// Edge volume crossing community boundary (lamports).
     ///
     /// Field 5: `external_volume`
+    #[serde(
+        rename = "externalVolume",
+        alias = "external_volume",
+        with = "::buffa::json_helpers::double",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_f64"
+    )]
     pub external_volume: f64,
     /// Field 6: `edge_count`
+    #[serde(
+        rename = "edgeCount",
+        alias = "edge_count",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub edge_count: u32,
     /// Capped at K (impl-defined, currently 5).
     ///
     /// Field 7: `top_wallets`
+    #[serde(
+        rename = "topWallets",
+        alias = "top_wallets",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub top_wallets: ::buffa::alloc::vec::Vec<TopWallet>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -392,16 +470,54 @@ impl ::buffa::ExtensionSet for CommunitySummaryOutput {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for CommunitySummaryOutput {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __COMMUNITY_SUMMARY_OUTPUT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.shared.v1.CommunitySummaryOutput",
+    to_json: ::buffa::type_registry::any_to_json::<CommunitySummaryOutput>,
+    from_json: ::buffa::type_registry::any_from_json::<CommunitySummaryOutput>,
+    is_wkt: false,
+};
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct TopWallet {
     /// Field 1: `addr`
+    #[serde(
+        rename = "addr",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub addr: ::buffa::alloc::string::String,
     /// Field 2: `degree`
+    #[serde(
+        rename = "degree",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub degree: u32,
     /// Lamports.
     ///
     /// Field 3: `volume`
+    #[serde(
+        rename = "volume",
+        with = "::buffa::json_helpers::double",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_f64"
+    )]
     pub volume: f64,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -541,3 +657,23 @@ impl ::buffa::ExtensionSet for TopWallet {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for TopWallet {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __TOP_WALLET_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.shared.v1.TopWallet",
+    to_json: ::buffa::type_registry::any_to_json::<TopWallet>,
+    from_json: ::buffa::type_registry::any_from_json::<TopWallet>,
+    is_wkt: false,
+};

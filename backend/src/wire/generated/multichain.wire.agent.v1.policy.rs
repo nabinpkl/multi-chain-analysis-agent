@@ -8,8 +8,12 @@
 ///   approved  -\> {"approved":  {}}
 ///   retracted -\> {"retracted": {"reason": "..."}}
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize)]
+#[serde(default)]
 pub struct PolicyVerdict {
+    #[serde(flatten)]
     pub verdict: ::core::option::Option<__buffa::oneof::policy_verdict::Verdict>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -182,8 +186,112 @@ impl ::buffa::ExtensionSet for PolicyVerdict {
         &mut self.__buffa_unknown_fields
     }
 }
+impl<'de> serde::Deserialize<'de> for PolicyVerdict {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl<'de> serde::de::Visitor<'de> for _V {
+            type Value = PolicyVerdict;
+            fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str("struct PolicyVerdict")
+            }
+            #[allow(clippy::field_reassign_with_default)]
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> ::core::result::Result<PolicyVerdict, A::Error> {
+                let mut __oneof_verdict: ::core::option::Option<
+                    __buffa::oneof::policy_verdict::Verdict,
+                > = None;
+                while let Some(key) = map.next_key::<::buffa::alloc::string::String>()? {
+                    match key.as_str() {
+                        "approved" => {
+                            let v: ::core::option::Option<PolicyVerdictApproved> = map
+                                .next_value_seed(
+                                    ::buffa::json_helpers::NullableDeserializeSeed(
+                                        ::buffa::json_helpers::DefaultDeserializeSeed::<
+                                            PolicyVerdictApproved,
+                                        >::new(),
+                                    ),
+                                )?;
+                            if let Some(v) = v {
+                                if __oneof_verdict.is_some() {
+                                    return Err(
+                                        serde::de::Error::custom(
+                                            "multiple oneof fields set for 'verdict'",
+                                        ),
+                                    );
+                                }
+                                __oneof_verdict = Some(
+                                    __buffa::oneof::policy_verdict::Verdict::Approved(
+                                        ::buffa::alloc::boxed::Box::new(v),
+                                    ),
+                                );
+                            }
+                        }
+                        "retracted" => {
+                            let v: ::core::option::Option<PolicyVerdictRetracted> = map
+                                .next_value_seed(
+                                    ::buffa::json_helpers::NullableDeserializeSeed(
+                                        ::buffa::json_helpers::DefaultDeserializeSeed::<
+                                            PolicyVerdictRetracted,
+                                        >::new(),
+                                    ),
+                                )?;
+                            if let Some(v) = v {
+                                if __oneof_verdict.is_some() {
+                                    return Err(
+                                        serde::de::Error::custom(
+                                            "multiple oneof fields set for 'verdict'",
+                                        ),
+                                    );
+                                }
+                                __oneof_verdict = Some(
+                                    __buffa::oneof::policy_verdict::Verdict::Retracted(
+                                        ::buffa::alloc::boxed::Box::new(v),
+                                    ),
+                                );
+                            }
+                        }
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                let mut __r = <PolicyVerdict as ::core::default::Default>::default();
+                __r.verdict = __oneof_verdict;
+                Ok(__r)
+            }
+        }
+        d.deserialize_map(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for PolicyVerdict {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __POLICY_VERDICT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.PolicyVerdict",
+    to_json: ::buffa::type_registry::any_to_json::<PolicyVerdict>,
+    from_json: ::buffa::type_registry::any_from_json::<PolicyVerdict>,
+    is_wkt: false,
+};
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct PolicyVerdictApproved {
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -259,10 +367,38 @@ impl ::buffa::ExtensionSet for PolicyVerdictApproved {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for PolicyVerdictApproved {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __POLICY_VERDICT_APPROVED_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.PolicyVerdictApproved",
+    to_json: ::buffa::type_registry::any_to_json::<PolicyVerdictApproved>,
+    from_json: ::buffa::type_registry::any_from_json::<PolicyVerdictApproved>,
+    is_wkt: false,
+};
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct PolicyVerdictRetracted {
     /// Field 1: `reason`
+    #[serde(
+        rename = "reason",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub reason: ::buffa::alloc::string::String,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -360,28 +496,71 @@ impl ::buffa::ExtensionSet for PolicyVerdictRetracted {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for PolicyVerdictRetracted {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __POLICY_VERDICT_RETRACTED_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.PolicyVerdictRetracted",
+    to_json: ::buffa::type_registry::any_to_json::<PolicyVerdictRetracted>,
+    from_json: ::buffa::type_registry::any_from_json::<PolicyVerdictRetracted>,
+    is_wkt: false,
+};
 /// One step in the gate's execution path. Built by `PathBuilder`
 /// in `policy.rs` as each switch's leg runs (or skips). The
 /// frontend's builder view renders these as a vertical timeline
 /// inside `GatePathTimeline.tsx`.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct PathStep {
     /// Dotted stage id (e.g. "claim.stay_in_role",
     /// "narrative.cross_check.paraphrase_aware_match").
     ///
     /// Field 1: `stage`
+    #[serde(
+        rename = "stage",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub stage: ::buffa::alloc::string::String,
     /// Field 2: `state`
+    #[serde(
+        rename = "state",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub state: ::buffa::MessageField<PathState>,
     /// Wallclock microseconds the step took. For visual ordering
     /// only; determinism not promised across runs.
     ///
     /// Field 3: `elapsed_us`
+    #[serde(
+        rename = "elapsedUs",
+        alias = "elapsed_us",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub elapsed_us: u32,
     /// Single-line note: what was checked, what verdict.
     ///
     /// Field 4: `note`
+    #[serde(
+        rename = "note",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub note: ::buffa::alloc::string::String,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -557,6 +736,26 @@ impl ::buffa::ExtensionSet for PathStep {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for PathStep {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __PATH_STEP_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.PathStep",
+    to_json: ::buffa::type_registry::any_to_json::<PathStep>,
+    from_json: ::buffa::type_registry::any_from_json::<PathStep>,
+    is_wkt: false,
+};
 /// One leg's verdict. NotApplicable covers both "switch off" and
 /// "couldn't run" (malformed extraction, parse failure).
 ///
@@ -565,8 +764,12 @@ impl ::buffa::ExtensionSet for PathStep {
 ///   retracted     -\> {"retracted":     {"reason": "..."}}
 ///   notApplicable -\> {"notApplicable": {"detail": "..."}}
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize)]
+#[serde(default)]
 pub struct PathState {
+    #[serde(flatten)]
     pub state: ::core::option::Option<__buffa::oneof::path_state::State>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -783,8 +986,136 @@ impl ::buffa::ExtensionSet for PathState {
         &mut self.__buffa_unknown_fields
     }
 }
+impl<'de> serde::Deserialize<'de> for PathState {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl<'de> serde::de::Visitor<'de> for _V {
+            type Value = PathState;
+            fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str("struct PathState")
+            }
+            #[allow(clippy::field_reassign_with_default)]
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> ::core::result::Result<PathState, A::Error> {
+                let mut __oneof_state: ::core::option::Option<
+                    __buffa::oneof::path_state::State,
+                > = None;
+                while let Some(key) = map.next_key::<::buffa::alloc::string::String>()? {
+                    match key.as_str() {
+                        "approved" => {
+                            let v: ::core::option::Option<PathStateApproved> = map
+                                .next_value_seed(
+                                    ::buffa::json_helpers::NullableDeserializeSeed(
+                                        ::buffa::json_helpers::DefaultDeserializeSeed::<
+                                            PathStateApproved,
+                                        >::new(),
+                                    ),
+                                )?;
+                            if let Some(v) = v {
+                                if __oneof_state.is_some() {
+                                    return Err(
+                                        serde::de::Error::custom(
+                                            "multiple oneof fields set for 'state'",
+                                        ),
+                                    );
+                                }
+                                __oneof_state = Some(
+                                    __buffa::oneof::path_state::State::Approved(
+                                        ::buffa::alloc::boxed::Box::new(v),
+                                    ),
+                                );
+                            }
+                        }
+                        "retracted" => {
+                            let v: ::core::option::Option<PathStateRetracted> = map
+                                .next_value_seed(
+                                    ::buffa::json_helpers::NullableDeserializeSeed(
+                                        ::buffa::json_helpers::DefaultDeserializeSeed::<
+                                            PathStateRetracted,
+                                        >::new(),
+                                    ),
+                                )?;
+                            if let Some(v) = v {
+                                if __oneof_state.is_some() {
+                                    return Err(
+                                        serde::de::Error::custom(
+                                            "multiple oneof fields set for 'state'",
+                                        ),
+                                    );
+                                }
+                                __oneof_state = Some(
+                                    __buffa::oneof::path_state::State::Retracted(
+                                        ::buffa::alloc::boxed::Box::new(v),
+                                    ),
+                                );
+                            }
+                        }
+                        "notApplicable" | "not_applicable" => {
+                            let v: ::core::option::Option<PathStateNotApplicable> = map
+                                .next_value_seed(
+                                    ::buffa::json_helpers::NullableDeserializeSeed(
+                                        ::buffa::json_helpers::DefaultDeserializeSeed::<
+                                            PathStateNotApplicable,
+                                        >::new(),
+                                    ),
+                                )?;
+                            if let Some(v) = v {
+                                if __oneof_state.is_some() {
+                                    return Err(
+                                        serde::de::Error::custom(
+                                            "multiple oneof fields set for 'state'",
+                                        ),
+                                    );
+                                }
+                                __oneof_state = Some(
+                                    __buffa::oneof::path_state::State::NotApplicable(
+                                        ::buffa::alloc::boxed::Box::new(v),
+                                    ),
+                                );
+                            }
+                        }
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                let mut __r = <PathState as ::core::default::Default>::default();
+                __r.state = __oneof_state;
+                Ok(__r)
+            }
+        }
+        d.deserialize_map(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for PathState {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __PATH_STATE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.PathState",
+    to_json: ::buffa::type_registry::any_to_json::<PathState>,
+    from_json: ::buffa::type_registry::any_from_json::<PathState>,
+    is_wkt: false,
+};
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct PathStateApproved {
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -860,10 +1191,38 @@ impl ::buffa::ExtensionSet for PathStateApproved {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for PathStateApproved {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __PATH_STATE_APPROVED_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.PathStateApproved",
+    to_json: ::buffa::type_registry::any_to_json::<PathStateApproved>,
+    from_json: ::buffa::type_registry::any_from_json::<PathStateApproved>,
+    is_wkt: false,
+};
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct PathStateRetracted {
     /// Field 1: `reason`
+    #[serde(
+        rename = "reason",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub reason: ::buffa::alloc::string::String,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -961,10 +1320,38 @@ impl ::buffa::ExtensionSet for PathStateRetracted {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for PathStateRetracted {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __PATH_STATE_RETRACTED_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.PathStateRetracted",
+    to_json: ::buffa::type_registry::any_to_json::<PathStateRetracted>,
+    from_json: ::buffa::type_registry::any_from_json::<PathStateRetracted>,
+    is_wkt: false,
+};
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct PathStateNotApplicable {
     /// Field 1: `detail`
+    #[serde(
+        rename = "detail",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub detail: ::buffa::alloc::string::String,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -1062,3 +1449,23 @@ impl ::buffa::ExtensionSet for PathStateNotApplicable {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for PathStateNotApplicable {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __PATH_STATE_NOT_APPLICABLE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.PathStateNotApplicable",
+    to_json: ::buffa::type_registry::any_to_json::<PathStateNotApplicable>,
+    from_json: ::buffa::type_registry::any_from_json::<PathStateNotApplicable>,
+    is_wkt: false,
+};

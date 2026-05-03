@@ -5,11 +5,24 @@
 /// with the snapshot lease so the route is addressable from Python
 /// without ambient state.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct WalletProfileRequest {
     /// Field 1: `input`
+    #[serde(
+        rename = "input",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub input: ::buffa::MessageField<WalletProfileInput>,
     /// Field 2: `snapshot_id`
+    #[serde(
+        rename = "snapshotId",
+        alias = "snapshot_id",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub snapshot_id: ::buffa::alloc::string::String,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -142,14 +155,47 @@ impl ::buffa::ExtensionSet for WalletProfileRequest {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for WalletProfileRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __WALLET_PROFILE_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.shared.v1.WalletProfileRequest",
+    to_json: ::buffa::type_registry::any_to_json::<WalletProfileRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<WalletProfileRequest>,
+    is_wkt: false,
+};
 /// Body of `POST /primitive/community_summary`. Same envelope shape
 /// as WalletProfileRequest.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct CommunitySummaryRequest {
     /// Field 1: `input`
+    #[serde(
+        rename = "input",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub input: ::buffa::MessageField<CommunitySummaryInput>,
     /// Field 2: `snapshot_id`
+    #[serde(
+        rename = "snapshotId",
+        alias = "snapshot_id",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub snapshot_id: ::buffa::alloc::string::String,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -282,6 +328,26 @@ impl ::buffa::ExtensionSet for CommunitySummaryRequest {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for CommunitySummaryRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __COMMUNITY_SUMMARY_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.shared.v1.CommunitySummaryRequest",
+    to_json: ::buffa::type_registry::any_to_json::<CommunitySummaryRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<CommunitySummaryRequest>,
+    is_wkt: false,
+};
 /// Generic primitive response envelope. Mirrors `PrimitiveOutput<T>`
 /// from the existing primitive trait but flattened for the wire so
 /// Python doesn't need to learn about the Rust generic.
@@ -291,13 +357,30 @@ impl ::buffa::ExtensionSet for CommunitySummaryRequest {
 /// validates `value` against the matching per-primitive output message
 /// after receiving it.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct PrimitiveResponseEnvelope {
     /// Field 1: `value`
+    #[serde(
+        rename = "value",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub value: ::buffa::MessageField<::buffa_types::google::protobuf::Struct>,
     /// Field 2: `provenance`
+    #[serde(
+        rename = "provenance",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub provenance: ::buffa::alloc::vec::Vec<ProvenanceRef>,
     /// Field 3: `subgraph_slice`
+    #[serde(
+        rename = "subgraphSlice",
+        alias = "subgraph_slice",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub subgraph_slice: ::buffa::MessageField<SubgraphSlice>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -471,3 +554,23 @@ impl ::buffa::ExtensionSet for PrimitiveResponseEnvelope {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for PrimitiveResponseEnvelope {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __PRIMITIVE_RESPONSE_ENVELOPE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.shared.v1.PrimitiveResponseEnvelope",
+    to_json: ::buffa::type_registry::any_to_json::<PrimitiveResponseEnvelope>,
+    from_json: ::buffa::type_registry::any_from_json::<PrimitiveResponseEnvelope>,
+    is_wkt: false,
+};

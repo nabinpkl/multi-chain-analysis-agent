@@ -6,6 +6,11 @@ plugins:
   #   protoc-gen-buffa-packaging  → cargo-friendly mod.rs wiring
   - local: protoc-gen-buffa
     out: backend/src/wire/generated
+    opt:
+      # Emit proto canonical JSON serde derives so the same generated
+      # types can be wire-encoded as binary protobuf OR canonical JSON
+      # (curl-debuggable fallback) without an adapter layer.
+      - json=true
   - local: protoc-gen-buffa-packaging
     out: backend/src/wire/generated
     strategy: all

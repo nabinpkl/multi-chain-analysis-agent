@@ -21,6 +21,92 @@ impl ::core::default::Default for ClaimKind {
         Self::CLAIM_KIND_UNSPECIFIED
     }
 }
+impl ::serde::Serialize for ClaimKind {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for ClaimKind {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = ClaimKind;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!("a string, integer, or null for ", stringify!(ClaimKind)),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<ClaimKind, E> {
+                <ClaimKind as ::buffa::Enumeration>::from_proto_name(v)
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<ClaimKind, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {} out of i32 range", v),
+                        )
+                    })?;
+                <ClaimKind as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {}", v32),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<ClaimKind, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {} out of i32 range", v),
+                        )
+                    })?;
+                <ClaimKind as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {}", v32),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<ClaimKind, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ClaimKind {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
 impl ::buffa::Enumeration for ClaimKind {
     fn from_i32(value: i32) -> ::core::option::Option<Self> {
         match value {
@@ -82,43 +168,106 @@ impl ::buffa::Enumeration for ClaimKind {
 /// the frontend replaces with interactive chips at render time.
 /// `provenance[N]` is the typed entry the chip resolves against.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct Claim {
     /// ULID, sortable by emission order.
     ///
     /// Field 1: `id`
+    #[serde(
+        rename = "id",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub id: ::buffa::alloc::string::String,
     /// Field 2: `session_id`
+    #[serde(
+        rename = "sessionId",
+        alias = "session_id",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub session_id: ::buffa::alloc::string::String,
     /// Field 3: `kind`
+    #[serde(
+        rename = "kind",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
     pub kind: ::buffa::EnumValue<ClaimKind>,
     /// One-line plaintext headline.
     ///
     /// Field 4: `headline`
+    #[serde(
+        rename = "headline",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub headline: ::buffa::alloc::string::String,
     /// Structured paragraph; ${ref:N} placeholders -\> provenance chips.
     ///
     /// Field 5: `body_markdown`
+    #[serde(
+        rename = "bodyMarkdown",
+        alias = "body_markdown",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub body_markdown: ::buffa::alloc::string::String,
     /// Field 6: `provenance`
+    #[serde(
+        rename = "provenance",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub provenance: ::buffa::alloc::vec::Vec<super::super::shared::v1::ProvenanceRef>,
     /// Field 7: `support_numbers`
+    #[serde(
+        rename = "supportNumbers",
+        alias = "support_numbers",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub support_numbers: ::buffa::alloc::vec::Vec<super::super::shared::v1::NumberRef>,
     /// None in v0; ship 5 populates for warehouse-derived historical.
     ///
     /// Field 8: `subgraph_slice`
+    #[serde(
+        rename = "subgraphSlice",
+        alias = "subgraph_slice",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub subgraph_slice: ::buffa::MessageField<super::super::shared::v1::SubgraphSlice>,
     /// Field 9: `policy_verdict`
+    #[serde(
+        rename = "policyVerdict",
+        alias = "policy_verdict",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub policy_verdict: ::buffa::MessageField<PolicyVerdict>,
     /// Stubs that touched this claim's emission. Visible in the UI as
     /// "via stubs: ..." so historical claims keep their provenance even
     /// after stubs are removed.
     ///
     /// Field 10: `stubs_active`
+    #[serde(
+        rename = "stubsActive",
+        alias = "stubs_active",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub stubs_active: ::buffa::alloc::vec::Vec<StubMarker>,
     /// Wallclock ms since session started.
     ///
     /// Field 11: `emitted_at_ms`
+    #[serde(
+        rename = "emittedAtMs",
+        alias = "emitted_at_ms",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub emitted_at_ms: u32,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -493,17 +642,56 @@ impl ::buffa::ExtensionSet for Claim {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for Claim {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __CLAIM_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.Claim",
+    to_json: ::buffa::type_registry::any_to_json::<Claim>,
+    from_json: ::buffa::type_registry::any_from_json::<Claim>,
+    is_wkt: false,
+};
 /// Per-claim badge: which stubs short-circuited during this claim's
 /// emission. Persists into history so stub provenance survives even
 /// after the global registry is cleared.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct StubMarker {
     /// Field 1: `name`
+    #[serde(
+        rename = "name",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub name: ::buffa::alloc::string::String,
     /// Field 2: `reason`
+    #[serde(
+        rename = "reason",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub reason: ::buffa::alloc::string::String,
     /// Field 3: `promoted_in_ship`
+    #[serde(
+        rename = "promotedInShip",
+        alias = "promoted_in_ship",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub promoted_in_ship: u32,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -648,24 +836,79 @@ impl ::buffa::ExtensionSet for StubMarker {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for StubMarker {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __STUB_MARKER_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.StubMarker",
+    to_json: ::buffa::type_registry::any_to_json::<StubMarker>,
+    from_json: ::buffa::type_registry::any_from_json::<StubMarker>,
+    is_wkt: false,
+};
 /// Input shape the model sends when calling `emit_claim`. Matches
 /// Claim minus the runtime-stamped fields (id, session_id,
 /// emitted_at_ms, policy_verdict, stubs_active are all controlled by
 /// the runtime).
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct EmitClaimInput {
     /// Field 1: `kind`
+    #[serde(
+        rename = "kind",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
     pub kind: ::buffa::EnumValue<ClaimKind>,
     /// Field 2: `headline`
+    #[serde(
+        rename = "headline",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub headline: ::buffa::alloc::string::String,
     /// Field 3: `body_markdown`
+    #[serde(
+        rename = "bodyMarkdown",
+        alias = "body_markdown",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub body_markdown: ::buffa::alloc::string::String,
     /// Field 4: `provenance`
+    #[serde(
+        rename = "provenance",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub provenance: ::buffa::alloc::vec::Vec<super::super::shared::v1::ProvenanceRef>,
     /// Field 5: `support_numbers`
+    #[serde(
+        rename = "supportNumbers",
+        alias = "support_numbers",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub support_numbers: ::buffa::alloc::vec::Vec<super::super::shared::v1::NumberRef>,
     /// Field 6: `subgraph_slice`
+    #[serde(
+        rename = "subgraphSlice",
+        alias = "subgraph_slice",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub subgraph_slice: ::buffa::MessageField<super::super::shared::v1::SubgraphSlice>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -910,16 +1153,50 @@ impl ::buffa::ExtensionSet for EmitClaimInput {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for EmitClaimInput {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __EMIT_CLAIM_INPUT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.EmitClaimInput",
+    to_json: ::buffa::type_registry::any_to_json::<EmitClaimInput>,
+    from_json: ::buffa::type_registry::any_from_json::<EmitClaimInput>,
+    is_wkt: false,
+};
 /// Output of the `emit_claim` primitive. Returned to the model so it
 /// knows the claim was committed.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct EmitClaimOutput {
     /// Field 1: `claim_id`
+    #[serde(
+        rename = "claimId",
+        alias = "claim_id",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub claim_id: ::buffa::alloc::string::String,
     /// String form of the verdict (e.g. "approved", "retracted").
     ///
     /// Field 2: `policy`
+    #[serde(
+        rename = "policy",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub policy: ::buffa::alloc::string::String,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -1042,3 +1319,23 @@ impl ::buffa::ExtensionSet for EmitClaimOutput {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for EmitClaimOutput {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __EMIT_CLAIM_OUTPUT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.EmitClaimOutput",
+    to_json: ::buffa::type_registry::any_to_json::<EmitClaimOutput>,
+    from_json: ::buffa::type_registry::any_from_json::<EmitClaimOutput>,
+    is_wkt: false,
+};

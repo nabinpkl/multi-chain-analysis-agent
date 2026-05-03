@@ -74,4 +74,45 @@ pub mod __buffa {
         include!("multichain.wire.agent.v1.session.__ext.rs");
         include!("multichain.wire.agent.v1.sse.__ext.rs");
     }
+    /// Register this package's `Any` type entries and extension entries.
+    pub fn register_types(reg: &mut ::buffa::type_registry::TypeRegistry) {
+        reg.register_json_any(super::__POLICY_VERDICT_JSON_ANY);
+        reg.register_json_any(super::__POLICY_VERDICT_APPROVED_JSON_ANY);
+        reg.register_json_any(super::__POLICY_VERDICT_RETRACTED_JSON_ANY);
+        reg.register_json_any(super::__PATH_STEP_JSON_ANY);
+        reg.register_json_any(super::__PATH_STATE_JSON_ANY);
+        reg.register_json_any(super::__PATH_STATE_APPROVED_JSON_ANY);
+        reg.register_json_any(super::__PATH_STATE_RETRACTED_JSON_ANY);
+        reg.register_json_any(super::__PATH_STATE_NOT_APPLICABLE_JSON_ANY);
+        reg.register_json_any(super::__CLAIM_JSON_ANY);
+        reg.register_json_any(super::__STUB_MARKER_JSON_ANY);
+        reg.register_json_any(super::__EMIT_CLAIM_INPUT_JSON_ANY);
+        reg.register_json_any(super::__EMIT_CLAIM_OUTPUT_JSON_ANY);
+        reg.register_json_any(super::__CONSTITUTION_VERDICT_JSON_ANY);
+        reg.register_json_any(super::__LLM_EXTRACTION_JSON_ANY);
+        reg.register_json_any(super::__LLM_EXTRACTED_NUMBER_JSON_ANY);
+        reg.register_json_any(super::__NO_MOVEMENT_JSON_ANY);
+        reg.register_json_any(super::__CHANGED_SINCE_JSON_ANY);
+        reg.register_json_any(super::__DELTA_JSON_ANY);
+        reg.register_json_any(super::__FIELD_DELTA_JSON_ANY);
+        reg.register_json_any(super::__FIELD_CHANGE_JSON_ANY);
+        reg.register_json_any(super::__FIELD_CHANGE_NUMBER_MOVED_JSON_ANY);
+        reg.register_json_any(super::__FIELD_CHANGE_SET_CHANGED_JSON_ANY);
+        reg.register_json_any(super::__FIELD_CHANGE_COUNT_CHANGED_JSON_ANY);
+        reg.register_json_any(super::__ENTITY_REF_JSON_ANY);
+        reg.register_json_any(super::__ENTITY_REF_WALLET_JSON_ANY);
+        reg.register_json_any(super::__ENTITY_REF_EDGE_JSON_ANY);
+        reg.register_json_any(super::__ENTITY_REF_COMMUNITY_JSON_ANY);
+        reg.register_json_any(super::__VIEW_CONTEXT_JSON_ANY);
+        reg.register_json_any(super::__NARRATIVE_WITH_REFS_JSON_ANY);
+        reg.register_json_any(super::__NARRATIVE_RETRACTED_JSON_ANY);
+        reg.register_json_any(super::__AGENT_SWITCHES_JSON_ANY);
+        reg.register_json_any(super::__CROSS_CHECK_SWITCHES_JSON_ANY);
+        reg.register_json_any(super::__AGENT_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__AGENT_SESSION_STARTED_JSON_ANY);
+        reg.register_json_any(super::__AGENT_DONE_JSON_ANY);
+        reg.register_json_any(super::__PROGRESS_JSON_ANY);
+        reg.register_json_any(super::__ERROR_JSON_ANY);
+        reg.register_json_any(super::__GATE_PATH_JSON_ANY);
+    }
 }

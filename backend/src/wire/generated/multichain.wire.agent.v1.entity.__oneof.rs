@@ -42,4 +42,25 @@ pub mod entity_ref {
             Self::Some(Entity::from(v))
         }
     }
+    impl serde::Serialize for Entity {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            s: S,
+        ) -> ::core::result::Result<S::Ok, S::Error> {
+            use serde::ser::SerializeMap;
+            let mut map = s.serialize_map(Some(1))?;
+            match self {
+                Entity::Wallet(v) => {
+                    map.serialize_entry("wallet", v)?;
+                }
+                Entity::Edge(v) => {
+                    map.serialize_entry("edge", v)?;
+                }
+                Entity::Community(v) => {
+                    map.serialize_entry("community", v)?;
+                }
+            }
+            map.end()
+        }
+    }
 }

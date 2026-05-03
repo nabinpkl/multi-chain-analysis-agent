@@ -69,4 +69,32 @@ pub mod __buffa {
         include!("multichain.wire.shared.v1.primitive_envelope.__ext.rs");
         include!("multichain.wire.shared.v1.snapshot.__ext.rs");
     }
+    /// Register this package's `Any` type entries and extension entries.
+    pub fn register_types(reg: &mut ::buffa::type_registry::TypeRegistry) {
+        reg.register_json_any(super::__TIME_SCOPE_JSON_ANY);
+        reg.register_json_any(super::__LIVE_SCOPE_JSON_ANY);
+        reg.register_json_any(super::__RANGE_SCOPE_JSON_ANY);
+        reg.register_json_any(super::__COMMUNITY_SUMMARY_INPUT_JSON_ANY);
+        reg.register_json_any(super::__COMMUNITY_SUMMARY_OUTPUT_JSON_ANY);
+        reg.register_json_any(super::__TOP_WALLET_JSON_ANY);
+        reg.register_json_any(super::__PROVENANCE_REF_JSON_ANY);
+        reg.register_json_any(super::__WALLET_REF_JSON_ANY);
+        reg.register_json_any(super::__EDGE_REF_JSON_ANY);
+        reg.register_json_any(super::__COMMUNITY_REF_JSON_ANY);
+        reg.register_json_any(super::__TIME_RANGE_REF_JSON_ANY);
+        reg.register_json_any(super::__NUMBER_REF_JSON_ANY);
+        reg.register_json_any(super::__SUBGRAPH_SLICE_JSON_ANY);
+        reg.register_json_any(super::__NODE_SUMMARY_JSON_ANY);
+        reg.register_json_any(super::__EDGE_SUMMARY_JSON_ANY);
+        reg.register_json_any(super::__TIME_RANGE_JSON_ANY);
+        reg.register_json_any(super::__WALLET_PROFILE_INPUT_JSON_ANY);
+        reg.register_json_any(super::__WALLET_PROFILE_OUTPUT_JSON_ANY);
+        reg.register_json_any(super::__NODE_STATS_JSON_ANY);
+        reg.register_json_any(super::__TOP_COUNTERPARTY_JSON_ANY);
+        reg.register_json_any(super::__WALLET_PROFILE_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__COMMUNITY_SUMMARY_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__PRIMITIVE_RESPONSE_ENVELOPE_JSON_ANY);
+        reg.register_json_any(super::__SNAPSHOT_BEGIN_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__SNAPSHOT_END_REQUEST_JSON_ANY);
+    }
 }

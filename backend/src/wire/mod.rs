@@ -24,3 +24,9 @@ pub mod shared;
 // remove `shared` once consumers move over).
 #[path = "generated/mod.rs"]
 pub mod generated;
+
+// TRANSITIONAL: bridges proto-generated types  internal Rust types
+// in `crate::agent::*`. Removed in Phase C alongside the agent module.
+// See file header for rationale.
+#[path = "_proto_bridge.rs"]
+pub mod proto_bridge;

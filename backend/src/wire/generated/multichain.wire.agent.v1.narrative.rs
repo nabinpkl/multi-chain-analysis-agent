@@ -6,11 +6,24 @@
 /// from this turn's emitted Claims, concatenated provenance arrays
 /// in emission order).
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct NarrativeWithRefs {
     /// Field 1: `text`
+    #[serde(
+        rename = "text",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub text: ::buffa::alloc::string::String,
     /// Field 2: `provenance`
+    #[serde(
+        rename = "provenance",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub provenance: ::buffa::alloc::vec::Vec<super::super::shared::v1::ProvenanceRef>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -141,18 +154,56 @@ impl ::buffa::ExtensionSet for NarrativeWithRefs {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for NarrativeWithRefs {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __NARRATIVE_WITH_REFS_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.NarrativeWithRefs",
+    to_json: ::buffa::type_registry::any_to_json::<NarrativeWithRefs>,
+    from_json: ::buffa::type_registry::any_from_json::<NarrativeWithRefs>,
+    is_wkt: false,
+};
 /// Narrative the constitution gate retracted. Carries the original
 /// text alongside a friendly user-facing reason. `debug_reason` only
 /// populated when AGENT_DEBUG_PUBLIC=1 (dev-mode); absent in prod so
 /// the wire stays sterile.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct NarrativeRetracted {
     /// Field 1: `text`
+    #[serde(
+        rename = "text",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub text: ::buffa::alloc::string::String,
     /// Field 2: `reason`
+    #[serde(
+        rename = "reason",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub reason: ::buffa::alloc::string::String,
     /// Field 3: `debug_reason`
+    #[serde(
+        rename = "debugReason",
+        alias = "debug_reason",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
     pub debug_reason: ::core::option::Option<::buffa::alloc::string::String>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -303,3 +354,23 @@ impl ::buffa::ExtensionSet for NarrativeRetracted {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for NarrativeRetracted {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __NARRATIVE_RETRACTED_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.NarrativeRetracted",
+    to_json: ::buffa::type_registry::any_to_json::<NarrativeRetracted>,
+    from_json: ::buffa::type_registry::any_from_json::<NarrativeRetracted>,
+    is_wkt: false,
+};

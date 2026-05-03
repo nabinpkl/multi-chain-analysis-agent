@@ -50,4 +50,25 @@ pub mod field_change {
             Self::Some(Change::from(v))
         }
     }
+    impl serde::Serialize for Change {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            s: S,
+        ) -> ::core::result::Result<S::Ok, S::Error> {
+            use serde::ser::SerializeMap;
+            let mut map = s.serialize_map(Some(1))?;
+            match self {
+                Change::NumberMoved(v) => {
+                    map.serialize_entry("numberMoved", v)?;
+                }
+                Change::SetChanged(v) => {
+                    map.serialize_entry("setChanged", v)?;
+                }
+                Change::CountChanged(v) => {
+                    map.serialize_entry("countChanged", v)?;
+                }
+            }
+            map.end()
+        }
+    }
 }

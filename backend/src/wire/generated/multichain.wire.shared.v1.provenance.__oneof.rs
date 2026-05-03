@@ -63,4 +63,31 @@ pub mod provenance_ref {
             Self::Some(Ref::from(v))
         }
     }
+    impl serde::Serialize for Ref {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            s: S,
+        ) -> ::core::result::Result<S::Ok, S::Error> {
+            use serde::ser::SerializeMap;
+            let mut map = s.serialize_map(Some(1))?;
+            match self {
+                Ref::Wallet(v) => {
+                    map.serialize_entry("wallet", v)?;
+                }
+                Ref::Edge(v) => {
+                    map.serialize_entry("edge", v)?;
+                }
+                Ref::Community(v) => {
+                    map.serialize_entry("community", v)?;
+                }
+                Ref::TimeRange(v) => {
+                    map.serialize_entry("timeRange", v)?;
+                }
+                Ref::Number(v) => {
+                    map.serialize_entry("number", v)?;
+                }
+            }
+            map.end()
+        }
+    }
 }

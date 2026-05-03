@@ -2,98 +2,215 @@
 //! Rust data plane (port 8002) for primitive computation. Phase A of
 //! the Python-agent migration introduces the snapshot lease so the
 //! Python orchestrator can hold a consistent view across multiple
-//! primitive calls in one turn.
+//! primitive calls in one turn. Stage 1 of the proto migration wires
+//! every request/response through the proto-generated wire types.
 //!
 //! Routes:
-//! - `POST /turn/begin` -> `SnapshotBeginResponse { snapshot_id, expires_at_ms, window_secs }`
-//! - `POST /turn/end`   body `SnapshotEndRequest { snapshot_id }` -> 204
-//! - `POST /primitive/wallet_profile`    body `WalletProfileRequest`
-//! - `POST /primitive/community_summary` body `CommunitySummaryRequest`
+//! - `POST /turn/begin` -> `proto::SnapshotBeginResponse`
+//! - `POST /turn/end`   body `proto::SnapshotEndRequest` -> 204
+//! - `POST /primitive/wallet_profile`    body `proto::WalletProfileRequest`
+//! - `POST /primitive/community_summary` body `proto::CommunitySummaryRequest`
 //!
-//! Errors map to HTTP status codes and a JSON body of shape
-//! `{ "error": "...", "kind": "..." }` so the Python client can
-//! branch on the error class. Snapshot-not-found is `410 Gone` so the
-//! Python client can retry `/turn/begin`.
+//! Wire format per the AGENTS.md "Wire format per hop" matrix:
+//! - `Content-Type: application/x-protobuf`  binary protobuf (the
+//!   primary path, what Python uses in production after Stage 2).
+//! - `Content-Type: application/json`        proto canonical JSON
+//!   (curl-debuggable fallback). Driven by the same proto types
+//!   serialized via the buffa serde impls.
+//!
+//! Errors map to HTTP status codes; the body shape matches the
+//! request's wire format (binary or JSON). Snapshot-not-found is
+//! `410 Gone` so the Python client can branch on it and retry
+//! `/turn/begin`.
 
-use axum::Json;
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use serde::Serialize;
-use serde_json::{Value, json};
+use axum::body::{Body, Bytes};
+use axum::extract::{FromRequest, Request, State};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 
-use crate::agent::primitives::{community_summary, wallet_profile, PrimitiveError, PrimitiveOutput};
+use buffa::Message;
+use serde_json::json;
+
+use crate::agent::primitives::{
+    PrimitiveError, PrimitiveOutput, community_summary, wallet_profile,
+};
 use crate::agent::snapshot::{TurnSnapshot, current_time_ms};
-use crate::agent::types::ProvenanceRef;
 use crate::graph::window::window_index;
 use crate::state::AppState;
-use crate::wire::shared::{
-    CommunitySummaryRequest, SnapshotBeginResponse, SnapshotEndRequest, WalletProfileRequest,
-};
+use crate::wire::generated::multichain::wire::shared::v1 as proto;
+use crate::wire::proto_bridge::{self, BridgeError};
 
-/// Wire form of `PrimitiveOutput<T>` for Python consumption. Flattens
-/// `value`, `provenance`, `subgraph_slice` into one envelope rather
-/// than nesting under a generic.
-#[derive(Serialize)]
-struct PrimitiveResponse<T: Serialize> {
-    value: T,
-    provenance: Vec<ProvenanceRef>,
-    subgraph_slice: Option<crate::agent::types::SubgraphSlice>,
+const CT_PROTOBUF: &str = "application/x-protobuf";
+const CT_JSON: &str = "application/json";
+
+// ---------------------------------------------------------------------------
+// Wire-format negotiation. Sniff Content-Type once per request; carry
+// the choice through to the response so the client gets back what it
+// sent. The same enum drives request decode and response encode.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+enum WireFormat {
+    Protobuf,
+    Json,
 }
 
-impl<T: Serialize> From<PrimitiveOutput<T>> for PrimitiveResponse<T> {
-    fn from(out: PrimitiveOutput<T>) -> Self {
-        Self {
-            value: out.value,
-            provenance: out.provenance,
-            subgraph_slice: out.subgraph_slice,
+impl WireFormat {
+    fn from_headers(headers: &HeaderMap) -> Result<Self, Response> {
+        let ct = headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(CT_JSON);
+        // strip charset/boundary suffixes ("application/json; charset=utf-8")
+        let base = ct.split(';').next().unwrap_or("").trim();
+        match base {
+            CT_PROTOBUF => Ok(WireFormat::Protobuf),
+            CT_JSON => Ok(WireFormat::Json),
+            "" => Ok(WireFormat::Json),
+            other => Err(unsupported_media_type(other)),
         }
+    }
+
+}
+
+fn unsupported_media_type(actual: &str) -> Response {
+    let body = format!(
+        r#"{{"error":"unsupported Content-Type: {actual}; expected application/x-protobuf or application/json","kind":"unsupported_media_type"}}"#
+    );
+    (StatusCode::UNSUPPORTED_MEDIA_TYPE, Body::from(body)).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Decode + encode helpers. JSON path uses buffa's serde_json integration
+// (the `json` feature on buffa + buffa-types we enabled in Cargo.toml).
+// ---------------------------------------------------------------------------
+
+async fn read_body(req: Request) -> Result<Bytes, Response> {
+    Bytes::from_request(req, &()).await.map_err(|e| {
+        let body = format!(
+            r#"{{"error":"failed to read request body: {e}","kind":"bad_request"}}"#
+        );
+        (StatusCode::BAD_REQUEST, Body::from(body)).into_response()
+    })
+}
+
+fn decode_request<M>(format: WireFormat, body: &Bytes) -> Result<M, Response>
+where
+    M: Message + serde::de::DeserializeOwned + Default,
+{
+    match format {
+        WireFormat::Protobuf => M::decode_from_slice(body).map_err(|e| {
+            error_body(
+                StatusCode::BAD_REQUEST,
+                "decode_protobuf",
+                &format!("decode protobuf: {e}"),
+                format,
+            )
+        }),
+        WireFormat::Json => serde_json::from_slice(body).map_err(|e| {
+            error_body(
+                StatusCode::BAD_REQUEST,
+                "decode_json",
+                &format!("decode json: {e}"),
+                format,
+            )
+        }),
     }
 }
 
-/// Map `PrimitiveError` to an HTTP status + JSON body. The Python side
-/// branches on `kind` to decide whether to retry, surface to the
-/// model, or kill the turn.
-fn error_response(err: PrimitiveError) -> (StatusCode, Json<Value>) {
+fn encode_response<M>(format: WireFormat, msg: &M, status: StatusCode) -> Response
+where
+    M: Message + serde::Serialize,
+{
+    let (body, ct): (Vec<u8>, &str) = match format {
+        WireFormat::Protobuf => (msg.encode_to_vec(), CT_PROTOBUF),
+        WireFormat::Json => match serde_json::to_vec(msg) {
+            Ok(b) => (b, CT_JSON),
+            Err(e) => {
+                return error_body(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "encode_json",
+                    &format!("encode json: {e}"),
+                    format,
+                );
+            }
+        },
+    };
+    let mut resp = Response::new(Body::from(body));
+    *resp.status_mut() = status;
+    resp.headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(ct));
+    resp
+}
+
+/// Build an error response in the same wire format as the request. The
+/// JSON shape (`{"error":..., "kind":...}`) is what Python's existing
+/// `primitive_client.py` already branches on; the protobuf path uses
+/// the same shape encoded via canonical JSON for now (no proto
+/// `Status` message defined yet  follow-up if Python ever wants typed
+/// errors over the wire).
+fn error_body(status: StatusCode, kind: &str, message: &str, format: WireFormat) -> Response {
+    let payload = json!({ "error": message, "kind": kind });
+    let bytes = match format {
+        // Even on the protobuf path, errors stay JSON-encoded for
+        // shape compat with existing Python client.
+        WireFormat::Protobuf | WireFormat::Json => serde_json::to_vec(&payload).unwrap_or_default(),
+    };
+    let mut resp = Response::new(Body::from(bytes));
+    *resp.status_mut() = status;
+    resp.headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(CT_JSON));
+    let _ = format; // currently identical; reserved for typed proto Status
+    resp
+}
+
+fn primitive_error_response(err: PrimitiveError, format: WireFormat) -> Response {
     let (status, kind) = match &err {
         PrimitiveError::InvalidInput { .. } => (StatusCode::BAD_REQUEST, "invalid_input"),
         PrimitiveError::NotInWindow { .. } => (StatusCode::NOT_FOUND, "not_in_window"),
         PrimitiveError::NotImplemented { .. } => (StatusCode::NOT_IMPLEMENTED, "not_implemented"),
         PrimitiveError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
     };
-    (
-        status,
-        Json(json!({
-            "error": err.to_string(),
-            "kind": kind,
-        })),
+    error_body(status, kind, &err.to_string(), format)
+}
+
+fn bridge_error_response(err: BridgeError, format: WireFormat) -> Response {
+    error_body(StatusCode::BAD_REQUEST, "invalid_input", &err.to_string(), format)
+}
+
+fn snapshot_gone(snapshot_id: &str, format: WireFormat) -> Response {
+    error_body(
+        StatusCode::GONE,
+        "snapshot_gone",
+        &format!("snapshot_id {snapshot_id} not found or expired"),
+        format,
     )
 }
 
-/// Snapshot-not-found maps to 410 Gone so the Python client knows to
-/// retry `/turn/begin` rather than treat it as a transient 5xx.
-fn snapshot_gone(snapshot_id: &str) -> (StatusCode, Json<Value>) {
-    (
-        StatusCode::GONE,
-        Json(json!({
-            "error": format!("snapshot_id {snapshot_id} not found or expired"),
-            "kind": "snapshot_gone",
-        })),
-    )
-}
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
 
 /// `POST /turn/begin`. Materializes a `TurnSnapshot` against the live
 /// 60s window, stashes it in the cache under a fresh `snapshot_id`
 /// (ulid for sortability), returns the lease descriptor.
-pub async fn turn_begin(
-    State(state): State<AppState>,
-) -> Result<Json<SnapshotBeginResponse>, (StatusCode, Json<Value>)> {
+///
+/// Begin requests carry no body, so we don't sniff Content-Type for
+/// the request side. Response wire format defaults to JSON unless
+/// `Accept: application/x-protobuf` is set, matching how curl users
+/// expect to see the lease.
+pub async fn turn_begin(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let format = match headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(',').next().unwrap_or("").trim())
+    {
+        Some(CT_PROTOBUF) => WireFormat::Protobuf,
+        _ => WireFormat::Json,
+    };
+
     let live_window_idx = window_index(60).unwrap_or(1);
-    let analytics = state
-        .analytics
-        .snapshots[live_window_idx]
-        .borrow()
-        .clone();
+    let analytics = state.analytics.snapshots[live_window_idx].borrow().clone();
 
     let snapshot_id = ulid::Ulid::new().to_string();
     let now_ms = current_time_ms();
@@ -108,70 +225,128 @@ pub async fn turn_begin(
     let expires_at_ms = snap.expires_at_ms;
     state.snapshot_cache.insert(snap);
 
-    Ok(Json(SnapshotBeginResponse {
+    let resp = proto::SnapshotBeginResponse {
         snapshot_id,
         expires_at_ms,
         window_secs: 60,
-    }))
+        ..Default::default()
+    };
+    encode_response(format, &resp, StatusCode::OK)
 }
 
 /// `POST /turn/end`. Idempotent. Always 204 even if the snapshot was
 /// already gone (GC sweep, double-end, etc). Python should fire-and-
-/// forget this in a `finally` block and ignore the response.
-pub async fn turn_end(
-    State(state): State<AppState>,
-    Json(body): Json<SnapshotEndRequest>,
-) -> StatusCode {
-    state.snapshot_cache.remove(&body.snapshot_id);
-    StatusCode::NO_CONTENT
-}
-
-pub async fn wallet_profile_route(
-    State(state): State<AppState>,
-    Json(req): Json<WalletProfileRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let snapshot = match state.snapshot_cache.get(&req.snapshot_id) {
-        Some(s) => s,
-        None => return Err(snapshot_gone(&req.snapshot_id)),
+/// forget this in a `finally` block.
+pub async fn turn_end(State(state): State<AppState>, req: Request) -> Response {
+    let format = match WireFormat::from_headers(req.headers()) {
+        Ok(f) => f,
+        Err(e) => return e,
     };
-    match wallet_profile::compute_with_snapshot(&state, &snapshot, req.input).await {
-        Ok(out) => {
-            let resp: PrimitiveResponse<wallet_profile::WalletProfileOutput> = out.into();
-            let body = serde_json::to_value(&resp).map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": format!("serialize: {e}"), "kind": "internal" })),
-                )
-            })?;
-            Ok(Json(body))
-        }
-        Err(err) => Err(error_response(err)),
-    }
-}
-
-pub async fn community_summary_route(
-    State(state): State<AppState>,
-    Json(req): Json<CommunitySummaryRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let snapshot = match state.snapshot_cache.get(&req.snapshot_id) {
-        Some(s) => s,
-        None => return Err(snapshot_gone(&req.snapshot_id)),
+    let body = match read_body(req).await {
+        Ok(b) => b,
+        Err(e) => return e,
     };
-    match community_summary::compute_with_snapshot(&state, &snapshot, req.input).await {
-        Ok(out) => {
-            let resp: PrimitiveResponse<community_summary::CommunitySummaryOutput> = out.into();
-            let body = serde_json::to_value(&resp).map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": format!("serialize: {e}"), "kind": "internal" })),
-                )
-            })?;
-            Ok(Json(body))
-        }
-        Err(err) => Err(error_response(err)),
-    }
+    let req_msg: proto::SnapshotEndRequest = match decode_request(format, &body) {
+        Ok(m) => m,
+        Err(e) => return e,
+    };
+    state.snapshot_cache.remove(&req_msg.snapshot_id);
+    StatusCode::NO_CONTENT.into_response()
 }
 
-/// Re-export for the router. Avoids leaking individual handler names
-/// outside this module.
-pub fn _placate_unused_import(_: impl IntoResponse) {}
+pub async fn wallet_profile_route(State(state): State<AppState>, req: Request) -> Response {
+    let format = match WireFormat::from_headers(req.headers()) {
+        Ok(f) => f,
+        Err(e) => return e,
+    };
+    let body = match read_body(req).await {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    let req_msg: proto::WalletProfileRequest = match decode_request(format, &body) {
+        Ok(m) => m,
+        Err(e) => return e,
+    };
+
+    let snapshot = match state.snapshot_cache.get(&req_msg.snapshot_id) {
+        Some(s) => s,
+        None => return snapshot_gone(&req_msg.snapshot_id, format),
+    };
+
+    let input_proto = match req_msg.input.into_option() {
+        Some(i) => i,
+        None => {
+            return bridge_error_response(
+                BridgeError::MissingField("WalletProfileRequest.input"),
+                format,
+            );
+        }
+    };
+
+    let internal_input = match proto_bridge::proto_to_internal_wallet_input(input_proto) {
+        Ok(i) => i,
+        Err(e) => return bridge_error_response(e, format),
+    };
+
+    let internal_out: PrimitiveOutput<wallet_profile::WalletProfileOutput> =
+        match wallet_profile::compute_with_snapshot(&state, &snapshot, internal_input).await {
+            Ok(o) => o,
+            Err(e) => return primitive_error_response(e, format),
+        };
+
+    let envelope = match proto_bridge::build_envelope(internal_out) {
+        Ok(e) => e,
+        Err(e) => return bridge_error_response(e, format),
+    };
+
+    encode_response(format, &envelope, StatusCode::OK)
+}
+
+pub async fn community_summary_route(State(state): State<AppState>, req: Request) -> Response {
+    let format = match WireFormat::from_headers(req.headers()) {
+        Ok(f) => f,
+        Err(e) => return e,
+    };
+    let body = match read_body(req).await {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    let req_msg: proto::CommunitySummaryRequest = match decode_request(format, &body) {
+        Ok(m) => m,
+        Err(e) => return e,
+    };
+
+    let snapshot = match state.snapshot_cache.get(&req_msg.snapshot_id) {
+        Some(s) => s,
+        None => return snapshot_gone(&req_msg.snapshot_id, format),
+    };
+
+    let input_proto = match req_msg.input.into_option() {
+        Some(i) => i,
+        None => {
+            return bridge_error_response(
+                BridgeError::MissingField("CommunitySummaryRequest.input"),
+                format,
+            );
+        }
+    };
+
+    let internal_input = match proto_bridge::proto_to_internal_community_input(input_proto) {
+        Ok(i) => i,
+        Err(e) => return bridge_error_response(e, format),
+    };
+
+    let internal_out: PrimitiveOutput<community_summary::CommunitySummaryOutput> =
+        match community_summary::compute_with_snapshot(&state, &snapshot, internal_input).await {
+            Ok(o) => o,
+            Err(e) => return primitive_error_response(e, format),
+        };
+
+    let envelope = match proto_bridge::build_envelope(internal_out) {
+        Ok(e) => e,
+        Err(e) => return bridge_error_response(e, format),
+    };
+
+    encode_response(format, &envelope, StatusCode::OK)
+}
+

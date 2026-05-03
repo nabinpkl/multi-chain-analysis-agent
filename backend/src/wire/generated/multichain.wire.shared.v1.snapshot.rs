@@ -10,17 +10,38 @@
 /// Rust side may keep the snapshot slightly longer. After this time
 /// the Python client must re-`/turn/begin`.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct SnapshotBeginResponse {
     /// Field 1: `snapshot_id`
+    #[serde(
+        rename = "snapshotId",
+        alias = "snapshot_id",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub snapshot_id: ::buffa::alloc::string::String,
     /// Field 2: `expires_at_ms`
+    #[serde(
+        rename = "expiresAtMs",
+        alias = "expires_at_ms",
+        with = "::buffa::json_helpers::uint64",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u64"
+    )]
     pub expires_at_ms: u64,
     /// The window the snapshot was materialized at (matches the agent's
     /// live window). Phase A only supports 60s; future ships may add
     /// a `window_secs` field on the begin request to negotiate.
     ///
     /// Field 3: `window_secs`
+    #[serde(
+        rename = "windowSecs",
+        alias = "window_secs",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub window_secs: u32,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -160,13 +181,42 @@ impl ::buffa::ExtensionSet for SnapshotBeginResponse {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for SnapshotBeginResponse {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __SNAPSHOT_BEGIN_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.shared.v1.SnapshotBeginResponse",
+    to_json: ::buffa::type_registry::any_to_json::<SnapshotBeginResponse>,
+    from_json: ::buffa::type_registry::any_from_json::<SnapshotBeginResponse>,
+    is_wkt: false,
+};
 /// Body of `POST /turn/end`. Releases the snapshot eagerly. Optional;
 /// the GC sweep would clean it up within 5 minutes anyway, but eager
 /// release keeps the cache small for healthy turns.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct SnapshotEndRequest {
     /// Field 1: `snapshot_id`
+    #[serde(
+        rename = "snapshotId",
+        alias = "snapshot_id",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub snapshot_id: ::buffa::alloc::string::String,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -266,3 +316,23 @@ impl ::buffa::ExtensionSet for SnapshotEndRequest {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for SnapshotEndRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __SNAPSHOT_END_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.shared.v1.SnapshotEndRequest",
+    to_json: ::buffa::type_registry::any_to_json::<SnapshotEndRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<SnapshotEndRequest>,
+    is_wkt: false,
+};

@@ -4,11 +4,24 @@
 /// Lightweight progress ping. `phase` + `detail` are free-form strings
 /// the frontend can render as a status line.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct Progress {
     /// Field 1: `phase`
+    #[serde(
+        rename = "phase",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub phase: ::buffa::alloc::string::String,
     /// Field 2: `detail`
+    #[serde(
+        rename = "detail",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub detail: ::buffa::alloc::string::String,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -131,15 +144,48 @@ impl ::buffa::ExtensionSet for Progress {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for Progress {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __PROGRESS_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.Progress",
+    to_json: ::buffa::type_registry::any_to_json::<Progress>,
+    from_json: ::buffa::type_registry::any_from_json::<Progress>,
+    is_wkt: false,
+};
 /// Terminal turn-level error. The SSE handler renders this as an
 /// `error` event before the closing `done`. `debug_message` only
 /// populated when AGENT_DEBUG_PUBLIC=1.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct Error {
     /// Field 1: `message`
+    #[serde(
+        rename = "message",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub message: ::buffa::alloc::string::String,
     /// Field 2: `debug_message`
+    #[serde(
+        rename = "debugMessage",
+        alias = "debug_message",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
     pub debug_message: ::core::option::Option<::buffa::alloc::string::String>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -267,19 +313,61 @@ impl ::buffa::ExtensionSet for Error {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for Error {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __ERROR_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.Error",
+    to_json: ::buffa::type_registry::any_to_json::<Error>,
+    from_json: ::buffa::type_registry::any_from_json::<Error>,
+    is_wkt: false,
+};
 /// Full path of one channel's gate run. Emitted as `gatePath` SSE
 /// frame when AgentRequest.show_trace=true. Trace is always built
 /// and ledgered; the frame is wire-only.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct GatePath {
     /// Field 1: `channel`
+    #[serde(
+        rename = "channel",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub channel: ::buffa::alloc::string::String,
     /// Field 2: `switches`
+    #[serde(
+        rename = "switches",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub switches: ::buffa::MessageField<AgentSwitches>,
     /// Field 3: `steps`
+    #[serde(
+        rename = "steps",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub steps: ::buffa::alloc::vec::Vec<PathStep>,
     /// Field 4: `final_verdict`
+    #[serde(
+        rename = "finalVerdict",
+        alias = "final_verdict",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub final_verdict: ::buffa::MessageField<PolicyVerdict>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -476,3 +564,23 @@ impl ::buffa::ExtensionSet for GatePath {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for GatePath {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __GATE_PATH_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.GatePath",
+    to_json: ::buffa::type_registry::any_to_json::<GatePath>,
+    from_json: ::buffa::type_registry::any_from_json::<GatePath>,
+    is_wkt: false,
+};

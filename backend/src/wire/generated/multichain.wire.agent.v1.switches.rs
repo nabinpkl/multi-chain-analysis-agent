@@ -10,27 +10,53 @@
 /// If this code ever serves real end-user traffic, lock the switch
 /// surface server-side.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct AgentSwitches {
     /// Identity, scope, conduct rules. With this off, the model is
     /// whatever the underlying LLM is.
     ///
     /// Field 1: `stay_in_role`
+    #[serde(
+        rename = "stayInRole",
+        alias = "stay_in_role",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
     pub stay_in_role: bool,
     /// Numbers and entities in claims must come from real tool output.
     /// With this off, the model can invent values that no tool returned.
     ///
     /// Field 2: `dont_fabricate`
+    #[serde(
+        rename = "dontFabricate",
+        alias = "dont_fabricate",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
     pub dont_fabricate: bool,
     /// Three sub-modes of consistency check across the chain.
     ///
     /// Field 3: `cross_check`
+    #[serde(
+        rename = "crossCheck",
+        alias = "cross_check",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub cross_check: ::buffa::MessageField<CrossCheckSwitches>,
     /// Ship 4: agent recognizes repeat questions in the same thread,
     /// re-fetches the prior turn's primitives, deterministically diffs
     /// against the prior outputs, and surfaces only what changed.
     ///
     /// Field 4: `dont_repeat_yourself`
+    #[serde(
+        rename = "dontRepeatYourself",
+        alias = "dont_repeat_yourself",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
     pub dont_repeat_yourself: bool,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -200,21 +226,56 @@ impl ::buffa::ExtensionSet for AgentSwitches {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for AgentSwitches {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __AGENT_SWITCHES_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.AgentSwitches",
+    to_json: ::buffa::type_registry::any_to_json::<AgentSwitches>,
+    from_json: ::buffa::type_registry::any_from_json::<AgentSwitches>,
+    is_wkt: false,
+};
 /// Sub-modes of cross_check. Two independent toggles after ship 5a
 /// retired text_match. Both advisory in the strict merge.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct CrossCheckSwitches {
     /// LLM-driven coherence check: does the model's prose use its
     /// cited chip values consistently? Recall-based, paraphrase-robust.
     ///
     /// Field 1: `paraphrase_aware_match`
+    #[serde(
+        rename = "paraphraseAwareMatch",
+        alias = "paraphrase_aware_match",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
     pub paraphrase_aware_match: bool,
     /// Re-query the source-of-truth database, verify prose against
     /// actual data. NOT recall-based. Stub in ship 3.5; the real
     /// implementation lands in ship 5b with warehouse primitives.
     ///
     /// Field 2: `ground_truth_match`
+    #[serde(
+        rename = "groundTruthMatch",
+        alias = "ground_truth_match",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
     pub ground_truth_match: bool,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -331,3 +392,23 @@ impl ::buffa::ExtensionSet for CrossCheckSwitches {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for CrossCheckSwitches {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __CROSS_CHECK_SWITCHES_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.CrossCheckSwitches",
+    to_json: ::buffa::type_registry::any_to_json::<CrossCheckSwitches>,
+    from_json: ::buffa::type_registry::any_from_json::<CrossCheckSwitches>,
+    is_wkt: false,
+};

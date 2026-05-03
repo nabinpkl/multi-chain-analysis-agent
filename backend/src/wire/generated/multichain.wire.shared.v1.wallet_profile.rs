@@ -5,13 +5,26 @@
 /// address and a TimeScope; live arm is the current live window,
 /// range arm routes to the warehouse path (ship-5).
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct WalletProfileInput {
     /// Solana base58 pubkey.
     ///
     /// Field 1: `addr`
+    #[serde(
+        rename = "addr",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub addr: ::buffa::alloc::string::String,
     /// Field 2: `time_scope`
+    #[serde(
+        rename = "timeScope",
+        alias = "time_scope",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub time_scope: ::buffa::MessageField<TimeScope>,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -144,31 +157,86 @@ impl ::buffa::ExtensionSet for WalletProfileInput {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for WalletProfileInput {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __WALLET_PROFILE_INPUT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.shared.v1.WalletProfileInput",
+    to_json: ::buffa::type_registry::any_to_json::<WalletProfileInput>,
+    from_json: ::buffa::type_registry::any_from_json::<WalletProfileInput>,
+    is_wkt: false,
+};
 /// Output of the `wallet_profile` primitive. The agent reads this to
 /// build the profile claim.
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct WalletProfileOutput {
     /// Field 1: `addr`
+    #[serde(
+        rename = "addr",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub addr: ::buffa::alloc::string::String,
     /// Defaults to NORMAL when unclassified.
     ///
     /// Field 2: `role`
+    #[serde(
+        rename = "role",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
     pub role: ::buffa::EnumValue<NodeRole>,
     /// Stable community label (u32) reported by analytics. Zero is a
     /// valid community id; absence is signaled via the optional flag.
     ///
     /// Field 3: `community_id`
+    #[serde(
+        rename = "communityId",
+        alias = "community_id",
+        with = "::buffa::json_helpers::opt_uint32",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
     pub community_id: ::core::option::Option<u32>,
     /// Field 4: `stats`
+    #[serde(
+        rename = "stats",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
     pub stats: ::buffa::MessageField<NodeStats>,
     /// Capped at 5 by primitive impl.
     ///
     /// Field 5: `top_counterparties`
+    #[serde(
+        rename = "topCounterparties",
+        alias = "top_counterparties",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
     pub top_counterparties: ::buffa::alloc::vec::Vec<TopCounterparty>,
     /// Seconds since the wallet first appeared in the current live window.
     ///
     /// Field 6: `age_in_window_secs`
+    #[serde(
+        rename = "ageInWindowSecs",
+        alias = "age_in_window_secs",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub age_in_window_secs: u32,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -402,26 +470,90 @@ impl ::buffa::ExtensionSet for WalletProfileOutput {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for WalletProfileOutput {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __WALLET_PROFILE_OUTPUT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.shared.v1.WalletProfileOutput",
+    to_json: ::buffa::type_registry::any_to_json::<WalletProfileOutput>,
+    from_json: ::buffa::type_registry::any_from_json::<WalletProfileOutput>,
+    is_wkt: false,
+};
 /// Wire mirror of analytics::snapshot::NodeStats. Field names use the
 /// descriptive `*_volume_lamports` form so that the structural value-
 /// compare gate (policy_structural::verify_chip_values) classifies them
 /// as `UnitClass::Sol` via substring match on "volume" + "lamport".
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct NodeStats {
     /// Field 1: `degree`
+    #[serde(
+        rename = "degree",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub degree: u32,
     /// Field 2: `total_volume_lamports`
+    #[serde(
+        rename = "totalVolumeLamports",
+        alias = "total_volume_lamports",
+        with = "::buffa::json_helpers::double",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_f64"
+    )]
     pub total_volume_lamports: f64,
     /// Field 3: `in_volume_lamports`
+    #[serde(
+        rename = "inVolumeLamports",
+        alias = "in_volume_lamports",
+        with = "::buffa::json_helpers::double",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_f64"
+    )]
     pub in_volume_lamports: f64,
     /// Field 4: `out_volume_lamports`
+    #[serde(
+        rename = "outVolumeLamports",
+        alias = "out_volume_lamports",
+        with = "::buffa::json_helpers::double",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_f64"
+    )]
     pub out_volume_lamports: f64,
     /// Field 5: `bidir_volume_lamports`
+    #[serde(
+        rename = "bidirVolumeLamports",
+        alias = "bidir_volume_lamports",
+        with = "::buffa::json_helpers::double",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_f64"
+    )]
     pub bidir_volume_lamports: f64,
     /// Field 6: `sol_degree`
+    #[serde(
+        rename = "solDegree",
+        alias = "sol_degree",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub sol_degree: u32,
     /// Field 7: `spl_degree`
+    #[serde(
+        rename = "splDegree",
+        alias = "spl_degree",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
     pub spl_degree: u32,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -638,14 +770,47 @@ impl ::buffa::ExtensionSet for NodeStats {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for NodeStats {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __NODE_STATS_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.shared.v1.NodeStats",
+    to_json: ::buffa::type_registry::any_to_json::<NodeStats>,
+    from_json: ::buffa::type_registry::any_from_json::<NodeStats>,
+    is_wkt: false,
+};
 #[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
 pub struct TopCounterparty {
     /// Field 1: `addr`
+    #[serde(
+        rename = "addr",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
     pub addr: ::buffa::alloc::string::String,
     /// Lamports.
     ///
     /// Field 2: `volume`
+    #[serde(
+        rename = "volume",
+        with = "::buffa::json_helpers::double",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_f64"
+    )]
     pub volume: f64,
+    #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
@@ -765,3 +930,23 @@ impl ::buffa::ExtensionSet for TopCounterparty {
         &mut self.__buffa_unknown_fields
     }
 }
+impl ::buffa::json_helpers::ProtoElemJson for TopCounterparty {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __TOP_COUNTERPARTY_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.shared.v1.TopCounterparty",
+    to_json: ::buffa::type_registry::any_to_json::<TopCounterparty>,
+    from_json: ::buffa::type_registry::any_from_json::<TopCounterparty>,
+    is_wkt: false,
+};
