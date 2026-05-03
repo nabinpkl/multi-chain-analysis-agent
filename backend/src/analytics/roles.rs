@@ -39,7 +39,6 @@ const WHALE_DEGREE_MAX: u32 = 10;
 #[derive(
     Serialize,
     serde::Deserialize,
-    schemars::JsonSchema,
     TS,
     Clone,
     Copy,

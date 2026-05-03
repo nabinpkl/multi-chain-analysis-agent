@@ -5,15 +5,12 @@
 //! Rust types in `generated/`. Cross-language consumers regenerate from
 //! the same protos to their own languages.
 //!
-//! `proto_bridge` is a transitional adapter between the proto types and
-//! the still-alive internal Rust types in `crate::agent::*`. Phase C
-//! deletes the bridge with the agent module.
+//! `proto_bridge` converts between the generated proto types and the
+//! internal Rust shapes the compute primitives produce
+//! (`crate::primitives::types::*`). See the module header for why the
+//! indirection exists.
 
 #[path = "generated/mod.rs"]
 pub mod generated;
 
-// TRANSITIONAL: bridges proto-generated types  internal Rust types
-// in `crate::agent::*`. Removed in Phase C alongside the agent module.
-// See file header for rationale.
-#[path = "_proto_bridge.rs"]
 pub mod proto_bridge;

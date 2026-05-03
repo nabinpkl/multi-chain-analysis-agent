@@ -1,26 +1,24 @@
-//! TRANSITIONAL: bridge between proto-generated wire types
+//! Bridge between proto-generated wire types
 //! (`crate::wire::generated::multichain::wire::shared::v1::*`) and the
-//! pre-protobuf internal Rust types living under `crate::agent::*`.
+//! internal Rust shapes the compute primitives produce
+//! (`crate::primitives::types::*`). The `/primitive/*` HTTP boundary
+//! in `api::primitives` decodes proto requests, bridges to internal
+//! types, runs `compute_with_snapshot`, bridges the output back to
+//! proto for the binary-protobuf response.
 //!
-//! This module exists for exactly one reason: the Rust agent loop
-//! (`backend/src/agent/loop.rs`) still consumes the internal types and
-//! has not yet been deleted. Phase C deletes the loop and the internal
-//! types in the same commit; this whole file goes with it. Until then,
-//! the `/primitive/*` HTTP boundary in `api::primitives` decodes proto
-//! requests, bridges them to internal types so `compute_with_snapshot`
-//! can run unchanged, then bridges the internal output back to proto
-//! for the binary-protobuf response.
-//!
-//! No serde here. The proto generated types do not derive serde; their
-//! wire format is binary protobuf. JSON-fallback for curl debugging
-//! lives on a parallel path in `api::primitives` that uses the legacy
-//! serde types directly until Stage 4 deletes them.
+//! Why the indirection: the compute fns predate the proto migration
+//! and operate on hand-rolled serde structs (so they can also drive
+//! the JSON debug path through the same code). Migrating the compute
+//! fns onto proto types directly would be a clean refactor with no
+//! logic change; out of scope for Phase C. This bridge keeps the
+//! conversion in one place; nothing else in the data plane sees the
+//! internal shapes.
 
 #![allow(dead_code)] // some helpers (e.g. NodeRole reverse map) used only by one direction
 
-use crate::agent::primitives::community_summary as cs_internal;
-use crate::agent::primitives::wallet_profile as wp_internal;
-use crate::agent::types as internal;
+use crate::primitives::community_summary as cs_internal;
+use crate::primitives::wallet_profile as wp_internal;
+use crate::primitives::types as internal;
 use crate::analytics::roles::NodeRole as InternalNodeRole;
 use crate::wire::generated::multichain::wire::shared::v1 as proto;
 use crate::wire::generated::multichain::wire::shared::v1::__buffa::oneof as proto_oneof;
@@ -297,7 +295,7 @@ fn json_to_proto_struct(
 }
 
 pub fn build_envelope<T: serde::Serialize>(
-    out: crate::agent::primitives::PrimitiveOutput<T>,
+    out: crate::primitives::PrimitiveOutput<T>,
 ) -> Result<proto::PrimitiveResponseEnvelope, BridgeError> {
     let value_json = serde_json::to_value(&out.value)
         .map_err(|_| BridgeError::InvalidValue("envelope.value (serialize)"))?;

@@ -7,10 +7,6 @@ edition = "2024"
 name = "server"
 path = "src/main.rs"
 
-[[bin]]
-name = "agent_smoke"
-path = "src/bin/agent_smoke.rs"
-
 [dependencies]
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
@@ -25,32 +21,27 @@ thiserror = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 governor = "0.7"
 bs58 = "0.5"
+# `EdgeStore` trait in store/mod.rs needs async fn in trait via async-trait
+# (still the most ergonomic option pre-stable async-fn-in-trait).
 async-trait = "0.1"
 futures-util = "0.3"
 rdkafka = { version = "0.36", features = ["cmake-build", "tokio", "ssl-vendored"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 parking_lot = "0.12"
-# Snapshot lease cache (Python-agent migration phase A): per-turn
-# `WindowSnapshot` keyed by snapshot_id, GC sweep drops entries older
-# than 5 minutes. DashMap gives sharded read concurrency for the
-# primitive endpoints without locking the whole map per call.
+# Snapshot lease cache: per-turn `WindowSnapshot` keyed by snapshot_id,
+# GC sweep drops entries older than 5 minutes. DashMap gives sharded
+# read concurrency for the primitive endpoints without locking the
+# whole map per call.
 dashmap = "6"
 ts-rs = { version = "10", features = ["serde-compat"] }
 rustc-hash = "2"
 rayon = "1"
-# Agent. rig-core pinned at the version that introduces OpenRouter
-# native support with the current builder API. Pre-1.0; upgrades are
-# deliberate. async-stream backs the SSE handler; fastrand provides
-# session-id randomness; schemars provides JSON schema for tool
-# definitions; ulid for sortable claim ids.
-rig-core = "=0.36.0"
-async-stream = "0.3"
-fastrand = "2"
-schemars = "0.8"
+# Snapshot id: sortable ulid keeps the lease cache index stable and
+# greppable in logs without leaking creation timestamps.
 ulid = { version = "1", features = ["serde"] }
-sha2 = "0.10"
-# Numerical cross-check (ship 2.5): regex extracts numbers from
-# narrative + claim sources. rust-lang maintained, stable since 2014.
-regex = "1"
+# Proto wire types (Anthropic's pure-Rust protobuf with editions, JSON,
+# zero-copy views). Generated code lives in `src/wire/generated/`; the
+# `json` feature enables serde derives for the proto-canonical-JSON
+# debug fallback alongside binary protobuf.
 buffa = { version = "0.4.0", features = ["json"] }
 buffa-types = { version = "0.4.0", features = ["json"] }

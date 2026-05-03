@@ -1,16 +1,21 @@
-//! Library face of the multichain backend. Exposes the same modules
-//! `main.rs` declares so other binaries in this crate (notably
-//! `agent_smoke`) can reach them.
+//! Library face of the multichain backend (data plane). Exposes the
+//! modules the server binary declares so adjacent test binaries can
+//! reach them.
+//!
+//! Phase C deleted the `agent` module entirely. The Python agent
+//! service on `:8003` owns the agent plane end-to-end; this crate
+//! is the data plane.
 
-pub mod agent;
 pub mod analytics;
 pub mod api;
 pub mod config;
 pub mod domain;
 pub mod graph;
 pub mod ingest;
+pub mod primitives;
 pub mod rpc;
 pub mod sinks;
+pub mod snapshot;
 pub mod state;
 pub mod store;
 pub mod stream;

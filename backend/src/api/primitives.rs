@@ -31,10 +31,10 @@ use axum::response::{IntoResponse, Response};
 use buffa::Message;
 use serde_json::json;
 
-use crate::agent::primitives::{
+use crate::primitives::{
     PrimitiveError, PrimitiveOutput, community_summary, wallet_profile,
 };
-use crate::agent::snapshot::{TurnSnapshot, current_time_ms};
+use crate::snapshot::{TurnSnapshot, current_time_ms};
 use crate::graph::window::window_index;
 use crate::state::AppState;
 use crate::wire::generated::multichain::wire::shared::v1 as proto;

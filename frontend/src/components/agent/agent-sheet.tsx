@@ -9,7 +9,6 @@ import { AgentClaimList } from "./agent-claim-list";
 import { AgentInput } from "./agent-input";
 import { BuilderViewToggle } from "./builder-view-toggle";
 import { ProgressStrip } from "./progress-strip";
-import { StubBanner } from "./stub-banner";
 import { SwitchPanel } from "./switch-panel";
 
 /**
@@ -72,8 +71,6 @@ export function AgentSheet({
         </header>
 
         {builderViewOn ? <SwitchPanel /> : null}
-
-        <StubBanner enabled={open} />
 
         <ProgressStrip current={progress} active={inFlight} />
 

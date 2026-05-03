@@ -5,10 +5,10 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 
-// Modules live in the library crate so other bins (`agent_smoke`)
-// can reach them. The server binary just imports.
+// Modules live in the library crate so adjacent bins can reach them.
+// The server binary just imports.
 use multichain_engine::{
-    agent, analytics, api, config, graph, ingest, rpc, sinks, state, store, stream,
+    analytics, api, config, graph, ingest, rpc, sinks, snapshot, state, store, stream,
 };
 
 use config::Config;
@@ -29,10 +29,10 @@ async fn main() -> anyhow::Result<()> {
     store::schema::bootstrap(&state.clickhouse).await?;
     info!("clickhouse schema bootstrapped");
 
-    // Phase A of Python-agent migration: spawn the snapshot-cache GC
-    // sweep so leased turn snapshots not released within 5 min get
-    // dropped instead of leaking. Cancelled at runtime exit.
-    agent::snapshot::spawn_gc(state.snapshot_cache.clone());
+    // Spawn the snapshot-cache GC sweep so leased turn snapshots not
+    // released within 5 min get dropped instead of leaking. Cancelled
+    // at runtime exit.
+    snapshot::spawn_gc(state.snapshot_cache.clone());
     info!("snapshot cache gc spawned");
 
     let cors = if config.cors_origin == "*" {
@@ -111,14 +111,6 @@ async fn main() -> anyhow::Result<()> {
         for h in analytics_handles {
             bg_handles.push(h);
         }
-    }
-
-    // agent runtime: per phase 03/00-build-order ship-0. v0 is an idle
-    // task; the SSE handler drives the LLM round-trip directly. Future
-    // ships move the loop into this task.
-    {
-        let agent_handle = agent::Agent::spawn(state.clone(), shutdown_rx.clone());
-        bg_handles.push(agent_handle);
     }
 
     if config.solana_rpc_url.is_empty() {

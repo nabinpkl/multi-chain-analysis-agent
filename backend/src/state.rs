@@ -4,20 +4,12 @@ use clickhouse::Client;
 use parking_lot::RwLock;
 use tokio::sync::{broadcast, watch};
 
-use std::collections::HashMap;
-
-use crate::agent::{
-    AgentClient, AgentThread, BudgetGate, Ledger, OutputPolicy, PrimitiveRegistry, StubRegistry,
-};
-use crate::agent::primitives::PrimitiveBindingStore;
-use crate::agent::snapshot::SnapshotCache;
-use crate::agent::types::{AgentSwitches, Claim};
 use crate::analytics::{AnalyticsChannels, AnalyticsSnapshot};
-use crate::api::agent::AgentSessions;
 use crate::config::Config;
 use crate::graph::GraphState;
 use crate::graph::delta::GraphDelta;
 use crate::graph::window::NUM_WINDOWS;
+use crate::snapshot::SnapshotCache;
 use crate::store::EdgeStore;
 use crate::store::clickhouse_store::ClickHouseEdgeStore;
 use crate::tip::TipTracker;
@@ -50,6 +42,12 @@ impl Default for WindowChannels {
     }
 }
 
+/// Data-plane application state. Phase C dropped every agent-side
+/// field (loop, ledger, registry, policy, budget, stubs, threads,
+/// claims/bindings/switches/tool_calls per-session buffers,
+/// debug_public). The Python agent service on `:8003` owns the agent
+/// plane end-to-end; the only surface left here is what the data plane
+/// needs to serve graph + primitive routes.
 #[derive(Clone)]
 pub struct AppState {
     pub clickhouse: Client,
@@ -64,80 +62,11 @@ pub struct AppState {
     pub analytics: AnalyticsChannels,
     /// In-memory graph engine: node interner + adjacency + Union-Find.
     pub graph: Arc<RwLock<GraphState>>,
-    /// rig-backed LLM client. `None` when `AGENT_API_KEY` is unset;
-    /// agent endpoints return 503 in that case so the rest of the
-    /// server still boots and serves /graph/stream.
-    pub agent_client: Option<AgentClient>,
-    /// In-memory pending-session map for POST /agent/ask -> SSE
-    /// /agent/stream/:id handoff.
-    pub agent_sessions: AgentSessions,
-    /// Action ledger writer (per phase 04). Sync writes in v0.
-    pub agent_ledger: Ledger,
-    /// Tool registry. Built once at startup; immutable thereafter.
-    pub agent_registry: Arc<PrimitiveRegistry>,
-    /// Output-policy gate (phase 03 layer 3). v0 stub: always Approved.
-    pub agent_policy: Arc<OutputPolicy>,
-    /// Cost-rate-limit gate (phase 05). v0 stub: always Ok.
-    pub agent_budget: Arc<BudgetGate>,
-    /// Stub registry surfaced via /agent/diagnostics + the UI banner.
-    pub agent_stubs: Arc<StubRegistry>,
-    /// Per-thread message history for follow-up continuity (ship 1.5).
-    /// Backend-owned single source of truth; frontend echoes thread_id.
-    /// In-memory; named by `thread.in_memory_only` stub.
-    pub agent_threads: Arc<parking_lot::Mutex<HashMap<String, AgentThread>>>,
-    /// Per-session buffer of approved Claims emitted this turn. Ship 2
-    /// reads this in the loop driver after rig's prompt() returns so
-    /// the Narrative gate sees what the agent already cited. Drained
-    /// at end-of-turn so the map can't leak across turns. Keyed by
-    /// session_id (per-turn handle, NOT thread_id, because each turn
-    /// gets a fresh narrative gate scope).
-    pub agent_claims_emitted: Arc<parking_lot::Mutex<HashMap<String, Vec<Claim>>>>,
-    /// Ship 3 per-session primitive-binding buffer. Loop session-start
-    /// loads `thread.bindings` here keyed by session_id; each
-    /// primitive dispatch appends; emit_claim's `check_claim` and
-    /// the loop's `check_narrative` both read from it; loop
-    /// session-end writes back to `thread.bindings` and drains.
-    /// Same per-turn lifecycle pattern as `agent_claims_emitted` so
-    /// session_id is the only handle surfaces (claim emission, tool
-    /// dispatch, gate) need.
-    pub agent_bindings: Arc<parking_lot::Mutex<HashMap<String, PrimitiveBindingStore>>>,
-    /// Ship 3.5 per-session ablation switches. Loop session-start
-    /// pulls switches off the request and stores here keyed by
-    /// session_id; emit_claim's `check_claim` and the loop's
-    /// `check_narrative` both read from it; loop session-end
-    /// drains. Mirrors the `agent_bindings` pattern so primitives
-    /// only need session_id to look up gate config.
-    pub agent_switches: Arc<parking_lot::Mutex<HashMap<String, AgentSwitches>>>,
-    /// Ship 3.5 per-session `show_trace` flag. True when the
-    /// request asked for the builder view; gates whether
-    /// `SseFrame::GatePath` frames are pushed onto the SSE wire.
-    /// Path is always built and ledgered regardless; this is
-    /// wire-only.
-    pub agent_show_trace: Arc<parking_lot::Mutex<HashMap<String, bool>>>,
-    /// Ship 4 per-session tool-call recorder. The PrimitiveAdapter
-    /// appends a `TurnToolCallRecord` here for every primitive
-    /// dispatch whose `diff_spec()` is non-empty (i.e. primitives
-    /// whose outputs are replay-meaningful; emit_claim is naturally
-    /// excluded). At session end the loop drains this buffer into
-    /// `AgentThread.tool_calls_per_turn[turn]` so a future repeat-
-    /// of-this-turn can replay against fresh data. Same per-turn
-    /// lifecycle pattern as `agent_bindings`.
-    pub agent_tool_calls: Arc<
-        parking_lot::Mutex<HashMap<String, Vec<crate::agent::TurnToolCallRecord>>>,
-    >,
-    /// Ship 2.6.1 dev-mode toggle. When true, SSE error / narrative-
-    /// retracted frames carry diagnostic detail fields the frontend
-    /// renders inline. When false (prod default), wire is fully
-    /// scrubbed of internal terms (rig, OpenRouter, constitution
-    /// reasons, etc.). Driven by `AGENT_DEBUG_PUBLIC` env. Solo-dev
-    /// pattern: the UI is the only surface I check, so dev-mode
-    /// surfaces rare events on the UI itself; prod ships sterile.
-    pub agent_debug_public: bool,
-    /// Phase A of Python-agent migration: per-turn `WindowSnapshot`
-    /// lease cache. Python opens a snapshot via `POST /turn/begin`,
-    /// passes the returned `snapshot_id` on every primitive call this
-    /// turn so reads are consistent across primitives, then releases
-    /// via `POST /turn/end`. GC sweep drops anything older than 5 min.
+    /// Per-turn `WindowSnapshot` lease cache. Python opens a snapshot
+    /// via `POST /turn/begin`, passes the returned `snapshot_id` on
+    /// every primitive call this turn so reads are consistent across
+    /// primitives, then releases via `POST /turn/end`. GC sweep drops
+    /// anything older than 5 min.
     pub snapshot_cache: SnapshotCache,
 }
 
@@ -161,31 +90,6 @@ impl AppState {
         let ch_store = Arc::new(ClickHouseEdgeStore::new(clickhouse.clone()));
         let (analytics, analytics_senders) = AnalyticsChannels::new();
 
-        let agent_config = crate::agent::AgentConfig::from_env();
-        let agent_client = crate::agent::build_client(&agent_config);
-
-        // Stub registry first. Budget still registers its stub during
-        // construction (ship 4 retires it). Output policy used to
-        // register `policy.always_approve` here; ship 2 retired the
-        // stub when the cheap-model gate became real, so policy no
-        // longer touches the registry on construction.
-        // Pre-register per-primitive, thread-state, and narrative
-        // stubs so diagnostics lists them before anyone hits them.
-        let agent_stubs = StubRegistry::new();
-        // OutputPolicy accepts an Option<AgentClient>; when None the
-        // gate auto-approves at the (unreachable) call site. Keeps
-        // the AppState field non-Option so callers don't have to
-        // re-check. Ship 2.5 dropped the StubRegistry parameter when
-        // `narrative.no_numerical_crosscheck` retired.
-        let agent_policy = Arc::new(OutputPolicy::new(agent_client.clone()));
-        let agent_budget = Arc::new(BudgetGate::new(agent_stubs.clone()));
-        crate::agent::register_primitive_stubs(&agent_stubs);
-        crate::agent::register_thread_stubs(&agent_stubs);
-        // `register_narrative_stubs` retired in ship 2.5: the cross-check
-        // landed and there's no remaining narrative-gating stub to flag.
-        let agent_registry = Arc::new(crate::agent::build_registry());
-        let agent_ledger = Ledger::new(clickhouse.clone());
-
         let state = Self {
             clickhouse,
             store: ch_store,
@@ -193,20 +97,6 @@ impl AppState {
             deltas: WindowChannels::new(),
             analytics,
             graph: Arc::new(RwLock::new(GraphState::default())),
-            agent_client,
-            agent_sessions: AgentSessions::new(),
-            agent_ledger,
-            agent_registry,
-            agent_policy,
-            agent_budget,
-            agent_stubs,
-            agent_threads: Arc::new(parking_lot::Mutex::new(HashMap::new())),
-            agent_claims_emitted: Arc::new(parking_lot::Mutex::new(HashMap::new())),
-            agent_bindings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
-            agent_switches: Arc::new(parking_lot::Mutex::new(HashMap::new())),
-            agent_show_trace: Arc::new(parking_lot::Mutex::new(HashMap::new())),
-            agent_tool_calls: Arc::new(parking_lot::Mutex::new(HashMap::new())),
-            agent_debug_public: agent_config.debug_public,
             snapshot_cache: SnapshotCache::new(),
         };
         (state, analytics_senders)
