@@ -43,7 +43,7 @@ def _consume_sse(test_app, session_id: str) -> list[dict]:
 def test_turn_begin_called_once_per_turn(test_app, with_happy_path_primitives):
     """Happy path: agent runs, begin hit once, end hit once."""
     test_model = TestModel(call_tools=[])  # no tool calls; agent just emits final
-    with app.state.agent.override(model=test_model):
+    with app.state.handles.primary_agent.override(model=test_model):
         ask = test_app.post(
             "/agent/ask",
             json=canned.make_ask_payload("Profile this wallet"),
@@ -70,7 +70,7 @@ def test_turn_end_carries_lease_id(test_app, with_happy_path_primitives):
     from multichain.wire.shared.v1 import snapshot_pb2 as snap_pb
 
     test_model = TestModel(call_tools=[])
-    with app.state.agent.override(model=test_model):
+    with app.state.handles.primary_agent.override(model=test_model):
         ask = test_app.post("/agent/ask", json=canned.make_ask_payload("q")).json()
         _consume_sse(test_app, ask["sessionId"])
 
@@ -92,7 +92,7 @@ def test_primitive_calls_carry_lease_id(test_app, with_happy_path_primitives):
     from multichain.wire.shared.v1 import primitive_envelope_pb2 as env_pb
 
     test_model = TestModel(call_tools=["wallet_profile"])
-    with app.state.agent.override(model=test_model):
+    with app.state.handles.primary_agent.override(model=test_model):
         ask = test_app.post("/agent/ask", json=canned.make_ask_payload("q")).json()
         _consume_sse(test_app, ask["sessionId"])
 
@@ -130,7 +130,7 @@ def test_turn_end_fires_even_when_agent_raises(test_app, mock_data_plane, monkey
     async def _boom(*args, **kwargs):
         raise RuntimeError("simulated mid-turn failure")
 
-    monkeypatch.setattr(app.state.agent, "run", _boom)
+    monkeypatch.setattr(app.state.handles.primary_agent, "run", _boom)
 
     ask = test_app.post("/agent/ask", json=canned.make_ask_payload("q")).json()
     events = _consume_sse(test_app, ask["sessionId"])

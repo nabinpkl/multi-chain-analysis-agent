@@ -105,9 +105,17 @@ services:
       # Rust data plane URL (intra-compose hostname).
       - DATA_PLANE_URL=http://api:8002
       # AGENT_API_KEY (OpenRouter) is sourced from the project .env above.
+      # Phase II: Python owns the agent_ledger writes; intra-compose
+      # hostname for ClickHouse (HTTP port 8123 default).
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_HTTP_PORT=8123
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
     depends_on:
       api:
         condition: service_started
+      clickhouse:
+        condition: service_healthy
     restart: unless-stopped
 
   tunnel:

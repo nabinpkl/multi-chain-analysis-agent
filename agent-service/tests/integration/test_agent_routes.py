@@ -49,19 +49,29 @@ def test_stream_unknown_session_returns_404(test_app):
     assert resp.status_code == 404
 
 
-def test_ask_rejects_missing_focus(test_app):
-    """A request that parses cleanly but has no focus must hit the
-    Phase 0/A walking-skeleton 400 from `_focus_addr_or_die`. Sending
-    an empty body parses to a default AgentRequest with no focus set."""
+def test_ask_rejects_missing_context(test_app):
+    """Phase II requires a `context` block. Without it the loop driver
+    has no view-context to wrap into the user prompt; reject early so
+    the error is synchronous, not a delayed SSE error frame."""
     resp = test_app.post("/agent/ask", json={"userQuestion": "q"})
     assert resp.status_code == 400
 
 
-def test_ask_rejects_non_wallet_focus(test_app):
-    """Phase 0/A walking-skeleton requires a wallet focus. Edge or
-    community focus is a synchronous 400 (not a delayed SSE error
-    frame). Phase II will broaden this."""
+def test_ask_rejects_empty_question(test_app):
+    """Empty `userQuestion` is a synchronous 400. Loop driver would have
+    nothing to send to the model otherwise."""
+    payload = canned.make_ask_payload()
+    payload["userQuestion"] = "   "
+    resp = test_app.post("/agent/ask", json=payload)
+    assert resp.status_code == 400
+
+
+def test_ask_accepts_non_wallet_focus(test_app):
+    """Phase II broadened the walking-skeleton restriction. The model
+    sees focus via the `<context>` block; community/edge focuses flow
+    through unchanged. The walking-skeleton hard-coded wallet
+    requirement is gone."""
     payload = canned.make_ask_payload()
     payload["context"]["focus"] = {"community": {"id": 8}}
     resp = test_app.post("/agent/ask", json=payload)
-    assert resp.status_code == 400
+    assert resp.status_code == 200
