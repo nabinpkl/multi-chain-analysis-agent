@@ -1,30 +1,31 @@
-import { create } from "zustand";
-import type { AgentSwitches } from "@/lib/generated/AgentSwitches";
+import { create as createStore } from "zustand";
+import { create } from "@bufbuild/protobuf";
+
+import {
+  AgentSwitchesSchema,
+  CrossCheckSwitchesSchema,
+  type AgentSwitches,
+} from "@/lib/wire/multichain/wire/agent/v1/switches_pb";
 
 /**
- * Ship 3.5 ablation switches + Ship 4 dont_repeat_yourself + Ship 5a
+ * Ship 3.5 ablation switches + Ship 4 dontRepeatYourself + Ship 5a
  * citation-discipline gate refactor + builder-view toggle.
  *
  * Each switch is a behavior contract; flipping it off turns off
  * the corresponding guardrail or capability. See
- * `docs/architecture/switches.md` for what each switch does and
- * which code paths currently realize it.
+ * `docs/architecture/switches.md`.
  *
  * Ship 5a removed `text_match` (regex-on-prose factuality check;
  * brittle on paraphrase + unicode). The structural placeholder +
- * value-compare gates under `dont_fabricate` carry the load-bearing
- * factuality role. `paraphrase_aware_match` survives but is reframed
+ * value-compare gates under `dontFabricate` carry the load-bearing
+ * factuality role. `paraphraseAwareMatch` survives but is reframed
  * from "factuality" to "coherence" and is advisory in the merge.
  *
  * `builderViewOn` controls whether the dual-view UI is rendered
- * (panel + trace timeline) and drives the wire's `show_trace`
+ * (panel + trace timeline) and drives the wire's `showTrace`
  * field so the backend skips emitting `GatePath` frames when
  * casual visitors aren't looking. Default: false; visitors land
  * on the clean customer view first.
- *
- * Presets are switch combinations describing "kinds of agent" a
- * visitor can construct. Each preset adds one behavior on top of
- * the previous so the panel reads as a layered story.
  */
 
 export type PresetId =
@@ -42,106 +43,109 @@ export interface PresetMeta {
   switches: AgentSwitches;
 }
 
+function makeSwitches(opts: {
+  stayInRole: boolean;
+  dontFabricate: boolean;
+  paraphraseAwareMatch: boolean;
+  groundTruthMatch: boolean;
+  dontRepeatYourself: boolean;
+}): AgentSwitches {
+  return create(AgentSwitchesSchema, {
+    stayInRole: opts.stayInRole,
+    dontFabricate: opts.dontFabricate,
+    crossCheck: create(CrossCheckSwitchesSchema, {
+      paraphraseAwareMatch: opts.paraphraseAwareMatch,
+      groundTruthMatch: opts.groundTruthMatch,
+    }),
+    dontRepeatYourself: opts.dontRepeatYourself,
+  });
+}
+
 export const PRESETS: PresetMeta[] = [
   {
     id: "raw-llm",
     label: "raw LLM",
     description:
       "Nothing on. Model is just an LLM (will write Python, name itself, fabricate values, repeat itself).",
-    switches: {
-      stay_in_role: false,
-      dont_fabricate: false,
-      cross_check: {
-        paraphrase_aware_match: false,
-        ground_truth_match: false,
-      },
-      dont_repeat_yourself: false,
-    },
+    switches: makeSwitches({
+      stayInRole: false,
+      dontFabricate: false,
+      paraphraseAwareMatch: false,
+      groundTruthMatch: false,
+      dontRepeatYourself: false,
+    }),
   },
   {
     id: "agent-without-grounding",
     label: "agent without grounding",
     description:
       "Stay-in-role on. Now a domain agent that declines off-topic. Still can fabricate; still re-states everything on repeat.",
-    switches: {
-      stay_in_role: true,
-      dont_fabricate: false,
-      cross_check: {
-        paraphrase_aware_match: false,
-        ground_truth_match: false,
-      },
-      dont_repeat_yourself: false,
-    },
+    switches: makeSwitches({
+      stayInRole: true,
+      dontFabricate: false,
+      paraphraseAwareMatch: false,
+      groundTruthMatch: false,
+      dontRepeatYourself: false,
+    }),
   },
   {
     id: "non-fabricating-agent",
     label: "non-fabricating agent",
     description:
       "Add don't-fabricate. Every chip in the claim's prose must resolve to a provenance entry, and every cited Number value must trace to real tool output.",
-    switches: {
-      stay_in_role: true,
-      dont_fabricate: true,
-      cross_check: {
-        paraphrase_aware_match: false,
-        ground_truth_match: false,
-      },
-      dont_repeat_yourself: false,
-    },
+    switches: makeSwitches({
+      stayInRole: true,
+      dontFabricate: true,
+      paraphraseAwareMatch: false,
+      groundTruthMatch: false,
+      dontRepeatYourself: false,
+    }),
   },
   {
     id: "with-paraphrase-cross-check",
     label: "+ paraphrase coherence",
     description:
       "Add paraphrase-aware coherence advisory. LLM extractor surfaces prose-vs-citation drift in the trace; advisory only, doesn't drive wire verdict.",
-    switches: {
-      stay_in_role: true,
-      dont_fabricate: true,
-      cross_check: {
-        paraphrase_aware_match: true,
-        ground_truth_match: false,
-      },
-      dont_repeat_yourself: false,
-    },
+    switches: makeSwitches({
+      stayInRole: true,
+      dontFabricate: true,
+      paraphraseAwareMatch: true,
+      groundTruthMatch: false,
+      dontRepeatYourself: false,
+    }),
   },
   {
     id: "with-dont-repeat-yourself",
     label: "+ don't repeat yourself (production)",
     description:
       "Add don't-repeat-yourself. On a repeat question, agent re-fetches and surfaces only what changed since the prior turn instead of restating the whole answer. Current production default.",
-    switches: {
-      stay_in_role: true,
-      dont_fabricate: true,
-      cross_check: {
-        paraphrase_aware_match: true,
-        ground_truth_match: false,
-      },
-      dont_repeat_yourself: true,
-    },
+    switches: makeSwitches({
+      stayInRole: true,
+      dontFabricate: true,
+      paraphraseAwareMatch: true,
+      groundTruthMatch: false,
+      dontRepeatYourself: true,
+    }),
   },
   {
     id: "with-ground-truth",
     label: "+ ground-truth cross-check (future)",
     description:
       "Add ground-truth match. Re-queries database; not implemented yet (lands in ship 5b).",
-    switches: {
-      stay_in_role: true,
-      dont_fabricate: true,
-      cross_check: {
-        paraphrase_aware_match: true,
-        ground_truth_match: true,
-      },
-      dont_repeat_yourself: true,
-    },
+    switches: makeSwitches({
+      stayInRole: true,
+      dontFabricate: true,
+      paraphraseAwareMatch: true,
+      groundTruthMatch: true,
+      dontRepeatYourself: true,
+    }),
   },
 ];
 
 interface AgentSwitchesStore {
-  /** Current switch state. Defaults reproduce the production
-   * preset (stay_in_role + dont_fabricate + paraphrase
-   * + dont_repeat_yourself; ground-truth off because it's a stub). */
+  /** Current switch state. Defaults reproduce the production preset. */
   switches: AgentSwitches;
-  /** Builder-view toggle. False = customer-only single column.
-   * True = panel + dual columns + GatePath frames on wire. */
+  /** Builder-view toggle. False = customer-only single column. */
   builderViewOn: boolean;
   setBuilderViewOn: (on: boolean) => void;
   setSwitch: (key: SwitchKey, on: boolean) => void;
@@ -149,15 +153,15 @@ interface AgentSwitchesStore {
 }
 
 export type SwitchKey =
-  | "stay_in_role"
-  | "dont_fabricate"
-  | "cross_check.paraphrase_aware_match"
-  | "cross_check.ground_truth_match"
-  | "dont_repeat_yourself";
+  | "stayInRole"
+  | "dontFabricate"
+  | "crossCheck.paraphraseAwareMatch"
+  | "crossCheck.groundTruthMatch"
+  | "dontRepeatYourself";
 
 const PRODUCTION_PRESET = PRESETS.find((p) => p.id === "with-dont-repeat-yourself")!;
 
-export const useAgentSwitches = create<AgentSwitchesStore>((set) => ({
+export const useAgentSwitches = createStore<AgentSwitchesStore>((set) => ({
   switches: PRODUCTION_PRESET.switches,
   builderViewOn: false,
   setBuilderViewOn: (builderViewOn) => set({ builderViewOn }),
@@ -175,19 +179,41 @@ function applySwitchKey(
   key: SwitchKey,
   on: boolean,
 ): AgentSwitches {
+  // Reconstruct from explicit fields rather than spreading `s` (which
+  // would carry the `$typeName` literal type and conflict with create's
+  // init shape on the cross_check sub-message).
+  const cross = s.crossCheck;
+  const base = {
+    stayInRole: s.stayInRole,
+    dontFabricate: s.dontFabricate,
+    dontRepeatYourself: s.dontRepeatYourself,
+    crossCheck: create(CrossCheckSwitchesSchema, {
+      paraphraseAwareMatch: cross?.paraphraseAwareMatch ?? false,
+      groundTruthMatch: cross?.groundTruthMatch ?? false,
+    }),
+  };
   switch (key) {
-    case "stay_in_role":
-      return { ...s, stay_in_role: on };
-    case "dont_fabricate":
-      return { ...s, dont_fabricate: on };
-    case "cross_check.paraphrase_aware_match":
-      return {
-        ...s,
-        cross_check: { ...s.cross_check, paraphrase_aware_match: on },
-      };
-    case "cross_check.ground_truth_match":
-      return { ...s, cross_check: { ...s.cross_check, ground_truth_match: on } };
-    case "dont_repeat_yourself":
-      return { ...s, dont_repeat_yourself: on };
+    case "stayInRole":
+      return create(AgentSwitchesSchema, { ...base, stayInRole: on });
+    case "dontFabricate":
+      return create(AgentSwitchesSchema, { ...base, dontFabricate: on });
+    case "crossCheck.paraphraseAwareMatch":
+      return create(AgentSwitchesSchema, {
+        ...base,
+        crossCheck: create(CrossCheckSwitchesSchema, {
+          paraphraseAwareMatch: on,
+          groundTruthMatch: cross?.groundTruthMatch ?? false,
+        }),
+      });
+    case "crossCheck.groundTruthMatch":
+      return create(AgentSwitchesSchema, {
+        ...base,
+        crossCheck: create(CrossCheckSwitchesSchema, {
+          paraphraseAwareMatch: cross?.paraphraseAwareMatch ?? false,
+          groundTruthMatch: on,
+        }),
+      });
+    case "dontRepeatYourself":
+      return create(AgentSwitchesSchema, { ...base, dontRepeatYourself: on });
   }
 }

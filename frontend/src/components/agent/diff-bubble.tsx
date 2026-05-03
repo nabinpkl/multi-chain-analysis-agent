@@ -1,11 +1,13 @@
 "use client";
 
-import type { ChangedSince } from "@/lib/generated/ChangedSince";
-import type { FieldDelta } from "@/lib/generated/FieldDelta";
-import type { NoMovement } from "@/lib/generated/NoMovement";
+import type {
+  ChangedSince,
+  FieldDelta,
+  NoMovement,
+} from "@/lib/wire/multichain/wire/agent/v1/diff_pb";
 
 /**
- * Ship 4 diff bubble (`dont_repeat_yourself` switch). Renders when
+ * Ship 4 diff bubble (`dontRepeatYourself` switch). Renders when
  * the agent recognized a repeat question, re-fetched the prior
  * turn's primitives, and either produced no change or a typed
  * delta. Mutually exclusive with the regular claim card + narrative
@@ -16,8 +18,7 @@ import type { NoMovement } from "@/lib/generated/NoMovement";
  *  - changed-since: small narrative + chip list of changed fields
  *
  * Both render a "scroll to turn N" anchor that jumps to the prior
- * turn's DOM node (id=`turn-anchor-N`). Helps the user verify what
- * was originally answered without scrolling manually.
+ * turn's DOM node (id=`turn-anchor-N`).
  */
 export function DiffBubble({
   diffReply,
@@ -45,8 +46,8 @@ function NoMovementBubble({
   payload: NoMovement;
   onScrollToTurn: (turn: number) => void;
 }) {
-  const list = payload.primitives_replayed.length
-    ? payload.primitives_replayed.join(", ")
+  const list = payload.primitivesReplayed.length
+    ? payload.primitivesReplayed.join(", ")
     : "no primitives replayed";
   return (
     <div className="border border-mca-border rounded bg-mca-surface px-3 py-2 space-y-1.5">
@@ -54,11 +55,11 @@ function NoMovementBubble({
         <span className="text-[0.55rem] uppercase tracking-[1.5px] text-mca-muted">
           no movement
         </span>
-        <ScrollToTurnChip turn={payload.prior_turn} onClick={onScrollToTurn} />
+        <ScrollToTurnChip turn={payload.priorTurn} onClick={onScrollToTurn} />
       </div>
       <p className="text-[0.75rem] text-mca-text leading-snug">
         Re-checked {list}. Nothing has shifted since turn{" "}
-        <span className="tabular-nums">{payload.prior_turn + 1}</span>.
+        <span className="tabular-nums">{payload.priorTurn + 1}</span>.
       </p>
     </div>
   );
@@ -71,24 +72,25 @@ function ChangedSinceBubble({
   payload: ChangedSince;
   onScrollToTurn: (turn: number) => void;
 }) {
+  const changedCount = payload.delta?.changed.length ?? 0;
+  const unchangedCount = payload.delta?.unchangedFieldCount ?? 0;
   return (
     <div className="border border-mca-border rounded bg-mca-surface px-3 py-2 space-y-2">
       <div className="flex items-center justify-between gap-2">
         <span className="text-[0.55rem] uppercase tracking-[1.5px] text-mca-muted">
           changed since turn{" "}
-          <span className="tabular-nums">{payload.prior_turn + 1}</span>
+          <span className="tabular-nums">{payload.priorTurn + 1}</span>
         </span>
-        <ScrollToTurnChip turn={payload.prior_turn} onClick={onScrollToTurn} />
+        <ScrollToTurnChip turn={payload.priorTurn} onClick={onScrollToTurn} />
       </div>
       <p className="text-[0.75rem] text-mca-text leading-snug whitespace-pre-line">
         {payload.prose}
       </p>
-      {payload.delta.changed.length > 0 ? (
-        <DeltaChipList changed={payload.delta.changed} />
+      {changedCount > 0 ? (
+        <DeltaChipList changed={payload.delta?.changed ?? []} />
       ) : null}
       <p className="text-[0.55rem] uppercase tracking-[1px] text-mca-dim">
-        {payload.delta.changed.length} changed ·{" "}
-        {payload.delta.unchanged_field_count} unchanged
+        {changedCount} changed · {unchangedCount} unchanged
       </p>
     </div>
   );
@@ -99,11 +101,11 @@ function DeltaChipList({ changed }: { changed: FieldDelta[] }) {
     <ul className="flex flex-wrap gap-1.5">
       {changed.map((d, i) => (
         <li
-          key={`${d.primitive}.${d.field_path}.${i}`}
+          key={`${d.primitive}.${d.fieldPath}.${i}`}
           className="text-[0.6rem] tabular-nums border border-mca-border rounded px-1.5 py-0.5 text-mca-text bg-mca-bg"
-          title={`${d.primitive}.${d.field_path}`}
+          title={`${d.primitive}.${d.fieldPath}`}
         >
-          <span className="text-mca-dim">{d.field_path}</span>{" "}
+          <span className="text-mca-dim">{d.fieldPath}</span>{" "}
           <DeltaChipValue change={d.change} />
         </li>
       ))}
@@ -112,31 +114,39 @@ function DeltaChipList({ changed }: { changed: FieldDelta[] }) {
 }
 
 function DeltaChipValue({ change }: { change: FieldDelta["change"] }) {
-  switch (change.kind) {
-    case "number_moved": {
-      const pctSign = change.pct >= 0 ? "+" : "";
+  const inner = change?.change;
+  switch (inner?.case) {
+    case "numberMoved": {
+      const v = inner.value;
+      const pctSign = v.pct >= 0 ? "+" : "";
       return (
         <span className="text-mca-accent">
-          {fmtNum(change.prior)} → {fmtNum(change.current)}{" "}
+          {fmtNum(v.prior)} → {fmtNum(v.current)}{" "}
           <span className="text-mca-dim">
             ({pctSign}
-            {(change.pct * 100).toFixed(1)}%)
+            {(v.pct * 100).toFixed(1)}%)
           </span>
         </span>
       );
     }
-    case "count_changed":
+    case "countChanged": {
+      const v = inner.value;
       return (
         <span className="text-mca-accent">
-          {fmtNum(change.prior)} → {fmtNum(change.current)}
+          {fmtNum(v.prior)} → {fmtNum(v.current)}
         </span>
       );
-    case "set_changed":
+    }
+    case "setChanged": {
+      const v = inner.value;
       return (
         <span className="text-mca-accent">
-          +{change.added.length} / −{change.removed.length}
+          +{v.added.length} / −{v.removed.length}
         </span>
       );
+    }
+    default:
+      return null;
   }
 }
 

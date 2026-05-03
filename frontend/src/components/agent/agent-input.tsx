@@ -1,17 +1,28 @@
 "use client";
 
 import { useState, type FormEvent, type KeyboardEvent } from "react";
+import { create } from "@bufbuild/protobuf";
+
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useGraphFocus } from "@/stores/use-graph-focus";
 import { useAgentSwitches } from "@/stores/use-agent-switches";
-import type { AgentRequest } from "@/lib/generated/AgentRequest";
+import {
+  AgentRequestSchema,
+  type AgentRequest,
+} from "@/lib/wire/multichain/wire/agent/v1/session_pb";
+import {
+  EntityRefSchema,
+  EntityRefWalletSchema,
+  ViewContextSchema,
+} from "@/lib/wire/multichain/wire/agent/v1/entity_pb";
 import type { AgentStatus } from "@/hooks/use-agent-stream";
 
 /**
  * Input form for the agent. Reads focus + selection from
- * `useGraphFocus` on submit, builds an `AgentRequest`, hands off to
- * the parent's `onSend`. Disabled while a question is in flight.
+ * `useGraphFocus` on submit, builds an `AgentRequest` proto, hands
+ * off to the parent's `onSend`. Disabled while a question is in
+ * flight.
  */
 export function AgentInput({
   onSend,
@@ -34,35 +45,48 @@ export function AgentInput({
     e?.preventDefault();
     const trimmed = text.trim();
     if (!trimmed || inFlight) return;
-    // `thread_id` is overwritten by `useAgentStream` with the
-    // currently-tracked threadId before POST. We send null here as a
-    // safe default that satisfies the typed shape.
+    // `threadId` is set by `useAgentStream` from the currently-tracked
+    // thread; we leave it unset here.
     //
-    // Ship 3.5: switches + show_trace come from the per-page
-    // zustand store. `show_trace` mirrors the builder-view toggle
-    // so the backend skips emitting GatePath frames for casual
-    // visitors (clean wire by default).
-    const request: AgentRequest = {
-      user_question: trimmed,
-      context: {
-        live_window_secs: liveWindowSecs,
-        focus: focusedAddr ? { kind: "wallet", id: focusedAddr } : null,
-        selection: selection.map((addr) => ({ kind: "wallet" as const, id: addr })),
-      },
-      thread_id: null,
+    // Ship 3.5: switches + showTrace come from the per-page zustand
+    // store. `showTrace` mirrors the builder-view toggle so the backend
+    // skips emitting GatePath frames for casual visitors.
+    const focusRef = focusedAddr
+      ? create(EntityRefSchema, {
+          entity: {
+            case: "wallet",
+            value: create(EntityRefWalletSchema, { id: focusedAddr }),
+          },
+        })
+      : undefined;
+    const selectionRefs = selection.map((addr) =>
+      create(EntityRefSchema, {
+        entity: {
+          case: "wallet",
+          value: create(EntityRefWalletSchema, { id: addr }),
+        },
+      }),
+    );
+    const request = create(AgentRequestSchema, {
+      userQuestion: trimmed,
+      context: create(ViewContextSchema, {
+        liveWindowSecs,
+        focus: focusRef,
+        selection: selectionRefs,
+      }),
       switches,
-      show_trace: builderViewOn,
-    };
+      showTrace: builderViewOn,
+    });
     onSend(request);
     setText("");
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Standard chat UX: plain Enter sends, Shift+Enter inserts a
-    // newline. Cmd/Ctrl+Enter also sends (muscle memory from the
-    // earlier UX) so existing users don't get a regression. IME
-    // composition (e.isComposing) is excluded so non-Latin input
-    // methods can use Enter to confirm composition without sending.
+    // newline. Cmd/Ctrl+Enter also sends so existing users don't
+    // get a regression. IME composition is excluded so non-Latin
+    // input methods can use Enter to confirm composition without
+    // sending.
     if (
       e.key === "Enter" &&
       !e.shiftKey &&

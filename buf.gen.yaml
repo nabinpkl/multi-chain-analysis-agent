@@ -28,7 +28,7 @@ plugins:
     out: frontend/src/lib/wire
     opt:
       - target=ts
-      # Use proto field names verbatim in generated TS (we embraced
-      # camelCase by writing snake_case proto fields and letting the
-      # default canonical JSON conversion happen on the wire).
-      - import_extension=js
+      # Drop the import extension. Next.js's bundler resolution doesn't
+      # follow the `.js` -> `.ts` convention out of the box; the bare
+      # form works in both Node ESM and Next bundler contexts.
+      - import_extension=none

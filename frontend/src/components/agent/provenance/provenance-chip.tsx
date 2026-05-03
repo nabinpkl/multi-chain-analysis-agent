@@ -1,12 +1,12 @@
 "use client";
 
-import type { ProvenanceRef } from "@/lib/generated/ProvenanceRef";
+import type { ProvenanceRef } from "@/lib/wire/multichain/wire/shared/v1/provenance_pb";
 import { useGraphFocus } from "@/stores/use-graph-focus";
 import { cn } from "@/lib/utils";
 
 /**
  * Renders a single provenance ref as a chip. Per the locked
- * render-surface derivation (plan + phase 03):
+ * render-surface derivation:
  *
  *   ref shape                                  -> surface
  *   ----------------------------------------------------------
@@ -17,9 +17,8 @@ import { cn } from "@/lib/utils";
  *   TimeRange                                  -> inline time chip
  *   Number                                     -> inline metric chip
  *
- * v0 implements live wallet focus on click; the others render as
- * inline non-interactive chips. Ship 5 wires the modal; ship 3 adds
- * edge / community highlight.
+ * `refValue.ref` is the proto oneof: `{ case: "wallet", value: WalletRef }`
+ * etc. Switch on `case`.
  */
 export function ProvenanceChip({
   refValue,
@@ -33,19 +32,16 @@ export function ProvenanceChip({
   onModalRequest?: () => void;
 }) {
   const setFocus = useGraphFocus((s) => s.setFocus);
+  const ref = refValue.ref;
 
-  switch (refValue.kind) {
+  switch (ref.case) {
     case "wallet": {
-      // The primitive output knows `idx` from the snapshot; the model's
-      // emit_claim payload does not (the model has no NodeIdx access).
-      // v0 treats any non-empty addr as a live ref; if Sigma's graph
-      // doesn't contain the node at click time, setFocus is a harmless
-      // no-op. Ship 5 tightens this by populating `idx` server-side on
-      // every Wallet provenance ref the runtime stamps.
-      const isLiveRef = refValue.idx !== null || refValue.addr.length > 0;
+      const wallet = ref.value;
+      // Bufbuild leaves optional uint32 as undefined when not present.
+      const isLiveRef = wallet.idx !== undefined || wallet.addr.length > 0;
       const handleClick = () => {
         if (isLiveRef) {
-          setFocus(refValue.addr);
+          setFocus(wallet.addr);
         } else {
           onModalRequest?.();
         }
@@ -54,7 +50,7 @@ export function ProvenanceChip({
         <button
           type="button"
           onClick={handleClick}
-          title={refValue.addr}
+          title={wallet.addr}
           className={cn(
             "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[0.65rem] tabular-nums border align-baseline transition-colors",
             isLiveRef
@@ -64,43 +60,49 @@ export function ProvenanceChip({
           )}
         >
           <span className="opacity-50">w</span>
-          {abbreviate(refValue.addr)}
+          {abbreviate(wallet.addr)}
         </button>
       );
     }
-    case "edge":
+    case "edge": {
+      const edge = ref.value;
       return (
         <span
-          title={`edge ${refValue.id}`}
+          title={`edge ${edge.id}`}
           className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[0.65rem] tabular-nums border border-mca-border text-mca-muted align-baseline"
         >
           <span className="opacity-50">e</span>
-          {refValue.id.slice(0, 8)}
+          {edge.id.slice(0, 8)}
         </span>
       );
+    }
     case "community":
       return (
         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[0.65rem] tabular-nums border border-mca-border text-mca-text align-baseline">
-          <span className="opacity-50">c</span>#{refValue.id}
+          <span className="opacity-50">c</span>#{ref.value.id}
         </span>
       );
-    case "time-range":
+    case "timeRange": {
+      const tr = ref.value;
       return (
         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[0.65rem] tabular-nums border border-mca-border text-mca-muted align-baseline">
           <span className="opacity-50">t</span>
-          {formatRange(refValue.from_s, refValue.to_s)}
+          {formatRange(tr.fromS, tr.toS)}
         </span>
       );
-    case "number":
+    }
+    case "number": {
+      const n = ref.value;
       return (
         <span
-          title={`${refValue.metric}: ${refValue.value}`}
+          title={`${n.metric}: ${n.value}`}
           className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[0.65rem] tabular-nums border border-mca-border text-mca-text align-baseline"
         >
-          <span className="opacity-50">{refValue.metric}</span>
-          {formatValue(refValue.value)}
+          <span className="opacity-50">{n.metric}</span>
+          {formatValue(n.value)}
         </span>
       );
+    }
     default:
       return null;
   }

@@ -27,14 +27,14 @@ export function SwitchPanel() {
         <ToggleRow
           label="stay in role"
           tooltip="Keeps the agent focused on chain analysis. With this on it declines off-topic questions, won't write code, won't give financial advice, and won't pretend to be a different model. Turn it off to talk to the underlying LLM directly."
-          on={switches.stay_in_role}
-          onChange={(on) => setSwitch("stay_in_role", on)}
+          on={switches.stayInRole}
+          onChange={(on) => setSwitch("stayInRole", on)}
         />
         <ToggleRow
           label="don't fabricate"
           tooltip="Every number cited in an answer must trace back to data the agent actually fetched from the chain. With this on it can't invent values that look plausible but aren't real. Turn it off and the agent may make up numbers no tool actually returned."
-          on={switches.dont_fabricate}
-          onChange={(on) => setSwitch("dont_fabricate", on)}
+          on={switches.dontFabricate}
+          onChange={(on) => setSwitch("dontFabricate", on)}
         />
       </div>
 
@@ -46,17 +46,17 @@ export function SwitchPanel() {
           <ToggleRow
             label="paraphrase coherence"
             tooltip="A second pass reads the agent's prose and flags places where the words don't fit the data chip next to them (for example, 'a lot' next to a chip showing 1). Advisory only: it shows in the trace, doesn't block answers."
-            on={switches.cross_check.paraphrase_aware_match}
+            on={switches.crossCheck?.paraphraseAwareMatch ?? false}
             onChange={(on) =>
-              setSwitch("cross_check.paraphrase_aware_match", on)
+              setSwitch("crossCheck.paraphraseAwareMatch", on)
             }
           />
           <ToggleRow
             label="ground-truth match"
             tooltip="Re-checks every cited number directly against the live database, not just against what the agent's own tool call returned. Catches the case where a tool gave back stale or wrong data. Not active yet."
             sublabel="coming soon"
-            on={switches.cross_check.ground_truth_match}
-            onChange={(on) => setSwitch("cross_check.ground_truth_match", on)}
+            on={switches.crossCheck?.groundTruthMatch ?? false}
+            onChange={(on) => setSwitch("crossCheck.groundTruthMatch", on)}
           />
         </div>
       </div>
@@ -65,8 +65,8 @@ export function SwitchPanel() {
         <ToggleRow
           label="don't repeat yourself"
           tooltip="When you ask about the same wallet again, the agent re-fetches the data and tells you only what changed since last time. Live data keeps moving, so re-stating the whole answer would hide real movement."
-          on={switches.dont_repeat_yourself}
-          onChange={(on) => setSwitch("dont_repeat_yourself", on)}
+          on={switches.dontRepeatYourself}
+          onChange={(on) => setSwitch("dontRepeatYourself", on)}
         />
       </div>
 

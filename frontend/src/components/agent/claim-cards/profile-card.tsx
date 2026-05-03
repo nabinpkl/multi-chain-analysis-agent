@@ -1,13 +1,12 @@
 "use client";
 
-import type { Claim } from "@/lib/generated/Claim";
+import type { Claim } from "@/lib/wire/multichain/wire/agent/v1/claim_pb";
 import { renderTextWithRefs } from "./render-with-refs";
 
 /**
- * Renders a `ClaimKind = Profile` card. Splits `body_markdown` on the
+ * Renders a `ClaimKind = Profile` card. Splits `bodyMarkdown` on the
  * `${ref:N}` placeholders and inlines the corresponding provenance
- * chip in place via the shared `renderTextWithRefs` helper (also
- * used by the narrative bubble in ship 5a).
+ * chip in place via the shared `renderTextWithRefs` helper.
  */
 export function ProfileCard({
   claim,
@@ -16,7 +15,7 @@ export function ProfileCard({
   claim: Claim;
   onModalRequest: () => void;
 }) {
-  const isRetracted = claim.policy_verdict.verdict === "retracted";
+  const isRetracted = claim.policyVerdict?.verdict.case === "retracted";
   return (
     <div
       className={
@@ -29,18 +28,18 @@ export function ProfileCard({
           profile
         </span>
         <span className="text-[0.6rem] tabular-nums text-mca-dim">
-          {claim.emitted_at_ms}ms
+          {claim.emittedAtMs}ms
         </span>
       </div>
       <h3 className="text-sm text-mca-text leading-snug font-medium">
         {claim.headline}
       </h3>
       <p className="text-sm text-mca-text leading-relaxed">
-        {renderTextWithRefs(claim.body_markdown, claim.provenance, onModalRequest)}
+        {renderTextWithRefs(claim.bodyMarkdown, claim.provenance, onModalRequest)}
       </p>
-      {claim.stubs_active.length > 0 ? (
+      {claim.stubsActive.length > 0 ? (
         <p className="text-[0.6rem] uppercase tracking-[1.5px] text-amber-500/80 pt-1 border-t border-mca-border">
-          via stubs: {claim.stubs_active.map((s) => shortName(s.name)).join(", ")}
+          via stubs: {claim.stubsActive.map((s) => shortName(s.name)).join(", ")}
         </p>
       ) : null}
     </div>

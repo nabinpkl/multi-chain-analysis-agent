@@ -1,21 +1,48 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AgentRequest } from "@/lib/generated/AgentRequest";
-import type { AgentSessionStarted } from "@/lib/generated/AgentSessionStarted";
-import type { Claim } from "@/lib/generated/Claim";
-import type { AgentDone } from "@/lib/generated/AgentDone";
-import type { ChangedSince } from "@/lib/generated/ChangedSince";
-import type { GatePath } from "@/lib/generated/GatePath";
-import type { NarrativeWithRefs } from "@/lib/generated/NarrativeWithRefs";
-import type { NoMovement } from "@/lib/generated/NoMovement";
-import type { ProvenanceRef } from "@/lib/generated/ProvenanceRef";
+import { create, fromJsonString, toJsonString } from "@bufbuild/protobuf";
+
+import {
+  AgentDoneSchema,
+  AgentRequestSchema,
+  AgentSessionStartedSchema,
+  type AgentRequest,
+  type AgentSessionStarted,
+} from "@/lib/wire/multichain/wire/agent/v1/session_pb";
+import {
+  ClaimSchema,
+  type Claim,
+} from "@/lib/wire/multichain/wire/agent/v1/claim_pb";
+import {
+  ChangedSinceSchema,
+  NoMovementSchema,
+  type ChangedSince,
+  type NoMovement,
+} from "@/lib/wire/multichain/wire/agent/v1/diff_pb";
+import {
+  GatePathSchema,
+  type GatePath,
+} from "@/lib/wire/multichain/wire/agent/v1/sse_pb";
+import {
+  NarrativeRetractedSchema,
+  NarrativeWithRefsSchema,
+} from "@/lib/wire/multichain/wire/agent/v1/narrative_pb";
+import { type ProvenanceRef } from "@/lib/wire/multichain/wire/shared/v1/provenance_pb";
+
 import type { ProgressEvent } from "@/components/agent/progress-strip";
 
-const DEFAULT_API_URL = "http://localhost:8002";
+const DEFAULT_AGENT_URL = "http://localhost:8003";
 
-function apiUrl(): string {
-  return process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_URL;
+/**
+ * Python agent service hosts every `/agent/*` route. Per the AGENTS.md
+ * "Wire format per hop" matrix the browser hop is proto canonical JSON
+ * (camelCase, oneof case as the wrapping key). The Rust data plane on
+ * `NEXT_PUBLIC_API_URL` still serves graph data and never talks to the
+ * agent.
+ */
+function agentUrl(): string {
+  return process.env.NEXT_PUBLIC_AGENT_URL || DEFAULT_AGENT_URL;
 }
 
 export type AgentStatus =
@@ -34,18 +61,11 @@ export type AgentStatus =
  * renders in struck-through amber styling instead of normal prose.
  *
  * Ship 2.6.1: `*Debug*` fields carry diagnostic detail when the
- * backend is started with `AGENT_DEBUG_PUBLIC=1`. The frontend renders
- * them inline as a small monospace block under the user-facing text
- * so the dev sees rare events on the UI itself (the only surface the
- * solo dev naturally checks). In prod the backend never populates
- * these fields, so they're always null.
+ * backend is started with `AGENT_DEBUG_PUBLIC=1`.
  *
  * A turn may carry any combination: claim only, narrative only, both,
  * a retracted narrative, or nothing (the Done-fallback flags the last
  * case as errored so the spinner doesn't hang).
- *
- * Pending = nothing yet: claim, narrative, retraction, and error all
- * null. The "thinking..." placeholder renders only while pending.
  */
 export interface ChatTurn {
   id: string;
@@ -58,8 +78,6 @@ export interface ChatTurn {
    * this turn's emitted Claims (concatenated provenance arrays in
    * emission order). The narrative bubble passes this to
    * `renderTextWithRefs` to substitute `${ref:N}` chips inline.
-   * Empty when the model emitted no audit chips (descriptive-only
-   * narrative).
    */
   narrativeProvenance: ProvenanceRef[];
   narrativeRetractedReason: string | null;
@@ -68,18 +86,12 @@ export interface ChatTurn {
   errorDebug: string | null;
   /**
    * Ship 3.5 builder-view trace. Only populated when the request
-   * was sent with `show_trace: true`. One entry per channel
-   * (claim / narrative); a turn may have either, both, or
-   * neither.
+   * was sent with `showTrace: true`.
    */
   gatePaths: GatePath[];
   /**
-   * Ship 4 `dont_repeat_yourself` payload. Mutually exclusive
-   * with the normal claim/narrative path (a turn that took the
-   * diff path has diffReply set and claim/narrative null). The
-   * renderer uses this to show "no movement since turn N" or
-   * "changed since turn N: X" bubble in place of the regular
-   * claim/narrative.
+   * Ship 4 `dontRepeatYourself` payload. Mutually exclusive with
+   * the normal claim/narrative path.
    */
   diffReply:
     | { kind: "no-movement"; payload: NoMovement }
@@ -92,12 +104,9 @@ export interface ChatTurn {
  *
  * Per ship 1.5: each `ask()` either starts a fresh thread (no
  * `currentThreadId`) or continues an existing one (echoes the stored
- * id). The backend mints/echoes a `thread_id` on the POST response;
+ * id). The backend mints/echoes a `threadId` on the POST response;
  * we keep it across turns. `reset()` clears it ("new" button); page
  * refresh drops it (component unmount).
- *
- * Lifted to `graph-page.tsx` so the hook state survives the agent
- * sheet closing + reopening.
  */
 export function useAgentStream() {
   const [status, setStatus] = useState<AgentStatus>({ kind: "idle" });
@@ -131,13 +140,12 @@ export function useAgentStream() {
       setProgress(null);
 
       // Optimistically push the user's turn so the UI shows their
-      // message immediately. The matching claim slots in below it as
-      // soon as the SSE stream produces it; until then, the turn
-      // renders a "thinking..." placeholder.
+      // message immediately. The matching claim slots in below as
+      // soon as the SSE stream produces it.
       const turnId = `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const newTurn: ChatTurn = {
         id: turnId,
-        userText: request.user_question,
+        userText: request.userQuestion,
         sentAtMs: Date.now(),
         claim: null,
         narrative: null,
@@ -152,17 +160,17 @@ export function useAgentStream() {
       setTurns((prev) => [...prev, newTurn]);
       setStatus({ kind: "sending" });
 
-      const requestWithThread: AgentRequest = {
+      const requestWithThread = create(AgentRequestSchema, {
         ...request,
-        thread_id: threadId,
-      };
+        threadId: threadId ?? undefined,
+      });
 
       let sessionStart: AgentSessionStarted;
       try {
-        const res = await fetch(`${apiUrl()}/agent/ask`, {
+        const res = await fetch(`${agentUrl()}/agent/ask`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(requestWithThread),
+          body: toJsonString(AgentRequestSchema, requestWithThread),
         });
         if (!res.ok) {
           const message = await res.text();
@@ -173,7 +181,7 @@ export function useAgentStream() {
           });
           return;
         }
-        sessionStart = (await res.json()) as AgentSessionStarted;
+        sessionStart = fromJsonString(AgentSessionStartedSchema, await res.text());
       } catch (e) {
         const msg = `ask failed: ${e instanceof Error ? e.message : String(e)}`;
         markTurnError(turnId, msg);
@@ -181,22 +189,18 @@ export function useAgentStream() {
         return;
       }
 
-      const sessionId = sessionStart.session_id;
-      setThreadId(sessionStart.thread_id);
+      const sessionId = sessionStart.sessionId;
+      setThreadId(sessionStart.threadId);
       setTurn(sessionStart.turn);
       setStatus({ kind: "streaming", sessionId });
 
-      const es = new EventSource(`${apiUrl()}/agent/stream/${sessionId}`);
+      const es = new EventSource(`${agentUrl()}/agent/stream/${sessionId}`);
       eventSourceRef.current = es;
 
       es.addEventListener("Claim", (ev) => {
         const data = (ev as MessageEvent<string>).data;
         try {
-          const claim = JSON.parse(data) as Claim;
-          // Attach the claim to this turn (the latest pending one).
-          // If multiple Claim events arrive for the same turn (a
-          // future possibility), only the first attaches; subsequent
-          // claims would need a list shape, which we don't have yet.
+          const claim = fromJsonString(ClaimSchema, data);
           setTurns((prev) => {
             const idx = prev.findIndex((t) => t.id === turnId);
             if (idx === -1) return prev;
@@ -214,6 +218,9 @@ export function useAgentStream() {
       es.addEventListener("Progress", (ev) => {
         const data = (ev as MessageEvent<string>).data;
         try {
+          // Progress is a tiny wire shape ({phase, detail}); the
+          // ProgressEvent UI type accepts any string phase, so a
+          // direct JSON.parse is fine here.
           const evt = JSON.parse(data) as ProgressEvent;
           setProgress(evt);
         } catch {
@@ -224,10 +231,7 @@ export function useAgentStream() {
       es.addEventListener("Narrative", (ev) => {
         const data = (ev as MessageEvent<string>).data;
         try {
-          // Ship 5a wire shape: NarrativeWithRefs { text, provenance }.
-          // `provenance` is the assembled typed citation array used
-          // by the bubble to render `${ref:N}` chips.
-          const parsed = JSON.parse(data) as Partial<NarrativeWithRefs>;
+          const parsed = fromJsonString(NarrativeWithRefsSchema, data);
           const text = parsed.text ?? "";
           const provenance = parsed.provenance ?? [];
           if (!text) return;
@@ -235,9 +239,7 @@ export function useAgentStream() {
             const idx = prev.findIndex((t) => t.id === turnId);
             if (idx === -1) return prev;
             const next = prev.slice();
-            // First Narrative wins for a turn. Future ships could
-            // append (a streamed-token shape), but ship 1.6 sends
-            // one frame per turn.
+            // First Narrative wins for a turn.
             if (next[idx].narrative === null) {
               next[idx] = {
                 ...next[idx],
@@ -255,14 +257,10 @@ export function useAgentStream() {
       es.addEventListener("NarrativeRetracted", (ev) => {
         const data = (ev as MessageEvent<string>).data;
         try {
-          const parsed = JSON.parse(data) as {
-            text?: string;
-            reason?: string;
-            debug_reason?: string;
-          };
+          const parsed = fromJsonString(NarrativeRetractedSchema, data);
           const text = parsed.text ?? "";
-          const reason = parsed.reason ?? "Interpretation withheld.";
-          const debugReason = parsed.debug_reason ?? null;
+          const reason = parsed.reason || "Interpretation withheld.";
+          const debugReason = parsed.debugReason ?? null;
           if (!text) return;
           setTurns((prev) => {
             const idx = prev.findIndex((t) => t.id === turnId);
@@ -288,12 +286,16 @@ export function useAgentStream() {
         let msg = "Couldn't produce a valid response. Try rephrasing or try again.";
         let debug: string | null = null;
         try {
+          // Error frames may also be naive JSON {"error","kind"}
+          // (Python proxies the Rust error shape). Tolerate both.
           const parsed = JSON.parse(data) as {
             message?: string;
-            debug_message?: string;
+            debugMessage?: string;
+            error?: string;
           };
           if (parsed.message) msg = parsed.message;
-          if (parsed.debug_message) debug = parsed.debug_message;
+          else if (parsed.error) msg = parsed.error;
+          if (parsed.debugMessage) debug = parsed.debugMessage;
         } catch {
           // keep defaults
         }
@@ -303,7 +305,7 @@ export function useAgentStream() {
       es.addEventListener("GatePath", (ev) => {
         const data = (ev as MessageEvent<string>).data;
         try {
-          const path = JSON.parse(data) as GatePath;
+          const path = fromJsonString(GatePathSchema, data);
           setTurns((prev) => {
             const idx = prev.findIndex((t) => t.id === turnId);
             if (idx === -1) return prev;
@@ -322,13 +324,11 @@ export function useAgentStream() {
       es.addEventListener("NoMovement", (ev) => {
         const data = (ev as MessageEvent<string>).data;
         try {
-          const payload = JSON.parse(data) as NoMovement;
+          const payload = fromJsonString(NoMovementSchema, data);
           setTurns((prev) => {
             const idx = prev.findIndex((t) => t.id === turnId);
             if (idx === -1) return prev;
             const next = prev.slice();
-            // Only attach if no diffReply yet AND this turn hasn't
-            // already rendered a regular claim/narrative.
             if (next[idx].diffReply === null) {
               next[idx] = {
                 ...next[idx],
@@ -345,7 +345,7 @@ export function useAgentStream() {
       es.addEventListener("ChangedSince", (ev) => {
         const data = (ev as MessageEvent<string>).data;
         try {
-          const payload = JSON.parse(data) as ChangedSince;
+          const payload = fromJsonString(ChangedSinceSchema, data);
           setTurns((prev) => {
             const idx = prev.findIndex((t) => t.id === turnId);
             if (idx === -1) return prev;
@@ -366,21 +366,17 @@ export function useAgentStream() {
       es.addEventListener("Done", (ev) => {
         const data = (ev as MessageEvent<string>).data;
         try {
-          const done = JSON.parse(data) as AgentDone;
+          const done = fromJsonString(AgentDoneSchema, data);
           setStatus({
             kind: "done",
-            sessionId: done.session_id,
-            elapsedMs: done.elapsed_ms,
+            sessionId: done.sessionId,
+            elapsedMs: done.elapsedMs,
           });
         } catch {
           setStatus({ kind: "done", sessionId, elapsedMs: 0 });
         }
-        // Defensive: if the loop ended without emitting anything at
-        // all (no Claim, no Narrative) and no explicit Error frame,
-        // the turn would otherwise hang on "thinking..." forever.
-        // Mark it errored so the user sees something. Narrative-only
-        // turns are valid (interpretive replies) and short-circuit
-        // here.
+        // Defensive: if the loop ended without emitting anything,
+        // mark the turn errored so the spinner doesn't hang.
         setTurns((prev) => {
           const idx = prev.findIndex((t) => t.id === turnId);
           if (idx === -1) return prev;

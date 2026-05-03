@@ -1,6 +1,6 @@
 "use client";
 
-import type { Claim } from "@/lib/generated/Claim";
+import type { Claim } from "@/lib/wire/multichain/wire/agent/v1/claim_pb";
 import { ProfileCard } from "./profile-card";
 
 /**
@@ -30,13 +30,14 @@ export function PulseCard(props: { claim: Claim; onModalRequest: () => void }) {
 }
 
 /**
- * Renderer for claims with `policy_verdict = Retracted`. Ship 2
- * starts producing these. The styling is intentionally distinct
+ * Renderer for claims with `policyVerdict.verdict.case = "retracted"`.
+ * Ship 2 starts producing these. The styling is intentionally distinct
  * (greyed, struck-through headline) so the user sees the retraction
  * while still having the chance to read why.
  */
 export function RetractedCard({ claim }: { claim: Claim }) {
-  if (claim.policy_verdict.verdict !== "retracted") return null;
+  const verdict = claim.policyVerdict?.verdict;
+  if (verdict?.case !== "retracted") return null;
   return (
     <div className="border border-amber-500/40 rounded-md p-3 bg-amber-500/5 space-y-2 opacity-80">
       <div className="flex items-baseline justify-between gap-2">
@@ -44,13 +45,13 @@ export function RetractedCard({ claim }: { claim: Claim }) {
           retracted
         </span>
         <span className="text-[0.6rem] tabular-nums text-mca-dim">
-          {claim.emitted_at_ms}ms
+          {claim.emittedAtMs}ms
         </span>
       </div>
       <h3 className="text-sm text-mca-muted line-through">{claim.headline}</h3>
       <p className="text-xs text-mca-muted leading-relaxed">
         Output policy retracted this claim:{" "}
-        <span className="text-mca-text">{claim.policy_verdict.reason}</span>
+        <span className="text-mca-text">{verdict.value.reason}</span>
       </p>
     </div>
   );

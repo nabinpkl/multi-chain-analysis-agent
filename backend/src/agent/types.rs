@@ -1,12 +1,18 @@
-//! Wire types shared between agent backend and frontend. All exported via
-//! ts-rs to `frontend/src/lib/generated/` so the boundary is type-safe.
+//! Internal wire types for the dying Rust agent loop. Phase C deletes
+//! this whole module along with `loop.rs`, `client.rs`, and the
+//! primitive Input/Output structs that consume these as field types.
 //!
-//! These are the locked-in wire shapes per the ship-1 plan. Future
-//! ships consume them as additions only, never modifications.
+//! Cross-language wire shapes now live in `proto/multichain/wire/` and
+//! are generated to TS via `@bufbuild/protoc-gen-es`. The frontend
+//! consumes the proto types directly (`@/lib/wire/multichain/...`).
+//!
+//! `JsonSchema` derives stay because the primitive Input types in
+//! `agent/primitives/` derive `JsonSchema` for rig's tool-arg schema,
+//! and they reference these as field types (e.g. `WalletProfileInput
+//! { time_scope: TimeScope }`). Phase C deletes both together.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 // ============================================================================
 // Agent request / context
@@ -22,8 +28,7 @@ use ts_rs::TS;
 /// in-memory thread (per ship 1.5). Refreshing the page or clicking
 /// "new" clears the frontend's stored thread_id; the orphaned backend
 /// thread is named by the `thread.in_memory_only` stub.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AgentRequest {
     pub user_question: String,
     pub context: ViewContext,
@@ -54,8 +59,7 @@ pub struct AgentRequest {
 /// contribute code that realizes a single switch (the switch is
 /// the API surface, not the implementation). See
 /// `docs/architecture/switches.md` for the implementation map.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AgentSwitches {
     /// Identity, scope, conduct rules. With this off, the model
     /// is whatever the underlying LLM is. Realized today by the
@@ -98,8 +102,7 @@ fn default_true() -> bool {
 /// chip verification under `dont_fabricate`); `paraphrase_aware_match`
 /// surfaces coherence issues, `ground_truth_match` is the ship 5b
 /// stub for warehouse re-query.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CrossCheckSwitches {
     /// LLM-driven coherence check: does the model's prose use its
     /// cited chip values consistently? Recall-based, paraphrase-
@@ -152,8 +155,7 @@ impl Default for CrossCheckSwitches {
 /// in `policy.rs` as each switch's leg runs (or skips). The
 /// frontend's builder view renders these as a vertical timeline
 /// inside `GatePathTimeline.tsx`.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PathStep {
     /// Dotted stage id. Examples:
     /// - `"claim.stay_in_role"`
@@ -175,9 +177,8 @@ pub struct PathStep {
 /// the wire / frontend types live together; `SubVerdict` stays
 /// the working type inside `policy.rs`. `From<SubVerdict>`
 /// lives in policy.rs.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "state", rename_all = "snake_case")]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
 pub enum PathState {
     Approved,
     Retracted { reason: String },
@@ -186,8 +187,7 @@ pub enum PathState {
 
 /// Full path of a single channel's gate run. Emitted as
 /// `SseFrame::GatePath` when `AgentRequest.show_trace=true`.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct GatePath {
     pub channel: String,
     pub switches: AgentSwitches,
@@ -195,17 +195,15 @@ pub struct GatePath {
     pub final_verdict: PolicyVerdict,
 }
 
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ViewContext {
     pub live_window_secs: u32,
     pub focus: Option<EntityRef>,
     pub selection: Vec<EntityRef>,
 }
 
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "kind", content = "id", rename_all = "kebab-case")]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
 pub enum EntityRef {
     Wallet(String),
     Edge(String),
@@ -215,8 +213,7 @@ pub enum EntityRef {
 /// `session_id` is per-turn (drives the SSE GET, ledger row group).
 /// `thread_id` is the persistent conversation handle the frontend
 /// stores and echoes back on follow-up sends.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AgentSessionStarted {
     pub session_id: String,
     pub thread_id: String,
@@ -227,8 +224,7 @@ pub struct AgentSessionStarted {
 
 /// Final SSE event for a session. `elapsed_ms` is u32 (caps at ~50d,
 /// plenty) to dodge the bigint serialization headache.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AgentDone {
     pub session_id: String,
     pub elapsed_ms: u32,
@@ -240,8 +236,7 @@ pub struct AgentDone {
 
 /// Streamed analytical statement. The body uses `${ref:N}` placeholders
 /// the frontend replaces with interactive chips at render time.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Claim {
     /// ULID, sortable by emission order.
     pub id: String,
@@ -268,9 +263,8 @@ pub struct Claim {
 /// Closed enum: the renderer dispatches to per-kind cards. New variants
 /// require a deliberate change. v0 only emits `Profile`; the rest exist
 /// so ships 3/5/7 fill them without later refactor.
-#[derive(Serialize, Deserialize, JsonSchema, TS, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
 pub enum ClaimKind {
     Profile,
     Pattern,
@@ -282,9 +276,8 @@ pub enum ClaimKind {
 /// Tagged reference back to a graph entity. The frontend's render-surface
 /// derivation picks live highlight, modal, or inline chip based on the
 /// ref shape (see plan: "Frontend render-surface derivation rule").
-#[derive(Serialize, Deserialize, JsonSchema, TS, Debug, Clone)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
 pub enum ProvenanceRef {
     /// `idx` is None when the wallet is not in the current live window
     /// (route to subgraph modal instead of live-graph chip).
@@ -303,8 +296,7 @@ pub enum ProvenanceRef {
     },
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct NumberRef {
     pub metric: String,
     pub value: f64,
@@ -313,31 +305,27 @@ pub struct NumberRef {
 /// Self-contained subgraph rendered on its own canvas in a modal.
 /// Used by ship-5 for historical results that don't share layout
 /// state with the live graph.
-#[derive(Serialize, Deserialize, JsonSchema, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct SubgraphSlice {
     pub nodes: Vec<NodeSummary>,
     pub edges: Vec<EdgeSummary>,
     pub time_range: Option<TimeRangeWire>,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct NodeSummary {
     pub addr: String,
     pub role: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct EdgeSummary {
     pub src: String,
     pub dst: String,
     pub volume: f64,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, TS, Debug, Clone, Copy)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy)]
 pub struct TimeRangeWire {
     pub from_s: u32,
     pub to_s: u32,
@@ -346,9 +334,8 @@ pub struct TimeRangeWire {
 /// Output-policy verdict (phase 03 layer 3). v0 is always Approved
 /// because the policy gate is stubbed; ship 2 starts producing
 /// `Retracted`.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "verdict", rename_all = "kebab-case")]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
 pub enum PolicyVerdict {
     Approved,
     Retracted { reason: String },
@@ -361,8 +348,7 @@ pub enum PolicyVerdict {
 /// Per-claim badge: which stubs short-circuited during this claim's
 /// emission. Persists into the claim history so stub provenance is
 /// not lost when the global registry is later cleared.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct StubMarker {
     pub name: String,
     pub reason: String,
@@ -379,9 +365,8 @@ pub struct StubMarker {
 /// `Range` as `{"range": {"from_s": ..., "to_s": ...}}`. The
 /// internally-tagged form was tried first and the model misinterpreted
 /// the schema, sending strings where objects were expected.
-#[derive(Serialize, Deserialize, TS, JsonSchema, Debug, Clone)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[serde(rename_all = "kebab-case")]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
 pub enum TimeScope {
     /// Current rolling live window.
     Live,
@@ -390,9 +375,8 @@ pub enum TimeScope {
 }
 
 /// Primitive data source family per D-5.
-#[derive(Serialize, Deserialize, TS, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
 pub enum DataSource {
     Live,
     Warehouse,
@@ -400,9 +384,8 @@ pub enum DataSource {
 }
 
 /// Cost-class tag on each primitive. Ship-4's budget gate reads this.
-#[derive(Serialize, Deserialize, TS, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
 pub enum CostClass {
     Cheap,
     Moderate,
@@ -425,8 +408,7 @@ pub enum CostClass {
 /// them. Now they classify as Sol consistently end-to-end: primitive
 /// JSON output, the model's `${ref:N}` Number provenance, and the
 /// gate's lookup all use the same unit-class taxonomy.
-#[derive(Serialize, Deserialize, JsonSchema, TS, Debug, Clone, Copy, Default)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, Default)]
 pub struct NodeStatsWire {
     pub degree: u32,
     pub total_volume_lamports: f64,
@@ -468,8 +450,7 @@ impl From<&crate::analytics::snapshot::NodeStats> for NodeStatsWire {
 /// freshly re-fetched output. Field paths are dotted (e.g. `"stats.volume"`,
 /// `"top_counterparties"`); the diff walker emits one entry per changed
 /// field-class match in the per-primitive `diff_spec`.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FieldDelta {
     /// Dotted path within the primitive output (e.g.
     /// `"stats.in_volume_lamports"`, `"top_counterparties"`).
@@ -486,9 +467,8 @@ pub struct FieldDelta {
 /// Shape of a single field's change. Three variants matching the diff
 /// walker's `FieldKind` strategies (Number, EntitySet, Count). The
 /// `Ignore` strategy never produces a `FieldChange`.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
 pub enum FieldChange {
     /// Numeric field outside per-class tolerance. `pct` is the
     /// signed percent change (current - prior) / prior, or 0.0
@@ -515,8 +495,7 @@ pub enum FieldChange {
 /// to short-circuit when empty). `unchanged_field_count` is for the
 /// builder-view chip "2 changed / 4 unchanged"; only the structurally
 /// changed fields surface as `FieldDelta` entries.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Delta {
     pub changed: Vec<FieldDelta>,
     pub unchanged_field_count: u32,
@@ -527,8 +506,7 @@ pub struct Delta {
 /// structural changes. No LLM narrative call happens on this path;
 /// the bubble exists so the user sees closure ("we covered this in
 /// turn N, no movement since") rather than silence.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NoMovement {
     pub prior_turn: u32,
     /// Primitive names re-fetched and confirmed unchanged. Used by
@@ -542,8 +520,7 @@ pub struct NoMovement {
 /// typed `Delta` + a small narrative call's prose describing only
 /// what shifted since the prior turn. Both ship together so the
 /// frontend can render either the prose or the structured chips.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ChangedSince {
     pub prior_turn: u32,
     pub delta: Delta,
@@ -570,8 +547,7 @@ pub struct ChangedSince {
 /// `SseFrame::Narrative { text: String }` shape so the frontend has
 /// the typed ProvenanceRef array it needs to render `${ref:N}` chips.
 /// AGENTS.md "no compat layers" applies; the old shape is gone.
-#[derive(Serialize, Deserialize, TS, Debug, Clone)]
-#[ts(export, export_to = "../../frontend/src/lib/generated/")]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NarrativeWithRefs {
     /// Free-form narrative text. May contain inline `${ref:N}` tokens
     /// the renderer resolves against `provenance`.

@@ -1,7 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import type { Claim } from "@/lib/generated/Claim";
+import {
+  ClaimKind,
+  type Claim,
+} from "@/lib/wire/multichain/wire/agent/v1/claim_pb";
 import type { AgentStatus, ChatTurn } from "@/hooks/use-agent-stream";
 import { useAgentSwitches } from "@/stores/use-agent-switches";
 import { ProfileCard } from "./claim-cards/profile-card";
@@ -49,10 +52,6 @@ export function AgentClaimList({
             turn.narrative === null &&
             turn.error === null &&
             turn.diffReply === null;
-          // turn-anchor-N is the scroll target for DiffBubble's
-          // "↑ turn N" chip. Indexed by position so the chip can
-          // use the prior_turn id (turn count from backend)
-          // directly.
           const anchorId = `turn-anchor-${turnIdx}`;
           return (
             <div key={turn.id} id={anchorId} className="space-y-2 scroll-mt-4">
@@ -106,7 +105,8 @@ export function AgentClaimList({
         onOpenChange={(open) => {
           if (!open) setModalSlice(null);
         }}
-        slice={modalSlice?.subgraph_slice ?? null}
+        slice={modalSlice?.subgraphSlice ?? null}
+
       />
     </>
   );
@@ -126,20 +126,24 @@ function ClaimRender({
   claim: Claim;
   onModalRequest: () => void;
 }) {
-  if (claim.policy_verdict.verdict === "retracted") {
+  if (claim.policyVerdict?.verdict.case === "retracted") {
     return <RetractedCard claim={claim} />;
   }
   const props = { claim, onModalRequest };
+  // protoc-gen-es strips the `CLAIM_KIND_` prefix on the enum values
+  // (idiomatic TS naming); on the wire the proto canonical JSON uses
+  // the full names like "CLAIM_KIND_PROFILE", which fromJsonString
+  // converts back to the numeric enum value here.
   switch (claim.kind) {
-    case "profile":
+    case ClaimKind.PROFILE:
       return <ProfileCard {...props} />;
-    case "pattern":
+    case ClaimKind.PATTERN:
       return <PatternCard {...props} />;
-    case "comparison":
+    case ClaimKind.COMPARISON:
       return <ComparisonCard {...props} />;
-    case "summary":
+    case ClaimKind.SUMMARY:
       return <SummaryCard {...props} />;
-    case "pulse":
+    case ClaimKind.PULSE:
       return <PulseCard {...props} />;
     default:
       return null;

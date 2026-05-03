@@ -1,7 +1,7 @@
 "use client";
 
 import type React from "react";
-import type { ProvenanceRef } from "@/lib/generated/ProvenanceRef";
+import type { ProvenanceRef } from "@/lib/wire/multichain/wire/shared/v1/provenance_pb";
 import { ProvenanceChip } from "../provenance/provenance-chip";
 
 /**

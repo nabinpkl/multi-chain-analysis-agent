@@ -1,6 +1,6 @@
 "use client";
 
-import type { ProvenanceRef } from "@/lib/generated/ProvenanceRef";
+import type { ProvenanceRef } from "@/lib/wire/multichain/wire/shared/v1/provenance_pb";
 import { renderTextWithRefs } from "./render-with-refs";
 
 /**

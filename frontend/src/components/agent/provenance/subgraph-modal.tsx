@@ -6,7 +6,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { SubgraphSlice } from "@/lib/generated/SubgraphSlice";
+import type { SubgraphSlice } from "@/lib/wire/multichain/wire/shared/v1/subgraph_pb";
 
 /**
  * Modal canvas for historical subgraphs (ship 5 populates `slice`).
@@ -32,9 +32,9 @@ export function SubgraphModal({
           <div className="text-xs text-mca-muted space-y-2">
             <p>
               {slice.nodes.length} wallets and {slice.edges.length} edges
-              {slice.time_range
-                ? ` between ${new Date(slice.time_range.from_s * 1000).toLocaleString()} and ${new Date(
-                    slice.time_range.to_s * 1000,
+              {slice.timeRange
+                ? ` between ${new Date(slice.timeRange.fromS * 1000).toLocaleString()} and ${new Date(
+                    slice.timeRange.toS * 1000,
                   ).toLocaleString()}`
                 : ""}
               .
