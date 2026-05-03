@@ -60,17 +60,44 @@ Concrete anti-patterns:
 
 # Wire type ownership
 
-Single source of truth for every type that crosses a service boundary lives in `schemas/*.json` (JSON Schema). Three approved generators:
+Single source of truth for every type that crosses a service boundary lives in `proto/multichain/wire/{shared,agent}/v1/*.proto` (Protocol Buffers). Four approved tools (all maintenance-bar pass):
 
-| Target | Tool | Output |
+| Tool | Role | Last release at adoption |
 |---|---|---|
-| Rust | `typify` (oxidecomputer) | `backend/src/wire/generated.rs` |
-| Python | `datamodel-code-generator` | `agent-service/src/agent_service/wire/generated.py` |
-| TypeScript | `@n8n/json-schema-to-zod` + `zod` runtime | `frontend/src/lib/wire-zod.ts` |
+| `buf` CLI (Buf Inc) | proto lint + breaking-change detection + codegen orchestration | 2026-04-29 |
+| `buffa` (Anthropic) + `protoc-gen-buffa` | Rust types: pure Rust, JSON serialization, zero-copy views, editions support | 2026-04-27 |
+| `protobuf` (Google official) + `protoc --python_out` | Python types | 2026-03-20 |
+| `@bufbuild/protobuf` + `@bufbuild/protoc-gen-es` (Buf Inc) | TypeScript types: ESM-native, full type safety | 2026-04-23 |
 
-All three meet the maintenance bar above. The generated files are checked in (so consumers never need to run codegen to build). `just regen-wire-types` re-runs all three; a pre-commit / CI check fails if regenerated output differs from checked-in.
+Generated artifacts are checked in (consumers never need codegen to build). `just regen-wire-types` re-runs all three flows; CI fails if regenerated output differs from checked-in.
 
-Anything authored as a Rust struct, Python pydantic model, or TS interface that crosses a service boundary is a bug. Add the type to `schemas/`, run `just regen-wire-types`, import from the generated module.
+Anything authored as a Rust struct, Python pydantic model, or TS interface that crosses a service boundary is a bug. Add the message to `proto/`, run `just regen-wire-types`, import from `*_/wire/generated/` (or `frontend/src/lib/wire/`).
+
+## Wire format per hop
+
+Protobuf supports two wire encodings: binary (compact, ~3× smaller, ~5× faster) and canonical JSON (well-specified spec, browser-friendly). Pick by hop, not project-wide:
+
+| Hop | Wire format | Content-Type | Why |
+|---|---|---|---|
+| Browser → Python `/agent/*` | proto canonical JSON | `application/json` | Browser fetch + camelCase TS-friendly |
+| Python → Browser `/agent/stream/{id}` (SSE) | proto canonical JSON in SSE `data:` | `text/event-stream` | EventSource is text-only |
+| Python → Rust `/primitive/*` | **binary protobuf** | `application/x-protobuf` | Service-to-service; both speak proto natively |
+| Python → Rust `/turn/{begin,end}` | **binary protobuf** | `application/x-protobuf` | Same |
+| Browser → Rust `/health`, `/graph/*` | proto canonical JSON | `application/json` | Browser + curl-debuggable |
+
+Rationale:
+- Browser hops MUST be JSON (EventSource is text-only, fetch + JS prefer JSON).
+- Service-to-service hops use binary because both sides natively speak it. JSON between proto-speaking services is using the "browser exception" where the constraint doesn't apply. Per "Idiomatic-first": binary is the idiomatic protobuf wire for service-to-service.
+- Rust HTTP routes MAY accept JSON as a fallback for `curl` debugging, sniffed via `Content-Type`. Production traffic from Python is always binary.
+
+Canonical proto JSON encoding rules (the spec, applied automatically by all three runtimes):
+- Field names: `snake_case` in `.proto` → `camelCase` on wire (default).
+- Oneofs: `{"<active_case_name>": {<sub-message>}}`.
+- Enums: full proto name as string (e.g. `"CLAIM_KIND_PROFILE"`).
+- 64-bit ints: encoded as JSON strings (JS Number is 53-bit). Use `int32`/`uint32` in `.proto` for fields known to fit.
+- Empty messages: `{}` (presence is the signal in oneofs).
+- `optional` fields: omitted when not set.
+- Bytes: base64. Timestamps: RFC 3339.
 
 # Writing rules (docs/LinkedInEngineeringPosts/ only)
 
