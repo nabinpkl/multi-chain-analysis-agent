@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package multichain.wire.shared.v1;
+
+// Per-node analytics classification. Wire format follows proto enum
+// canonical JSON: ROLE_WHALE -> "ROLE_WHALE" by default. We use Buf's
+// Connect protocol convention of stripping the prefix on the wire so
+// frontend/Python see the natural names ("whale", "tip-account", etc.)
+//
+// (Implementation note: protobuf enum JSON encoding emits the enum value
+// name as a string. Our generated TS will see `NodeRole.WHALE` etc.)
+enum NodeRole {
+  NODE_ROLE_UNSPECIFIED = 0;
+  NODE_ROLE_TOKEN_MINT = 1;
+  NODE_ROLE_TIP_ACCOUNT = 2;
+  NODE_ROLE_MEV_SEARCHER = 3;
+  NODE_ROLE_MULTI_HUB = 4;
+  NODE_ROLE_SOL_HUB = 5;
+  NODE_ROLE_SPL_HUB = 6;
+  NODE_ROLE_WHALE = 7;
+  NODE_ROLE_MPC_MEMBER = 8;
+  NODE_ROLE_NORMAL = 9;
+}

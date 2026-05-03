@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package multichain.wire.shared.v1;
+
+// Response from `POST /turn/begin`. The Python agent stashes the
+// snapshot_id and passes it on every subsequent primitive call in
+// the same turn so reads are consistent across primitives even if
+// new blocks ingest mid-turn.
+//
+// `expires_at_ms` is a wallclock floor; the actual GC sweep on the
+// Rust side may keep the snapshot slightly longer. After this time
+// the Python client must re-`/turn/begin`.
+message SnapshotBeginResponse {
+  string snapshot_id = 1;
+  uint64 expires_at_ms = 2;
+  // The window the snapshot was materialized at (matches the agent's
+  // live window). Phase A only supports 60s; future ships may add
+  // a `window_secs` field on the begin request to negotiate.
+  uint32 window_secs = 3;
+}
+
+// Body of `POST /turn/end`. Releases the snapshot eagerly. Optional;
+// the GC sweep would clean it up within 5 minutes anyway, but eager
+// release keeps the cache small for healthy turns.
+message SnapshotEndRequest {
+  string snapshot_id = 1;
+}

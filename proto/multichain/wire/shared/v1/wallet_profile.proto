@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package multichain.wire.shared.v1;
+
+import "multichain/wire/shared/v1/role.proto";
+import "multichain/wire/shared/v1/scope.proto";
+
+// Input to the `wallet_profile` primitive. The agent passes a wallet
+// address and a TimeScope; live arm is the current live window,
+// range arm routes to the warehouse path (ship-5).
+message WalletProfileInput {
+  // Solana base58 pubkey.
+  string addr = 1;
+  TimeScope time_scope = 2;
+}
+
+// Output of the `wallet_profile` primitive. The agent reads this to
+// build the profile claim.
+message WalletProfileOutput {
+  string addr = 1;
+  // Defaults to NORMAL when unclassified.
+  NodeRole role = 2;
+  // Stable community label (u32) reported by analytics. Zero is a
+  // valid community id; absence is signaled via the optional flag.
+  optional uint32 community_id = 3;
+  NodeStats stats = 4;
+  // Capped at 5 by primitive impl.
+  repeated TopCounterparty top_counterparties = 5;
+  // Seconds since the wallet first appeared in the current live window.
+  uint32 age_in_window_secs = 6;
+}
+
+// Wire mirror of analytics::snapshot::NodeStats. Field names use the
+// descriptive `*_volume_lamports` form so that the structural value-
+// compare gate (policy_structural::verify_chip_values) classifies them
+// as `UnitClass::Sol` via substring match on "volume" + "lamport".
+message NodeStats {
+  uint32 degree = 1;
+  double total_volume_lamports = 2;
+  double in_volume_lamports = 3;
+  double out_volume_lamports = 4;
+  double bidir_volume_lamports = 5;
+  uint32 sol_degree = 6;
+  uint32 spl_degree = 7;
+}
+
+message TopCounterparty {
+  string addr = 1;
+  // Lamports.
+  double volume = 2;
+}

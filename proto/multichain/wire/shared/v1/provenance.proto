@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package multichain.wire.shared.v1;
+
+// Tagged reference back to a graph entity. The frontend's render-surface
+// derivation picks live highlight, modal, or inline chip based on the
+// ref shape (see plan: "Frontend render-surface derivation rule").
+//
+// Wire format follows proto canonical JSON: the active oneof case becomes
+// the wrapping key.
+//
+//   wallet    -> {"wallet":    {"addr": "...", "idx": 0}}
+//   edge      -> {"edge":      {"id": "0:1", "src": 0, "dst": 1}}
+//   community -> {"community": {"id": 8}}
+//   timeRange -> {"timeRange": {"fromS": 0, "toS": 60}}
+//   number    -> {"number":    {"metric": "...", "value": 1.0, "support": [...]}}
+message ProvenanceRef {
+  oneof ref {
+    WalletRef wallet = 1;
+    EdgeRef edge = 2;
+    CommunityRef community = 3;
+    TimeRangeRef time_range = 4;
+    NumberRef number = 5;
+  }
+}
+
+message WalletRef {
+  string addr = 1;
+  // None when the wallet is not in the current live window
+  // (route to subgraph modal instead of live-graph chip).
+  optional uint32 idx = 2;
+}
+
+message EdgeRef {
+  // Stable id format: `"<edge_idx>:<gen>"`.
+  string id = 1;
+  uint32 src = 2;
+  uint32 dst = 3;
+}
+
+message CommunityRef {
+  uint32 id = 1;
+}
+
+// Populated by ship-5 warehouse primitives.
+message TimeRangeRef {
+  uint32 from_s = 1;
+  uint32 to_s = 2;
+}
+
+// Aggregate metric reference. `support` lists EdgeIds backing the
+// number so the user can drill in.
+message NumberRef {
+  string metric = 1;
+  double value = 2;
+  repeated string support = 3;
+}

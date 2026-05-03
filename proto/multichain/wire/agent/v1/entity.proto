@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package multichain.wire.agent.v1;
+
+// Frontend ground-truth selection / focus. Distinct from
+// `shared.v1.ProvenanceRef` because EntityRef carries no analytics
+// metadata, just the entity identity.
+//
+// Wire format follows proto canonical JSON:
+//   wallet    -> {"wallet":    {"id": "<base58>"}}
+//   edge      -> {"edge":      {"id": "<edge_idx:gen>"}}
+//   community -> {"community": {"id": <u32>}}
+message EntityRef {
+  oneof entity {
+    EntityRefWallet wallet = 1;
+    EntityRefEdge edge = 2;
+    EntityRefCommunity community = 3;
+  }
+}
+
+message EntityRefWallet {
+  string id = 1;
+}
+
+message EntityRefEdge {
+  string id = 1;
+}
+
+message EntityRefCommunity {
+  uint32 id = 1;
+}
+
+// Structured ground-truth context the frontend builds from its own
+// DOM/state. Per D-6, the context block is the strongest disambiguation
+// signal; the prompt teaches the model to read it first.
+message ViewContext {
+  uint32 live_window_secs = 1;
+  // None when the user hasn't focused any entity.
+  optional EntityRef focus = 2;
+  repeated EntityRef selection = 3;
+}

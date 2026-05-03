@@ -6,3 +6,6 @@
 data/
 
 tmp/
+
+# Claude Code per-session scheduled-task lock (transient).
+.claude/

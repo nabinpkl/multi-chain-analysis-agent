@@ -7,6 +7,70 @@
 - No God component. Extract component if make sense.
 - No dead code. Removed = delete entirely (files, imports, types, all refs).
 - No backward compat layers. Iteration-based dev. Change code direct.
+- No hand-typed wire types. Single source of truth (proto/`*.proto` files), generated to Rust + Python + TS via approved generators. Hand-typed allowed only for UI-internal models that never cross a service boundary.
+
+# Existing code is not authoritative
+
+Existing code in this repo is iteration in progress, not a specification to defend. Most of it started as a quick-and-dirty path that hardened by accident. When you (the agent) see ad-hoc patterns, spaghetti, copy-paste, dead branches, hand-typed wire shapes, adapter layers bridging two-things-that-should-be-one-thing, or anything that doesn't match the target language's idiom: **flag it and propose the cleanup in the same change**. Don't defend the existing shape with "matches what we have" or "minimizes churn."
+
+When the work is a refactor, migration, or anything touching a wide surface, that's the moment to leave the surface cleaner than you found it. "Minimize churn" is an anti-principle when the existing surface is itself the problem.
+
+Specific anti-patterns the agent should flag (not silently preserve):
+- `snake_case` JSON over the wire when the consumer is JS / TS.
+- Hand-typed wire types when codegen is available.
+- Adapter / case-conversion layers between services.
+- "Backward compat" code paths in a project with no real users.
+- Functions, files, or branches that don't run in production.
+- Stale TODOs that have been TODO for more than one ship.
+- Re-exports that exist only to dodge a refactor that should have happened.
+
+Bias toward proposing the cleanup in the same change that needs the touch. Don't defer cleanup to "follow-up tickets" that never get filed. The "no dead code" rule above already implies this; this section makes the behavior explicit so the agent doesn't preserve mess to be polite.
+
+When unsure whether to flag a pattern: err on the side of flagging. Cheap to dismiss, expensive to live with.
+
+# Idiomatic-first (top priority for consistency with industry)
+
+Each language uses its own idiom. Never impose one language's conventions on another. When in conflict between "easier for our codebase" and "what the language community does," pick the community idiom.
+
+- **TypeScript:** `camelCase` fields, named exports, ESM imports, `interface` over `type` for object shapes that may extend.
+- **Python:** `snake_case` fields, PEP 8, type hints everywhere, `dataclasses` / `pydantic` for data classes.
+- **Rust:** `snake_case` fields, `Result<T, E>` for fallible ops, `Option<T>` for nullable, `#[derive]` macros for boilerplate.
+- **JSON wire:** `camelCase` field names. The JS/TS-ecosystem default and what every modern API (Stripe, GitHub, Vercel, Anthropic) uses. Backends that emit `snake_case` JSON (Rust serde default) explicitly opt out of the idiom.
+
+Cross-language type sharing respects each side's idiom: the wire format is `camelCase` JSON, each language's generated types use that language's natural field-name casing, and the codegen handles the translation. Don't write a manual case-conversion adapter at the boundary; that's drift waiting to happen. Pick a codegen toolchain that does it for you (protobuf canonical JSON encoding does this by default).
+
+Why this is the first priority: idiomatic code is faster to read for newcomers (familiar patterns), copies cleanly from upstream documentation and community examples, and avoids the friction of "this is non-standard because..." explanations every time someone touches the code.
+
+# Library maintenance bar
+
+Before adding ANY third-party dependency (runtime OR build-time):
+
+1. **Latest release within 1 month** of evaluation date. Stable mature tooling that hasn't released in 6+ months is a red flag, not a virtue.
+2. **≥100 GitHub stars.** Floor for "someone else has shaken out the bugs."
+3. **Real human maintenance, not bot churn.** Check the merged-PRs list. If the last 10 are all from `renovate[bot]` / `dependabot[bot]` / similar, the project is in maintainer-abandoned mode. Move on.
+4. **Open-issue triage signal.** Either zero open issues (small tool, owner closes aggressively) or a healthy ratio of closed-by-humans to opened. A 100+ open-issues backlog with no human responses in months = abandoned.
+5. **Build-time tools are NOT exempt.** They have FS + network access during codegen and are a real supply-chain surface. Same bar as runtime.
+6. **Check the README for deprecation notices.** A "no longer maintained" banner overrides green CI badges.
+7. If a library fails the bar but no maintained alternative exists, document the gap in `docs/dependency-exceptions.md` with the specific risk accepted and the trigger condition for revisiting (e.g., "drop if maintained fork emerges by 2026-09").
+
+Concrete anti-patterns:
+- LiteLLM (March 2026 supply-chain attack, April 2026 SQLi CVE-2026-42208).
+- Renovate-bot-only activity hiding maintainer abandonment (e.g. `openapi-typescript` at 2026-05 audit: 245 open issues, last 10 merges all from renovate, real bug reports unanswered for weeks).
+- Stefan Terdell's `json-schema-to-zod` deprecated 2026-03; npm metadata still showed activity from outstanding PRs being merged before going dark. Always read the README.
+
+# Wire type ownership
+
+Single source of truth for every type that crosses a service boundary lives in `schemas/*.json` (JSON Schema). Three approved generators:
+
+| Target | Tool | Output |
+|---|---|---|
+| Rust | `typify` (oxidecomputer) | `backend/src/wire/generated.rs` |
+| Python | `datamodel-code-generator` | `agent-service/src/agent_service/wire/generated.py` |
+| TypeScript | `@n8n/json-schema-to-zod` + `zod` runtime | `frontend/src/lib/wire-zod.ts` |
+
+All three meet the maintenance bar above. The generated files are checked in (so consumers never need to run codegen to build). `just regen-wire-types` re-runs all three; a pre-commit / CI check fails if regenerated output differs from checked-in.
+
+Anything authored as a Rust struct, Python pydantic model, or TS interface that crosses a service boundary is a bug. Add the type to `schemas/`, run `just regen-wire-types`, import from the generated module.
 
 # Writing rules (docs/LinkedInEngineeringPosts/ only)
 
@@ -37,7 +101,7 @@ Listen txs from multiple chain, normalize, link each tx to data, build graph, se
 - **Framework:** Next.js 16+, App Router, TypeScript, `src/` directory, `@/*` alias
 - **Package manager:** pnpm
 - **Styling:** Tailwind CSS v4 (CSS-first via `@tailwindcss/postcss`)
-- **UI components:** shadcn/ui — all components installed in `src/components/ui/`
+- **UI components:** shadcn/ui  all components installed in `src/components/ui/`
 - **State:** Zustand v5 (client), TanStack Query v5 (server)
 - **Animation:** motion v12 (`motion/react`)
 - Color: All colors oklch, no # based (convert if needed).
@@ -55,11 +119,11 @@ axum
 tower
 serde
 serde_json
-rustc-hash         # FxHashSet — faster than std HashMap
+rustc-hash         # FxHashSet  faster than std HashMap
 
 
 
-**1. Idempotency on ingestion — non-negotiable.**
+**1. Idempotency on ingestion  non-negotiable.**
 
 Will restart, replay, double-fetch. Make every write idempotent.
 

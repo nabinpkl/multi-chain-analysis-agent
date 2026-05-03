@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package multichain.wire.agent.v1;
+
+// Ship 4: incremental answers (delta wire shape).
+//
+// On a repeat question, the agent re-fetches the prior turn's
+// primitives, deterministically diffs the new outputs against the
+// captured prior outputs, and surfaces ONLY what changed.
+
+// Emitted when dont_repeat_yourself fires AND the diff is empty.
+// No LLM narrative call happens on this path; the bubble exists so
+// the user sees closure ("we covered this in turn N, no movement
+// since") rather than silence.
+message NoMovement {
+  uint32 prior_turn = 1;
+  // Primitive names re-fetched and confirmed unchanged.
+  repeated string primitives_replayed = 2;
+}
+
+// Emitted when dont_repeat_yourself fires AND the diff is non-empty.
+// Carries the typed Delta plus the small narrative call's prose
+// describing only what shifted since the prior turn.
+message ChangedSince {
+  uint32 prior_turn = 1;
+  Delta delta = 2;
+  string prose = 3;
+}
+
+// Full diff result. unchanged_field_count powers the builder-view
+// chip ('2 changed / 4 unchanged'); only structurally-changed fields
+// appear in `changed`.
+message Delta {
+  repeated FieldDelta changed = 1;
+  uint32 unchanged_field_count = 2;
+}
+
+// One field's change between prior turn's primitive output and the
+// freshly re-fetched output.
+message FieldDelta {
+  // Dotted path within the primitive output (e.g.
+  // "stats.in_volume_lamports").
+  string field_path = 1;
+  // Producing primitive name (e.g. "wallet_profile").
+  string primitive = 2;
+  FieldChange change = 3;
+}
+
+// Shape of a single field's change. Three variants matching the
+// diff walker's FieldKind strategies (Number, EntitySet, Count).
+//
+// Wire format:
+//   numberMoved  -> {"numberMoved":  {"prior": 1, "current": 2, "pct": 1.0}}
+//   setChanged   -> {"setChanged":   {"added": [...], "removed": [...]}}
+//   countChanged -> {"countChanged": {"prior": 1, "current": 3}}
+message FieldChange {
+  oneof change {
+    FieldChangeNumberMoved number_moved = 1;
+    FieldChangeSetChanged set_changed = 2;
+    FieldChangeCountChanged count_changed = 3;
+  }
+}
+
+// Numeric field outside per-class tolerance. `pct` is the signed
+// percent change (current - prior) / prior, or 0.0 when prior is 0.
+message FieldChangeNumberMoved {
+  double prior = 1;
+  double current = 2;
+  double pct = 3;
+}
+
+// Entity-list field where membership changed. `added`/`removed`
+// carry the keys (typically wallet addresses).
+message FieldChangeSetChanged {
+  repeated string added = 1;
+  repeated string removed = 2;
+}
+
+// Count-class field where any delta is meaningful.
+message FieldChangeCountChanged {
+  double prior = 1;
+  double current = 2;
+}

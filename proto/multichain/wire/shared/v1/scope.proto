@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package multichain.wire.shared.v1;
+
+// Mandatory temporal frame for primitives that have one (per D-6).
+//
+// The wire format follows proto canonical JSON encoding:
+//   Live  -> {"live": {}}
+//   Range -> {"range": {"fromS": "<u32>", "toS": "<u32>"}}
+//
+// (Note: this differs from the previous internally-tagged Rust wire shape
+// `{"range": {"from_s": ..., "to_s": ...}}` because proto's oneof always
+// produces an object wrapper. SSE goldens regenerate accordingly.)
+message TimeScope {
+  oneof scope {
+    LiveScope live = 1;
+    RangeScope range = 2;
+  }
+}
+
+// Current rolling live window. Empty marker; presence in the oneof is
+// the signal.
+message LiveScope {}
+
+// Absolute block-time range. Routes to warehouse path (ship-5).
+message RangeScope {
+  uint32 from_s = 1;
+  uint32 to_s = 2;
+}
+
+// Primitive cost-class tag. Ship-4's budget gate reads this. Not currently
+// emitted on the wire but defined here so future primitives can use it
+// without adding a separate wire shape.
+enum CostClass {
+  COST_CLASS_UNSPECIFIED = 0;
+  COST_CLASS_CHEAP = 1;
+  COST_CLASS_MODERATE = 2;
+  COST_CLASS_EXPENSIVE = 3;
+}
+
+// Primitive data source family per D-5.
+enum DataSource {
+  DATA_SOURCE_UNSPECIFIED = 0;
+  DATA_SOURCE_LIVE = 1;
+  DATA_SOURCE_WAREHOUSE = 2;
+  DATA_SOURCE_EXTERNAL = 3;
+}

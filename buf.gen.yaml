@@ -1,0 +1,26 @@
+version: v2
+plugins:
+  # Rust: Anthropic's `buffa` (pure-Rust protobuf with editions, JSON,
+  # zero-copy views). Two-plugin pattern per the buffa README:
+  #   protoc-gen-buffa            → per-message generated code
+  #   protoc-gen-buffa-packaging  → cargo-friendly mod.rs wiring
+  - local: protoc-gen-buffa
+    out: backend/src/wire/generated
+  - local: protoc-gen-buffa-packaging
+    out: backend/src/wire/generated
+    strategy: all
+
+  # Python: Google's official protobuf-python plugin (built into protoc).
+  - protoc_builtin: python
+    out: agent-service/src/agent_service/wire/generated
+
+  # TypeScript: Buf's @bufbuild/protoc-gen-es. Output is ESM TS with
+  # full types + runtime via @bufbuild/protobuf.
+  - local: ./frontend/node_modules/.bin/protoc-gen-es
+    out: frontend/src/lib/wire
+    opt:
+      - target=ts
+      # Use proto field names verbatim in generated TS (we embraced
+      # camelCase by writing snake_case proto fields and letting the
+      # default canonical JSON conversion happen on the wire).
+      - import_extension=js

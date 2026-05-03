@@ -19,3 +19,8 @@
 //! `justfile`. Pre-commit hook enforces no drift.
 
 pub mod shared;
+
+// Generated proto types (smoke-test placement; the migration will
+// remove `shared` once consumers move over).
+#[path = "generated/mod.rs"]
+pub mod generated;

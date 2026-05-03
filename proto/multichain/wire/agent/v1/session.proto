@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package multichain.wire.agent.v1;
+
+import "multichain/wire/agent/v1/entity.proto";
+import "multichain/wire/agent/v1/switches.proto";
+
+// User question + ViewContext. `thread_id` is None on the first
+// send of a fresh conversation; the backend mints one and returns
+// it. Subsequent follow-ups echo the prior thread_id.
+//
+// `switches` defaults to the production preset (everything except
+// ground_truth_match). `show_trace` controls whether GatePath
+// frames are emitted; trace is always built and ledgered regardless.
+message AgentRequest {
+  string user_question = 1;
+  ViewContext context = 2;
+  optional string thread_id = 3;
+  AgentSwitches switches = 4;
+  bool show_trace = 5;
+}
+
+// Returned synchronously from POST /agent/ask. `session_id` is
+// per-turn (drives the SSE GET, ledger row group). `thread_id`
+// is the persistent conversation handle. `turn` is 0 on the first
+// turn, increments on follow-ups.
+message AgentSessionStarted {
+  string session_id = 1;
+  string thread_id = 2;
+  uint32 turn = 3;
+}
+
+// Final SSE event payload. Emitted as the `done` event by the SSE
+// handler. `elapsed_ms` is u32 (caps at ~50 days).
+message AgentDone {
+  string session_id = 1;
+  uint32 elapsed_ms = 2;
+}

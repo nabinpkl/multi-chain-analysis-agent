@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package multichain.wire.agent.v1;
+
+// Output-policy verdict (phase 03 layer 3). v0 stubs to Approved;
+// ship 2 starts producing Retracted on real gate failures.
+//
+// Wire format:
+//   approved  -> {"approved":  {}}
+//   retracted -> {"retracted": {"reason": "..."}}
+message PolicyVerdict {
+  oneof verdict {
+    PolicyVerdictApproved approved = 1;
+    PolicyVerdictRetracted retracted = 2;
+  }
+}
+
+message PolicyVerdictApproved {}
+
+message PolicyVerdictRetracted {
+  string reason = 1;
+}
+
+// One step in the gate's execution path. Built by `PathBuilder`
+// in `policy.rs` as each switch's leg runs (or skips). The
+// frontend's builder view renders these as a vertical timeline
+// inside `GatePathTimeline.tsx`.
+message PathStep {
+  // Dotted stage id (e.g. "claim.stay_in_role",
+  // "narrative.cross_check.paraphrase_aware_match").
+  string stage = 1;
+  PathState state = 2;
+  // Wallclock microseconds the step took. For visual ordering
+  // only; determinism not promised across runs.
+  uint32 elapsed_us = 3;
+  // Single-line note: what was checked, what verdict.
+  string note = 4;
+}
+
+// One leg's verdict. NotApplicable covers both "switch off" and
+// "couldn't run" (malformed extraction, parse failure).
+//
+// Wire format:
+//   approved      -> {"approved":      {}}
+//   retracted     -> {"retracted":     {"reason": "..."}}
+//   notApplicable -> {"notApplicable": {"detail": "..."}}
+message PathState {
+  oneof state {
+    PathStateApproved approved = 1;
+    PathStateRetracted retracted = 2;
+    PathStateNotApplicable not_applicable = 3;
+  }
+}
+
+message PathStateApproved {}
+
+message PathStateRetracted {
+  string reason = 1;
+}
+
+message PathStateNotApplicable {
+  string detail = 1;
+}

@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package multichain.wire.agent.v1;
+
+import "multichain/wire/shared/v1/provenance.proto";
+
+// Approved free-form prose. May contain inline ${ref:N} tokens the
+// renderer resolves against `provenance` (assembled by the loop
+// from this turn's emitted Claims, concatenated provenance arrays
+// in emission order).
+message NarrativeWithRefs {
+  string text = 1;
+  repeated multichain.wire.shared.v1.ProvenanceRef provenance = 2;
+}
+
+// Narrative the constitution gate retracted. Carries the original
+// text alongside a friendly user-facing reason. `debug_reason` only
+// populated when AGENT_DEBUG_PUBLIC=1 (dev-mode); absent in prod so
+// the wire stays sterile.
+message NarrativeRetracted {
+  string text = 1;
+  string reason = 2;
+  optional string debug_reason = 3;
+}

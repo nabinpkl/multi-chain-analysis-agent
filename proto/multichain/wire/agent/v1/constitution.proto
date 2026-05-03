@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package multichain.wire.agent.v1;
+
+// Constitution v3 response shape from the policy LLM. `verdict` is
+// one of three strings the policy prompt prescribes; `reason` defaults
+// to "" so a malformed older-style response still parses cleanly.
+// `extraction` is None when the LLM omitted the sidecar entirely.
+//
+// Note: this message is parsed leniently in Python (extra fields
+// ignored) because the policy LLM occasionally adds keys. The Rust
+// side serializes strictly.
+message ConstitutionVerdict {
+  // One of: "approve", "retract", "reject".
+  string verdict = 1;
+  string reason = 2;
+  optional LlmExtraction extraction = 3;
+}
+
+// Constitution gate's structured sidecar. Numbers the LLM saw in
+// narrative + claim text, classified by unit. The structural cross-
+// check pairs these against the binding store.
+message LlmExtraction {
+  repeated LlmExtractedNumber narrative_numbers = 1;
+  repeated LlmExtractedNumber claim_numbers = 2;
+}
+
+// LLM-side extracted number from constitution gate's `extraction`
+// JSON sidecar. `phrase` is debugging context only; surfaces in
+// dev-mode debug fields and is discarded during compare.
+message LlmExtractedNumber {
+  double value = 1;
+  // String form of UnitClass: "sol" | "count" | "community_id" | "raw".
+  string unit_class = 2;
+  string phrase = 3;
+}

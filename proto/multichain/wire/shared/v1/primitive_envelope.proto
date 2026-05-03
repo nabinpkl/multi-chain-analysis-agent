@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package multichain.wire.shared.v1;
+
+import "google/protobuf/struct.proto";
+import "multichain/wire/shared/v1/community_summary.proto";
+import "multichain/wire/shared/v1/provenance.proto";
+import "multichain/wire/shared/v1/subgraph.proto";
+import "multichain/wire/shared/v1/wallet_profile.proto";
+
+// Body of `POST /primitive/wallet_profile`. Wraps the WalletProfileInput
+// with the snapshot lease so the route is addressable from Python
+// without ambient state.
+message WalletProfileRequest {
+  WalletProfileInput input = 1;
+  string snapshot_id = 2;
+}
+
+// Body of `POST /primitive/community_summary`. Same envelope shape
+// as WalletProfileRequest.
+message CommunitySummaryRequest {
+  CommunitySummaryInput input = 1;
+  string snapshot_id = 2;
+}
+
+// Generic primitive response envelope. Mirrors `PrimitiveOutput<T>`
+// from the existing primitive trait but flattened for the wire so
+// Python doesn't need to learn about the Rust generic.
+//
+// `value` is `google.protobuf.Struct` (loose JSON) so this single
+// envelope can wrap any primitive's output. The Python client typed-
+// validates `value` against the matching per-primitive output message
+// after receiving it.
+message PrimitiveResponseEnvelope {
+  google.protobuf.Struct value = 1;
+  repeated ProvenanceRef provenance = 2;
+  optional SubgraphSlice subgraph_slice = 3;
+}

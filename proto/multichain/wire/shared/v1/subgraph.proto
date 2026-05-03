@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package multichain.wire.shared.v1;
+
+// Self-contained subgraph rendered on its own canvas in a modal.
+// Used by ship-5 for historical results that don't share layout
+// state with the live graph.
+message SubgraphSlice {
+  repeated NodeSummary nodes = 1;
+  repeated EdgeSummary edges = 2;
+  optional TimeRange time_range = 3;
+}
+
+message NodeSummary {
+  string addr = 1;
+  // None when the role is unclassified.
+  optional string role = 2;
+}
+
+message EdgeSummary {
+  string src = 1;
+  string dst = 2;
+  // Lamports.
+  double volume = 3;
+}
+
+// Wire-friendly time range used inside a subgraph slice. Distinct from
+// the `TimeRangeRef` ProvenanceRef variant.
+message TimeRange {
+  uint32 from_s = 1;
+  uint32 to_s = 2;
+}

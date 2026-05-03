@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package multichain.wire.agent.v1;
+
+import "multichain/wire/agent/v1/policy.proto";
+import "multichain/wire/shared/v1/provenance.proto";
+import "multichain/wire/shared/v1/subgraph.proto";
+
+// Closed enum: the renderer dispatches per-kind. v0 mostly emits
+// PROFILE; the rest are reserved for future ships so adding them
+// later doesn't require a wire change.
+//
+// Wire format: enum value name. PROFILE -> "PROFILE", etc.
+enum ClaimKind {
+  CLAIM_KIND_UNSPECIFIED = 0;
+  CLAIM_KIND_PROFILE = 1;
+  CLAIM_KIND_PATTERN = 2;
+  CLAIM_KIND_COMPARISON = 3;
+  CLAIM_KIND_SUMMARY = 4;
+  CLAIM_KIND_PULSE = 5;
+}
+
+// Streamed analytical statement. The body uses ${ref:N} placeholders
+// the frontend replaces with interactive chips at render time.
+// `provenance[N]` is the typed entry the chip resolves against.
+message Claim {
+  // ULID, sortable by emission order.
+  string id = 1;
+  string session_id = 2;
+  ClaimKind kind = 3;
+  // One-line plaintext headline.
+  string headline = 4;
+  // Structured paragraph; ${ref:N} placeholders -> provenance chips.
+  string body_markdown = 5;
+  repeated multichain.wire.shared.v1.ProvenanceRef provenance = 6;
+  repeated multichain.wire.shared.v1.NumberRef support_numbers = 7;
+  // None in v0; ship 5 populates for warehouse-derived historical.
+  optional multichain.wire.shared.v1.SubgraphSlice subgraph_slice = 8;
+  PolicyVerdict policy_verdict = 9;
+  // Stubs that touched this claim's emission. Visible in the UI as
+  // "via stubs: ..." so historical claims keep their provenance even
+  // after stubs are removed.
+  repeated StubMarker stubs_active = 10;
+  // Wallclock ms since session started.
+  uint32 emitted_at_ms = 11;
+}
+
+// Per-claim badge: which stubs short-circuited during this claim's
+// emission. Persists into history so stub provenance survives even
+// after the global registry is cleared.
+message StubMarker {
+  string name = 1;
+  string reason = 2;
+  uint32 promoted_in_ship = 3;
+}
+
+// Input shape the model sends when calling `emit_claim`. Matches
+// Claim minus the runtime-stamped fields (id, session_id,
+// emitted_at_ms, policy_verdict, stubs_active are all controlled by
+// the runtime).
+message EmitClaimInput {
+  ClaimKind kind = 1;
+  string headline = 2;
+  string body_markdown = 3;
+  repeated multichain.wire.shared.v1.ProvenanceRef provenance = 4;
+  repeated multichain.wire.shared.v1.NumberRef support_numbers = 5;
+  optional multichain.wire.shared.v1.SubgraphSlice subgraph_slice = 6;
+}
+
+// Output of the `emit_claim` primitive. Returned to the model so it
+// knows the claim was committed.
+message EmitClaimOutput {
+  string claim_id = 1;
+  // String form of the verdict (e.g. "approved", "retracted").
+  string policy = 2;
+}

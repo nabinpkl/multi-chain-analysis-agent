@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package multichain.wire.agent.v1;
+
+// Ship 3.5 ablation switches. Each field is a behavior contract;
+// when true, the agent has that behavior. Defaults reproduce the
+// production preset (everything except ground_truth_match).
+//
+// SECURITY: switches are reachable from any client. Project is a
+// builder portfolio, not a product; we explicitly do not hide internals.
+// If this code ever serves real end-user traffic, lock the switch
+// surface server-side.
+message AgentSwitches {
+  // Identity, scope, conduct rules. With this off, the model is
+  // whatever the underlying LLM is.
+  bool stay_in_role = 1;
+  // Numbers and entities in claims must come from real tool output.
+  // With this off, the model can invent values that no tool returned.
+  bool dont_fabricate = 2;
+  // Three sub-modes of consistency check across the chain.
+  CrossCheckSwitches cross_check = 3;
+  // Ship 4: agent recognizes repeat questions in the same thread,
+  // re-fetches the prior turn's primitives, deterministically diffs
+  // against the prior outputs, and surfaces only what changed.
+  bool dont_repeat_yourself = 4;
+}
+
+// Sub-modes of cross_check. Two independent toggles after ship 5a
+// retired text_match. Both advisory in the strict merge.
+message CrossCheckSwitches {
+  // LLM-driven coherence check: does the model's prose use its
+  // cited chip values consistently? Recall-based, paraphrase-robust.
+  bool paraphrase_aware_match = 1;
+  // Re-query the source-of-truth database, verify prose against
+  // actual data. NOT recall-based. Stub in ship 3.5; the real
+  // implementation lands in ship 5b with warehouse primitives.
+  bool ground_truth_match = 2;
+}

@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package multichain.wire.agent.v1;
+
+import "multichain/wire/agent/v1/policy.proto";
+import "multichain/wire/agent/v1/switches.proto";
+
+// Lightweight progress ping. `phase` + `detail` are free-form strings
+// the frontend can render as a status line.
+message Progress {
+  string phase = 1;
+  string detail = 2;
+}
+
+// Terminal turn-level error. The SSE handler renders this as an
+// `error` event before the closing `done`. `debug_message` only
+// populated when AGENT_DEBUG_PUBLIC=1.
+message Error {
+  string message = 1;
+  optional string debug_message = 2;
+}
+
+// Full path of one channel's gate run. Emitted as `gatePath` SSE
+// frame when AgentRequest.show_trace=true. Trace is always built
+// and ledgered; the frame is wire-only.
+message GatePath {
+  string channel = 1;
+  AgentSwitches switches = 2;
+  repeated PathStep steps = 3;
+  PolicyVerdict final_verdict = 4;
+}

@@ -1,0 +1,18 @@
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # Our discriminator-union case messages (PolicyVerdictApproved,
+    # FieldChangeNumberMoved, etc.) are intentionally per-variant
+    # message types; the lint rule wanting them suffixed with
+    # "Request"/"Response" doesn't apply.
+    - SERVICE_SUFFIX
+    - RPC_REQUEST_RESPONSE_UNIQUE
+    - RPC_REQUEST_STANDARD_NAME
+    - RPC_RESPONSE_STANDARD_NAME
+breaking:
+  use:
+    - FILE

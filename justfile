@@ -1,7 +1,6 @@
 #
-# Project-wide task runner. Phase A of Python-agent migration introduced
-# this file as the codegen entry point. Recipes here are the canonical
-# way to run anything that crosses the Rust ↔ Python boundary.
+# Project-wide task runner. Codegen entry point for everything that
+# crosses a service boundary.
 #
 
 default:
@@ -19,36 +18,42 @@ test-unit:
 test-integration:
     cd agent-service && uv run pytest tests/integration -v
 
-# Regenerate every wire-type artifact in the right order.
+# Regenerate every wire-type artifact from the proto source of truth.
 #
-# Today (Phase A) this runs the Rust → Python pydantic flow. Phase B.2
-# extends it with the Python → Frontend TS flow (json-schema-to-typescript).
-# The Rust → Frontend TS flow (ts-rs) runs as part of `cargo test --bin
-# server` and isn't invoked here.
+# Single source: `proto/multichain/wire/{shared,agent}/v1/*.proto`.
+# Three generators (all maintained per AGENTS.md library bar):
+#   - Rust:   buffa (Anthropic, pure Rust + JSON + zero-copy views)
+#   - Python: protobuf (Google official)
+#   - TS:     @bufbuild/protoc-gen-es (Buf, ESM-native)
 #
-# Output:
-#   agent-service/src/agent_service/wire/schemas-shared/*.json (checked in)
-#   agent-service/src/agent_service/wire/shared.py             (checked in)
+# Output (all checked in):
+#   backend/src/wire/generated/                    (Rust mod tree)
+#   agent-service/src/agent_service/wire/generated/  (Python pkg tree)
+#   frontend/src/lib/wire/                         (TS pkg tree)
 #
-# Pre-commit hook (future) runs this and fails if anything is dirty.
-regen-wire-types: regen-shared-types
-
-regen-shared-types:
-    @echo ">> dumping JSON schemas from rust"
-    cd backend && cargo run --quiet --bin dump_schemas
-    @echo ">> generating pydantic models from schemas"
-    rm -rf agent-service/src/agent_service/wire/shared
-    cd agent-service && uv run datamodel-codegen \
-        --input src/agent_service/wire/schemas-shared/ \
-        --input-file-type jsonschema \
-        --output src/agent_service/wire/shared/ \
-        --output-model-type pydantic_v2.BaseModel \
-        --use-schema-description \
-        --use-standard-collections \
-        --use-union-operator \
-        --target-python-version 3.12 \
-        --use-double-quotes \
-        --disable-timestamp
-    @echo ">> writing wire/shared/__init__.py re-export shim"
-    cd agent-service && uv run python scripts/build_shared_init.py
+# Wire format: proto canonical JSON encoding (camelCase fields,
+# oneof-wrapped discriminator unions). See AGENTS.md "Idiomatic-first".
+regen-wire-types:
+    @echo ">> linting protos"
+    buf lint
+    @echo ">> generating Rust + Python + TS from protos"
+    rm -rf backend/src/wire/generated agent-service/src/agent_service/wire/generated frontend/src/lib/wire
+    mkdir -p backend/src/wire/generated agent-service/src/agent_service/wire/generated frontend/src/lib/wire
+    buf generate
     @echo ">> wire types regenerated"
+
+# Regenerate the SSE goldens. Cheap (cargo bin run, no LLM, no DB).
+# Phase I.5: locked byte-for-byte SSE format the Python service must
+# match. Phase II onward uses these as oracle inputs.
+regen-sse-goldens:
+    @echo ">> dumping SSE goldens from rust"
+    cd backend && cargo run --quiet --bin dump_sse_goldens
+    @echo ">> sse goldens regenerated"
+
+# Sync prompt files from Rust source. Byte-copy; tests verify
+# divergence fails CI.
+sync-prompts:
+    @echo ">> copying prompts from backend → agent-service"
+    cp backend/src/agent/prompt_v4.txt agent-service/src/agent_service/prompts/system_v4.txt
+    cp backend/src/agent/policy_prompt_v4.txt agent-service/src/agent_service/prompts/policy_v4.txt
+    @echo ">> prompts synced"
