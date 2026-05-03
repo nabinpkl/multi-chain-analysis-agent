@@ -5,9 +5,8 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 
-// Phase A of Python-agent migration: modules live in the library
-// crate so other bins (`dump_schemas`) can reach them. The server
-// binary just imports.
+// Modules live in the library crate so other bins (`agent_smoke`)
+// can reach them. The server binary just imports.
 use multichain_engine::{
     agent, analytics, api, config, graph, ingest, rpc, sinks, state, store, stream,
 };

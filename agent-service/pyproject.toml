@@ -18,14 +18,9 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    # Phase A of Python-agent migration: regen-wire-types pipeline.
-    # `cargo run --bin dump_schemas` writes JSON Schema files; this
-    # converts them to pydantic v2 models in
-    # `src/agent_service/wire/shared.py`.
-    "datamodel-code-generator>=0.27",
-    # Phase A.5: pytest layer. Wiring-only; no LLM calls. The total
-    # baseline-test runtime budget is <5s, which is also our smoke
-    # check that no real OpenRouter call has snuck in.
+    # Wiring-only pytest layer. No LLM calls. The total baseline-test
+    # runtime budget is <5s, which is also our smoke check that no
+    # real OpenRouter call has snuck in.
     "pytest>=8",
     "pytest-asyncio>=0.24",
     "pytest-httpx>=0.30",

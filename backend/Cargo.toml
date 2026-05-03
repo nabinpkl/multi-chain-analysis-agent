@@ -11,14 +11,6 @@ path = "src/main.rs"
 name = "agent_smoke"
 path = "src/bin/agent_smoke.rs"
 
-# Phase A of Python-agent migration: dump JSON Schema for every shared
-# wire type so `datamodel-code-generator` can produce
-# `agent-service/src/agent_service/wire/shared.py`. See `justfile`
-# `regen-wire-types` recipe.
-[[bin]]
-name = "dump_schemas"
-path = "src/bin/dump_schemas.rs"
-
 [dependencies]
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }

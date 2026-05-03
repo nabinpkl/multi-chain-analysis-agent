@@ -1,11 +1,6 @@
 //! Library face of the multichain backend. Exposes the same modules
 //! `main.rs` declares so other binaries in this crate (notably
-//! `dump_schemas`) can reach them.
-//!
-//! Phase A of the Python-agent migration introduced this lib; before
-//! that everything was bin-only. The `[[bin]]` targets share `main.rs`
-//! conventions but cannot reach each other's modules without going
-//! through a library crate.
+//! `agent_smoke`) can reach them.
 
 pub mod agent;
 pub mod analytics;
