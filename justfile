@@ -28,7 +28,7 @@ test-integration:
 #
 # Output (all checked in):
 #   backend/src/wire/generated/                    (Rust mod tree)
-#   agent-service/src/agent_service/wire/generated/  (Python pkg tree)
+#   agent-service/src/multichain/                  (Python top-level pkg)
 #   frontend/src/lib/wire/                         (TS pkg tree)
 #
 # Wire format: proto canonical JSON encoding (camelCase fields,
@@ -37,8 +37,8 @@ regen-wire-types:
     @echo ">> linting protos"
     buf lint
     @echo ">> generating Rust + Python + TS from protos"
-    rm -rf backend/src/wire/generated agent-service/src/agent_service/wire/generated frontend/src/lib/wire
-    mkdir -p backend/src/wire/generated agent-service/src/agent_service/wire/generated frontend/src/lib/wire
+    rm -rf backend/src/wire/generated agent-service/src/multichain frontend/src/lib/wire
+    mkdir -p backend/src/wire/generated agent-service/src/multichain frontend/src/lib/wire
     buf generate
     @echo ">> wire types regenerated"
 

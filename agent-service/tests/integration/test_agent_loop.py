@@ -15,8 +15,6 @@ Verifies the entire agent stack (Phase 0/A walking-skeleton scope):
 
 from __future__ import annotations
 
-import json
-
 from pydantic_ai.models.test import TestModel
 
 from agent_service.agent import AgentDeps, build_agent
@@ -60,9 +58,16 @@ async def test_agent_dispatches_wallet_profile_tool(
     ]
     assert len(primitive_calls) >= 1
 
-    # And the body contained the leased snapshot_id.
-    body = json.loads(primitive_calls[0].read().decode())
-    assert body["snapshot_id"] == canned.VALID_SNAPSHOT_ID
+    # And the binary-protobuf body contained the leased snapshot_id.
+    from multichain.wire.shared.v1 import primitive_envelope_pb2 as env_pb
+
+    decoded = env_pb.WalletProfileRequest()
+    decoded.ParseFromString(primitive_calls[0].read())
+    assert decoded.snapshot_id == canned.VALID_SNAPSHOT_ID
+    # TestModel auto-generates a synthetic addr; we just verify the
+    # field round-trips populated and the time_scope.live oneof is set.
+    assert decoded.input.addr  # non-empty
+    assert decoded.input.time_scope.HasField("live")
 
 
 async def test_agent_dispatches_community_summary_tool(

@@ -19,10 +19,6 @@ from pydantic_ai import Agent, RunContext
 
 from .llm import primary_model
 from .primitive_client import PrimitiveClient, PrimitiveError
-from .wire.shared import (
-    CommunitySummaryInput,
-    WalletProfileInput,
-)
 
 
 @dataclass
@@ -75,20 +71,17 @@ def build_agent() -> Agent[AgentDeps, str]:
                 wallet from the system prompt if unsure.
         """
         try:
-            # `time_scope` accepts the bare string "live" via the
-            # generated RootModel's coercion. Pass via dict so we
-            # don't depend on the per-file duplicate `TimeScope`
-            # class identity (datamodel-codegen emits a fresh
-            # TimeScope class per consuming file).
-            input_ = WalletProfileInput.model_validate(
-                {"addr": addr, "time_scope": "live"}
-            )
-            out = await ctx.deps.primitive_client.wallet_profile(
-                input_, ctx.deps.snapshot_id
+            # primitive_client constructs the proto request internally
+            # (TimeScope=Live by default). Returns PrimitiveResult with
+            # `value` already a Python dict materialized from the
+            # google.protobuf.Struct envelope field.
+            result = await ctx.deps.primitive_client.wallet_profile(
+                addr=addr,
+                snapshot_id=ctx.deps.snapshot_id,
             )
         except PrimitiveError as e:
             return {"error": e.kind, "message": e.message}
-        return out.model_dump()
+        return result.value
 
     @agent.tool
     async def community_summary(
@@ -102,14 +95,12 @@ def build_agent() -> Agent[AgentDeps, str]:
                 analytics layer.
         """
         try:
-            input_ = CommunitySummaryInput.model_validate(
-                {"community_id": community_id, "time_scope": "live"}
-            )
-            out = await ctx.deps.primitive_client.community_summary(
-                input_, ctx.deps.snapshot_id
+            result = await ctx.deps.primitive_client.community_summary(
+                community_id=community_id,
+                snapshot_id=ctx.deps.snapshot_id,
             )
         except PrimitiveError as e:
             return {"error": e.kind, "message": e.message}
-        return out.model_dump()
+        return result.value
 
     return agent

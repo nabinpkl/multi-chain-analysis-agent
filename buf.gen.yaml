@@ -16,8 +16,11 @@ plugins:
     strategy: all
 
   # Python: Google's official protobuf-python plugin (built into protoc).
+  # Writes a top-level `multichain` package directly under `src/` so the
+  # generated absolute imports (`from multichain.wire.shared.v1 import ...`)
+  # resolve without sys.path tricks. Python sibling of `agent_service`.
   - protoc_builtin: python
-    out: agent-service/src/agent_service/wire/generated
+    out: agent-service/src
 
   # TypeScript: Buf's @bufbuild/protoc-gen-es. Output is ESM TS with
   # full types + runtime via @bufbuild/protobuf.

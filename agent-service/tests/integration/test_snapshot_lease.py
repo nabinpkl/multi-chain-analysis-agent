@@ -65,7 +65,10 @@ def test_turn_begin_called_once_per_turn(test_app, with_happy_path_primitives):
 
 
 def test_turn_end_carries_lease_id(test_app, with_happy_path_primitives):
-    """The /turn/end body must include the snapshot_id from /turn/begin."""
+    """The /turn/end body must include the snapshot_id from /turn/begin
+    (binary protobuf-encoded SnapshotEndRequest)."""
+    from multichain.wire.shared.v1 import snapshot_pb2 as snap_pb
+
     test_model = TestModel(call_tools=[])
     with app.state.agent.override(model=test_model):
         ask = test_app.post("/agent/ask", json=canned.make_ask_payload("q")).json()
@@ -74,14 +77,20 @@ def test_turn_end_carries_lease_id(test_app, with_happy_path_primitives):
     requests = with_happy_path_primitives.get_requests()
     end_calls = [r for r in requests if r.url.path == "/turn/end"]
     assert len(end_calls) == 1
-    end_body = json.loads(end_calls[0].read().decode())
-    assert end_body == {"snapshot_id": canned.VALID_SNAPSHOT_ID}
+    sent = end_calls[0]
+    assert sent.headers.get("content-type") == "application/x-protobuf"
+    decoded = snap_pb.SnapshotEndRequest()
+    decoded.ParseFromString(sent.read())
+    assert decoded.snapshot_id == canned.VALID_SNAPSHOT_ID
 
 
 def test_primitive_calls_carry_lease_id(test_app, with_happy_path_primitives):
     """Every primitive call in the turn must carry the same leased
     snapshot_id. If the agent dispatches a tool that drops it, every
-    real-Rust call would 410 Gone."""
+    real-Rust call would 410 Gone. Bodies are binary-protobuf encoded
+    `WalletProfileRequest` / `CommunitySummaryRequest`."""
+    from multichain.wire.shared.v1 import primitive_envelope_pb2 as env_pb
+
     test_model = TestModel(call_tools=["wallet_profile"])
     with app.state.agent.override(model=test_model):
         ask = test_app.post("/agent/ask", json=canned.make_ask_payload("q")).json()
@@ -91,8 +100,13 @@ def test_primitive_calls_carry_lease_id(test_app, with_happy_path_primitives):
     primitive_calls = [r for r in requests if r.url.path.startswith("/primitive/")]
     assert len(primitive_calls) >= 1
     for call in primitive_calls:
-        body = json.loads(call.read().decode())
-        assert body["snapshot_id"] == canned.VALID_SNAPSHOT_ID
+        assert call.headers.get("content-type") == "application/x-protobuf"
+        if call.url.path == "/primitive/wallet_profile":
+            decoded = env_pb.WalletProfileRequest()
+        else:
+            decoded = env_pb.CommunitySummaryRequest()
+        decoded.ParseFromString(call.read())
+        assert decoded.snapshot_id == canned.VALID_SNAPSHOT_ID
 
 
 def test_turn_end_fires_even_when_agent_raises(test_app, mock_data_plane, monkeypatch):
@@ -103,7 +117,8 @@ def test_turn_end_fires_even_when_agent_raises(test_app, mock_data_plane, monkey
     mock_data_plane.add_response(
         method="POST",
         url=f"{DATA_PLANE_BASE}/turn/begin",
-        json=canned.SNAPSHOT_BEGIN_RESPONSE,
+        content=canned.encode_snapshot_begin_response(),
+        headers={"Content-Type": "application/x-protobuf"},
     )
     mock_data_plane.add_response(
         method="POST", url=f"{DATA_PLANE_BASE}/turn/end", status_code=204

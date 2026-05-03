@@ -1,24 +1,29 @@
 """Tests for `agent_service.primitive_client.PrimitiveClient`.
 
-Wires httpx mocks at the request level via `pytest-httpx` so the
-client's own logic (envelope parsing, error mapping, lease lifecycle)
-is under test. No real Rust container.
+Stage 2 of the proto migration: production wire is binary protobuf.
+Mocks return proto-encoded bytes via the `encode_*` helpers in
+`fixtures/primitive_responses.py`. Errors stay JSON-shaped on the
+Rust side regardless of request format, so error mocks still use
+`json={...}`.
+
+No real Rust container.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from agent_service.primitive_client import PrimitiveError
-from agent_service.wire.shared import (
-    CommunitySummaryInput,
-    SnapshotBeginResponse,
-    WalletProfileInput,
-    WalletProfileOutput,
+from agent_service.primitive_client import (
+    PrimitiveError,
+    PrimitiveResult,
+    SnapshotLease,
 )
 
 from tests.conftest import DATA_PLANE_BASE
 from tests.fixtures import primitive_responses as canned
+
+PROTO_CT = {"Content-Type": "application/x-protobuf"}
+
 
 # ---------------------------------------------------------------------------
 # Snapshot lease
@@ -29,9 +34,10 @@ async def test_begin_turn_returns_lease(primitive_client, mock_data_plane):
     mock_data_plane.add_response(
         method="POST",
         url=f"{DATA_PLANE_BASE}/turn/begin",
-        json=canned.SNAPSHOT_BEGIN_RESPONSE,
+        content=canned.encode_snapshot_begin_response(),
+        headers=PROTO_CT,
     )
-    lease: SnapshotBeginResponse = await primitive_client.begin_turn()
+    lease: SnapshotLease = await primitive_client.begin_turn()
     assert lease.snapshot_id == canned.VALID_SNAPSHOT_ID
     assert lease.window_secs == 60
     assert lease.expires_at_ms > 0
@@ -77,19 +83,20 @@ async def test_wallet_profile_happy_path(primitive_client, mock_data_plane):
     mock_data_plane.add_response(
         method="POST",
         url=f"{DATA_PLANE_BASE}/primitive/wallet_profile",
-        json=canned.WALLET_PROFILE_RESPONSE,
+        content=canned.encode_wallet_profile_response(),
+        headers=PROTO_CT,
     )
-    input_ = WalletProfileInput.model_validate(
-        {"addr": canned.WALLET_PROFILE_ADDR, "time_scope": "live"}
+    result: PrimitiveResult = await primitive_client.wallet_profile(
+        addr=canned.WALLET_PROFILE_ADDR,
+        snapshot_id=canned.VALID_SNAPSHOT_ID,
     )
-    out: WalletProfileOutput = await primitive_client.wallet_profile(
-        input_, canned.VALID_SNAPSHOT_ID
-    )
-    assert out.addr == canned.WALLET_PROFILE_ADDR
-    assert out.role.value == "whale"
-    assert out.community_id == canned.WALLET_PROFILE_COMMUNITY_ID
-    assert out.stats.total_volume_lamports == 80223943444.0
-    assert len(out.top_counterparties) == 5
+    assert result.value["addr"] == canned.WALLET_PROFILE_ADDR
+    assert result.value["role"] == "NODE_ROLE_WHALE"
+    assert result.value["community_id"] == canned.WALLET_PROFILE_COMMUNITY_ID
+    assert result.value["stats"]["total_volume_lamports"] == 80223943444.0
+    assert len(result.value["top_counterparties"]) == 5
+    # Provenance stays typed: list of proto ProvenanceRef.
+    assert len(result.provenance) == len(canned.WALLET_PROFILE_RESPONSE["provenance"])
 
 
 async def test_wallet_profile_not_in_window_raises(primitive_client, mock_data_plane):
@@ -99,11 +106,11 @@ async def test_wallet_profile_not_in_window_raises(primitive_client, mock_data_p
         status_code=404,
         json=canned.WALLET_NOT_IN_WINDOW_ERROR,
     )
-    input_ = WalletProfileInput.model_validate(
-        {"addr": canned.WALLET_PROFILE_ADDR, "time_scope": "live"}
-    )
     with pytest.raises(PrimitiveError) as excinfo:
-        await primitive_client.wallet_profile(input_, canned.VALID_SNAPSHOT_ID)
+        await primitive_client.wallet_profile(
+            addr=canned.WALLET_PROFILE_ADDR,
+            snapshot_id=canned.VALID_SNAPSHOT_ID,
+        )
     assert excinfo.value.kind == "not_in_window"
     assert excinfo.value.status_code == 404
 
@@ -115,11 +122,11 @@ async def test_wallet_profile_snapshot_gone_raises(primitive_client, mock_data_p
         status_code=410,
         json=canned.SNAPSHOT_GONE_ERROR,
     )
-    input_ = WalletProfileInput.model_validate(
-        {"addr": "X", "time_scope": "live"}
-    )
     with pytest.raises(PrimitiveError) as excinfo:
-        await primitive_client.wallet_profile(input_, "stale-snapshot-id")
+        await primitive_client.wallet_profile(
+            addr="X",
+            snapshot_id="stale-snapshot-id",
+        )
     assert excinfo.value.kind == "snapshot_gone"
     assert excinfo.value.status_code == 410
 
@@ -131,11 +138,10 @@ async def test_wallet_profile_internal_error(primitive_client, mock_data_plane):
         status_code=500,
         json={"error": "boom", "kind": "internal"},
     )
-    input_ = WalletProfileInput.model_validate(
-        {"addr": "X", "time_scope": "live"}
-    )
     with pytest.raises(PrimitiveError) as excinfo:
-        await primitive_client.wallet_profile(input_, canned.VALID_SNAPSHOT_ID)
+        await primitive_client.wallet_profile(
+            addr="X", snapshot_id=canned.VALID_SNAPSHOT_ID
+        )
     assert excinfo.value.kind == "internal"
 
 
@@ -149,11 +155,10 @@ async def test_wallet_profile_non_json_error_body(primitive_client, mock_data_pl
         status_code=502,
         text="<html>Bad Gateway</html>",
     )
-    input_ = WalletProfileInput.model_validate(
-        {"addr": "X", "time_scope": "live"}
-    )
     with pytest.raises(PrimitiveError) as excinfo:
-        await primitive_client.wallet_profile(input_, canned.VALID_SNAPSHOT_ID)
+        await primitive_client.wallet_profile(
+            addr="X", snapshot_id=canned.VALID_SNAPSHOT_ID
+        )
     assert excinfo.value.status_code == 502
     assert "Bad Gateway" in excinfo.value.message
 
@@ -167,42 +172,53 @@ async def test_community_summary_happy_path(primitive_client, mock_data_plane):
     mock_data_plane.add_response(
         method="POST",
         url=f"{DATA_PLANE_BASE}/primitive/community_summary",
-        json=canned.COMMUNITY_SUMMARY_RESPONSE,
+        content=canned.encode_community_summary_response(),
+        headers=PROTO_CT,
     )
-    input_ = CommunitySummaryInput.model_validate(
-        {"community_id": canned.WALLET_PROFILE_COMMUNITY_ID, "time_scope": "live"}
+    result = await primitive_client.community_summary(
+        community_id=canned.WALLET_PROFILE_COMMUNITY_ID,
+        snapshot_id=canned.VALID_SNAPSHOT_ID,
     )
-    out = await primitive_client.community_summary(input_, canned.VALID_SNAPSHOT_ID)
-    assert out.community_id == canned.WALLET_PROFILE_COMMUNITY_ID
-    assert out.size == 7
-    assert out.edge_count == 6
-    assert len(out.top_wallets) == 2
+    assert result.value["community_id"] == canned.WALLET_PROFILE_COMMUNITY_ID
+    assert result.value["size"] == 7
+    assert result.value["edge_count"] == 6
+    assert len(result.value["top_wallets"]) == 2
 
 
 # ---------------------------------------------------------------------------
-# Snapshot_id is actually sent (not silently dropped)
+# Wire-format guarantees: snapshot_id rides in the body, content-type
+# is binary protobuf, request is decodable as the expected proto type.
 # ---------------------------------------------------------------------------
 
 
-async def test_wallet_profile_sends_snapshot_id_in_body(
+async def test_wallet_profile_sends_binary_proto_with_snapshot_id(
     primitive_client, mock_data_plane
 ):
-    """Regression guard for the snapshot lease: the client MUST
-    serialize `snapshot_id` into the request body, not drop it. If
-    a refactor breaks this, every primitive call returns 410 Gone
-    against the real Rust route."""
+    """Regression guard: the client serializes the request as binary
+    protobuf with the snapshot_id field set. If a refactor breaks
+    this, every primitive call returns 410 Gone against real Rust."""
+    from multichain.wire.shared.v1 import primitive_envelope_pb2 as env_pb
+
     mock_data_plane.add_response(
         method="POST",
         url=f"{DATA_PLANE_BASE}/primitive/wallet_profile",
-        json=canned.WALLET_PROFILE_RESPONSE,
+        content=canned.encode_wallet_profile_response(),
+        headers=PROTO_CT,
     )
-    input_ = WalletProfileInput.model_validate(
-        {"addr": canned.WALLET_PROFILE_ADDR, "time_scope": "live"}
+    await primitive_client.wallet_profile(
+        addr=canned.WALLET_PROFILE_ADDR,
+        snapshot_id=canned.VALID_SNAPSHOT_ID,
     )
-    await primitive_client.wallet_profile(input_, canned.VALID_SNAPSHOT_ID)
 
     requests = mock_data_plane.get_requests()
     assert len(requests) == 1
-    body = requests[0].read().decode()
-    assert canned.VALID_SNAPSHOT_ID in body
-    assert canned.WALLET_PROFILE_ADDR in body
+    sent = requests[0]
+    assert sent.headers.get("content-type") == "application/x-protobuf"
+    assert sent.headers.get("accept") == "application/x-protobuf"
+
+    # Round-trip the bytes back through the proto type to verify shape.
+    decoded = env_pb.WalletProfileRequest()
+    decoded.ParseFromString(sent.read())
+    assert decoded.snapshot_id == canned.VALID_SNAPSHOT_ID
+    assert decoded.input.addr == canned.WALLET_PROFILE_ADDR
+    assert decoded.input.time_scope.HasField("live")

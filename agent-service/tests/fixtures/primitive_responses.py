@@ -2,17 +2,28 @@
 `/turn/*` calls in Phase A. Used by tests to replay against the
 mocked httpx client without needing a live Rust container.
 
-If the Rust wire shape changes, regenerate by:
+The dicts here mirror the typed primitive output shape (the `value`
+field of the proto envelope). Stage 2 of the proto migration added
+`encode_*` helpers that pack these into a binary proto
+`PrimitiveResponseEnvelope` for the binary wire mocks. Tests should
+prefer the `encode_*` byte-emitters; raw dict access is kept for
+tests that need to inspect specific fields.
 
-    1. Run the Phase A end-to-end probe in `noble-orbiting-key.md`
-    2. Save the response bodies here verbatim
-    3. Re-run `cd agent-service && uv run pytest`
-
-The shapes are pydantic-validated by `unit/test_wire_shapes.py`, so
-drift surfaces as a test failure, not silent rot.
+If the Rust wire shape changes, regenerate by capturing fresh
+responses with curl against a running Rust API and updating the
+dicts below. Schema parity with the proto source-of-truth is
+enforced by the `encode_*` helpers raising on extra/missing fields.
 """
 
 from __future__ import annotations
+
+from google.protobuf import json_format, struct_pb2
+
+from multichain.wire.shared.v1 import (
+    primitive_envelope_pb2 as env_pb,
+    provenance_pb2 as prov_pb,
+    snapshot_pb2 as snap_pb,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +82,8 @@ WALLET_PROFILE_COMMUNITY_ID = 8
 WALLET_PROFILE_RESPONSE: dict = {
     "value": {
         "addr": WALLET_PROFILE_ADDR,
-        "role": "whale",
+        # Proto enum canonical JSON form: full upper-snake name with prefix.
+        "role": "NODE_ROLE_WHALE",
         "community_id": WALLET_PROFILE_COMMUNITY_ID,
         "stats": {
             "degree": 5,
@@ -139,3 +151,78 @@ COMMUNITY_SUMMARY_RESPONSE: dict = {
     ],
     "subgraph_slice": None,
 }
+
+
+# ---------------------------------------------------------------------------
+# Binary proto encoders. Stage 2: production wire is binary protobuf;
+# mocks return bytes. The dict shapes above stay readable; helpers below
+# pack them into the proto envelope and serialize.
+#
+# `value` becomes a `google.protobuf.Struct` populated from the dict,
+# matching what the Rust handler does (typed proto output -> serde_json
+# -> Struct on the way out).
+# ---------------------------------------------------------------------------
+
+
+def _provenance_dict_to_proto(p: dict) -> prov_pb.ProvenanceRef:
+    """Convert one provenance dict (legacy externally-tagged JSON form
+    with `kind` discriminator) into the proto oneof shape."""
+    kind = p["kind"]
+    ref = prov_pb.ProvenanceRef()
+    if kind == "wallet":
+        ref.wallet.addr = p["addr"]
+        if p.get("idx") is not None:
+            ref.wallet.idx = p["idx"]
+    elif kind == "edge":
+        ref.edge.id = p["id"]
+        ref.edge.src = p["src"]
+        ref.edge.dst = p["dst"]
+    elif kind == "community":
+        ref.community.id = p["id"]
+    elif kind == "time-range" or kind == "time_range":
+        ref.time_range.from_s = p["from_s"]
+        ref.time_range.to_s = p["to_s"]
+    elif kind == "number":
+        ref.number.metric = p["metric"]
+        ref.number.value = p["value"]
+        ref.number.support.extend(p.get("support", []))
+    else:
+        raise ValueError(f"unknown provenance kind: {kind!r}")
+    return ref
+
+
+def _envelope_bytes(value_dict: dict, provenance_dicts: list[dict]) -> bytes:
+    env = env_pb.PrimitiveResponseEnvelope()
+    # google.protobuf.Struct loaded from a Python dict via json_format.
+    # Same serialization rules as serde_json on the Rust side.
+    struct = struct_pb2.Struct()
+    json_format.ParseDict(value_dict, struct)
+    env.value.CopyFrom(struct)
+    for p in provenance_dicts:
+        env.provenance.append(_provenance_dict_to_proto(p))
+    return env.SerializeToString()
+
+
+def encode_wallet_profile_response() -> bytes:
+    """Binary proto envelope for the canned wallet_profile response."""
+    return _envelope_bytes(
+        WALLET_PROFILE_RESPONSE["value"],
+        WALLET_PROFILE_RESPONSE["provenance"],
+    )
+
+
+def encode_community_summary_response() -> bytes:
+    """Binary proto envelope for the canned community_summary response."""
+    return _envelope_bytes(
+        COMMUNITY_SUMMARY_RESPONSE["value"],
+        COMMUNITY_SUMMARY_RESPONSE["provenance"],
+    )
+
+
+def encode_snapshot_begin_response() -> bytes:
+    msg = snap_pb.SnapshotBeginResponse(
+        snapshot_id=SNAPSHOT_BEGIN_RESPONSE["snapshot_id"],
+        expires_at_ms=SNAPSHOT_BEGIN_RESPONSE["expires_at_ms"],
+        window_secs=SNAPSHOT_BEGIN_RESPONSE["window_secs"],
+    )
+    return msg.SerializeToString()

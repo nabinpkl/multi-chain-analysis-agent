@@ -72,10 +72,12 @@ def with_happy_path_primitives(mock_data_plane):
     # `is_optional=True` so tests that only exercise begin/end (and
     # don't touch the primitive routes) don't fail the
     # "mocked-but-not-requested" assertion.
+    proto_ct = {"Content-Type": "application/x-protobuf"}
     mock_data_plane.add_response(
         method="POST",
         url=f"{DATA_PLANE_BASE}/turn/begin",
-        json=canned.SNAPSHOT_BEGIN_RESPONSE,
+        content=canned.encode_snapshot_begin_response(),
+        headers=proto_ct,
         is_reusable=True,
         is_optional=True,
     )
@@ -89,14 +91,16 @@ def with_happy_path_primitives(mock_data_plane):
     mock_data_plane.add_response(
         method="POST",
         url=f"{DATA_PLANE_BASE}/primitive/wallet_profile",
-        json=canned.WALLET_PROFILE_RESPONSE,
+        content=canned.encode_wallet_profile_response(),
+        headers=proto_ct,
         is_reusable=True,
         is_optional=True,
     )
     mock_data_plane.add_response(
         method="POST",
         url=f"{DATA_PLANE_BASE}/primitive/community_summary",
-        json=canned.COMMUNITY_SUMMARY_RESPONSE,
+        content=canned.encode_community_summary_response(),
+        headers=proto_ct,
         is_reusable=True,
         is_optional=True,
     )
