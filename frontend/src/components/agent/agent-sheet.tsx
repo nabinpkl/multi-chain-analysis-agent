@@ -72,7 +72,11 @@ export function AgentSheet({
 
         {builderViewOn ? <SwitchPanel /> : null}
 
-        <ProgressStrip current={progress} active={inFlight} />
+        <ProgressStrip
+          current={progress}
+          active={inFlight}
+          builderView={builderViewOn}
+        />
 
         {turns.length === 0 && !inFlight ? (
           <AgentEmptyState focusedAddr={focusedAddr} />
@@ -80,7 +84,7 @@ export function AgentSheet({
           <AgentClaimList turns={turns} status={status} />
         )}
 
-        <TraceLink status={status} />
+        <TraceLink status={status} builderView={builderViewOn} />
 
         <DisclaimerFooter />
 
@@ -117,34 +121,48 @@ function DisclaimerFooter() {
 }
 
 /**
- * Deep-link to the Langfuse trace for the most recent turn. Visible
- * only after a turn completes with a non-empty trace_id (Ship 1 of
- * agent-observability, ADR 13). NEXT_PUBLIC_LANGFUSE_URL points at
- * the self-hosted Langfuse web UI; project id matches LANGFUSE_INIT_
- * PROJECT_ID in the compose env (default `agent`).
+ * Done-frame footer. Two pieces with different audiences:
+ *
+ * - "turn took X.Xs" is user-relevant feedback ("how long did this
+ *   take") and renders for everyone.
+ * - "view trace ↗" deep-links into the self-hosted Langfuse UI
+ *   (Ship 1 of agent-observability, ADR 13); the URL contains a raw
+ *   trace id and points at internal dev infra. Builder-view only,
+ *   matching the SwitchPanel posture.
+ *
+ * The whole strip is hidden until a turn completes with a Done frame.
+ * NEXT_PUBLIC_LANGFUSE_URL points at the Langfuse web UI; project id
+ * matches LANGFUSE_INIT_PROJECT_ID in the compose env (default
+ * `agent`).
  */
 function TraceLink({
   status,
+  builderView,
 }: {
   status: AgentStreamState["status"];
+  builderView: boolean;
 }) {
-  if (status.kind !== "done" || !status.traceId) return null;
+  if (status.kind !== "done") return null;
+  const seconds = (status.elapsedMs / 1000).toFixed(1);
   const baseUrl = process.env.NEXT_PUBLIC_LANGFUSE_URL || "http://localhost:3001";
   const projectId = process.env.NEXT_PUBLIC_LANGFUSE_PROJECT_ID || "agent";
-  const href = `${baseUrl}/project/${projectId}/traces/${status.traceId}`;
-  const seconds = (status.elapsedMs / 1000).toFixed(1);
+  const href = status.traceId
+    ? `${baseUrl}/project/${projectId}/traces/${status.traceId}`
+    : null;
   return (
     <div className="px-4 py-1.5 border-t border-mca-border bg-mca-bg/40 flex items-center justify-between text-[0.55rem] uppercase tracking-[1.5px] text-mca-dim">
-      <span className="tabular-nums">turn took {seconds}s</span>
-      <a
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-mca-muted hover:text-mca-text transition-colors"
-        title="open this trace in Langfuse"
-      >
-        view trace ↗
-      </a>
+      <span className="tabular-nums">took {seconds}s</span>
+      {builderView && href ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-mca-muted hover:text-mca-text transition-colors"
+          title="open this trace in Langfuse"
+        >
+          view trace ↗
+        </a>
+      ) : null}
     </div>
   );
 }

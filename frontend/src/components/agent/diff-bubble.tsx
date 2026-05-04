@@ -46,9 +46,12 @@ function NoMovementBubble({
   payload: NoMovement;
   onScrollToTurn: (turn: number) => void;
 }) {
-  const list = payload.primitivesReplayed.length
-    ? payload.primitivesReplayed.join(", ")
-    : "no primitives replayed";
+  // The `primitivesReplayed` array is the backend's list of internal
+  // primitive function names (`wallet_profile`, `community_summary`).
+  // The user has no model for those names, and the fact that we
+  // re-fetched is what matters; the specific endpoint isn't. Render
+  // a generic phrase instead of leaking impl. Builder-view audit
+  // surface for the same data lives in the trace.
   return (
     <div className="border border-mca-border rounded bg-mca-surface px-3 py-2 space-y-1.5">
       <div className="flex items-center justify-between gap-2">
@@ -58,7 +61,7 @@ function NoMovementBubble({
         <ScrollToTurnChip turn={payload.priorTurn} onClick={onScrollToTurn} />
       </div>
       <p className="text-[0.75rem] text-mca-text leading-snug">
-        Re-checked {list}. Nothing has shifted since turn{" "}
+        Re-checked the data. Nothing has shifted since turn{" "}
         <span className="tabular-nums">{payload.priorTurn + 1}</span>.
       </p>
     </div>
