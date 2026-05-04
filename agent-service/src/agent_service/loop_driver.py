@@ -48,10 +48,25 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
+import os
 import structlog
 from google.protobuf import json_format
+from opentelemetry import trace
 from pydantic_ai import Agent
 from pydantic_ai.usage import UsageLimits
+
+from . import spans
+
+# Module-level tracer. init_otel() registered the global TracerProvider
+# at app startup; this resolves through to it. Tests with
+# OTEL_SDK_DISABLED=true get a no-op tracer so `with start_as_current_span`
+# stays cheap.
+_tracer = trace.get_tracer(__name__)
+
+# Default `run.type` for the agent.turn root span. Eval harness (Ship 2)
+# overrides via env var so its traces are filterable in the same store
+# without per-call wiring on every test case.
+_RUN_TYPE = os.environ.get("AGENT_RUN_TYPE", spans.RUN_TYPE_PRODUCTION)
 
 from multichain.wire.agent.v1 import (
     claim_pb2,
@@ -224,6 +239,19 @@ def _set_retracted(claim: claim_pb2.Claim, reason: str) -> None:
     claim.policy_verdict.retracted.reason = reason
 
 
+def _normalize_verdict(v: str) -> str:
+    """Map constitution-gate verdicts ("approve" | "retract" | "reject")
+    onto the span verdict vocabulary so all gate.* + claim.emitted +
+    narrative.emitted spans share one set of strings (`approved` /
+    `retracted` / `reject`). Eval probes filter on these; consistency
+    here saves a CASE expression in every consumer query."""
+    return {
+        "approve": spans.VERDICT_APPROVED,
+        "retract": spans.VERDICT_RETRACTED,
+        "reject": spans.VERDICT_REJECT,
+    }.get(v, v)
+
+
 # ---------------------------------------------------------------------------
 # Provenance summary helper for constitution gate payloads
 # ---------------------------------------------------------------------------
@@ -285,71 +313,87 @@ async def _run_repeat_path(
     """Replay the prior turn's tool calls against the fresh snapshot,
     diff outputs, emit NoMovement or ChangedSince. No LLM narrative
     call on the empty path; ChangedSince carries deterministic prose
-    listing the changed fields."""
+    listing the changed fields.
+
+    Wrapped in a `turn.diff` span so the SQL query
+    `SELECT changed_count, primitives_replayed FROM otel_traces WHERE
+    SpanName='turn.diff'` answers "what shifted between this turn and
+    the prior one" without replaying the loop. Per-primitive replays
+    nest as primitive.* spans automatically (the wallet_profile /
+    community_summary calls open their own spans inside this context).
+    """
     prior_calls = thread.tool_calls_per_turn.get(repeat_of_turn, [])
     primitives_replayed: list[str] = []
     all_changed: list[diff_pb2.FieldDelta] = []
     total_unchanged = 0
 
-    for record in prior_calls:
-        try:
-            if record.primitive_name == "wallet_profile":
-                fresh = await handles.primitive_client.wallet_profile(
-                    addr=record.args["addr"], snapshot_id=snapshot_id
+    with _tracer.start_as_current_span(spans.TURN_DIFF) as diff_span:
+        diff_span.set_attribute(spans.Attrs.REPEAT_OF_TURN, repeat_of_turn)
+        for record in prior_calls:
+            try:
+                if record.primitive_name == "wallet_profile":
+                    fresh = await handles.primitive_client.wallet_profile(
+                        addr=record.args["addr"], snapshot_id=snapshot_id
+                    )
+                elif record.primitive_name == "community_summary":
+                    fresh = await handles.primitive_client.community_summary(
+                        community_id=record.args["community_id"],
+                        snapshot_id=snapshot_id,
+                    )
+                else:
+                    continue
+            except PrimitiveError as e:
+                log.warning(
+                    "repeat_replay_failed",
+                    primitive=record.primitive_name,
+                    error=e.kind,
                 )
-            elif record.primitive_name == "community_summary":
-                fresh = await handles.primitive_client.community_summary(
-                    community_id=record.args["community_id"],
-                    snapshot_id=snapshot_id,
-                )
-            else:
                 continue
-        except PrimitiveError as e:
-            log.warning(
-                "repeat_replay_failed",
-                primitive=record.primitive_name,
-                error=e.kind,
+
+            primitives_replayed.append(record.primitive_name)
+            spec = spec_for(record.primitive_name)
+            delta = diff_outputs(record.primitive_name, spec, record.output_value, fresh.value)
+            all_changed.extend(delta.changed)
+            total_unchanged += delta.unchanged_field_count
+
+        diff_span.set_attribute(spans.Attrs.DIFF_CHANGED_COUNT, len(all_changed))
+        diff_span.set_attribute(spans.Attrs.DIFF_UNCHANGED_COUNT, total_unchanged)
+        diff_span.set_attribute(
+            spans.Attrs.DIFF_PRIMITIVES_REPLAYED, primitives_replayed
+        )
+
+        if not all_changed:
+            # No-movement bubble. Deterministic; no LLM call.
+            nm = diff_pb2.NoMovement(
+                prior_turn=repeat_of_turn,
+                primitives_replayed=primitives_replayed,
             )
-            continue
+            yield _frame("NoMovement", nm)
+        else:
+            delta = diff_pb2.Delta(
+                changed=all_changed, unchanged_field_count=total_unchanged
+            )
+            # Deterministic prose summary; cheap and avoids a second LLM
+            # round-trip on the repeat path. Loop driver ports the Rust
+            # behavior of "small narrative call describing what shifted"
+            # in a future revision; v0 is just a structured summary.
+            prose = _format_changed_prose(all_changed)
+            cs = diff_pb2.ChangedSince(prior_turn=repeat_of_turn, delta=delta, prose=prose)
+            yield _frame("ChangedSince", cs)
 
-        primitives_replayed.append(record.primitive_name)
-        spec = spec_for(record.primitive_name)
-        delta = diff_outputs(record.primitive_name, spec, record.output_value, fresh.value)
-        all_changed.extend(delta.changed)
-        total_unchanged += delta.unchanged_field_count
-
-    if not all_changed:
-        # No-movement bubble. Deterministic; no LLM call.
-        nm = diff_pb2.NoMovement(
-            prior_turn=repeat_of_turn,
-            primitives_replayed=primitives_replayed,
+        # Ledger: record the repeat decision + diff result.
+        await handles.ledger.write(
+            LedgerEventDraft(
+                session_id=session_id,
+                kind=LedgerEventKind.TURN_DIFF,
+                payload={
+                    "repeat_of_turn": repeat_of_turn,
+                    "primitives_replayed": primitives_replayed,
+                    "changed_count": len(all_changed),
+                    "unchanged_count": total_unchanged,
+                },
+            )
         )
-        yield _frame("NoMovement", nm)
-    else:
-        delta = diff_pb2.Delta(
-            changed=all_changed, unchanged_field_count=total_unchanged
-        )
-        # Deterministic prose summary; cheap and avoids a second LLM
-        # round-trip on the repeat path. Loop driver ports the Rust
-        # behavior of "small narrative call describing what shifted"
-        # in a future revision; v0 is just a structured summary.
-        prose = _format_changed_prose(all_changed)
-        cs = diff_pb2.ChangedSince(prior_turn=repeat_of_turn, delta=delta, prose=prose)
-        yield _frame("ChangedSince", cs)
-
-    # Ledger: record the repeat decision + diff result.
-    await handles.ledger.write(
-        LedgerEventDraft(
-            session_id=session_id,
-            kind=LedgerEventKind.TURN_DIFF,
-            payload={
-                "repeat_of_turn": repeat_of_turn,
-                "primitives_replayed": primitives_replayed,
-                "changed_count": len(all_changed),
-                "unchanged_count": total_unchanged,
-            },
-        )
-    )
 
 
 def _format_changed_prose(changes: list[diff_pb2.FieldDelta]) -> str:
@@ -396,9 +440,25 @@ async def run_turn(
     try:
         thread, lock = await handles.threads.get_or_create(thread_id)
         async with lock:
+          # Root span for this turn. Carries the four turn-scoped attrs
+          # (session/thread/turn/run-type) so SQL filters can
+          # `WHERE SpanName='agent.turn' AND SpanAttributes['session.id']='...'`
+          # then join children via TraceId. Everything below opens under
+          # this context, including Pydantic AI's auto agent.run /
+          # gen_ai.chat / execute_tool spans. OTel's span context
+          # manager is sync (no __aexit__), so it must nest inside the
+          # async-with rather than combine. `yield` inside is fine:
+          # OTel uses contextvars so the active-span stack is preserved
+          # across async suspension points.
+          with _tracer.start_as_current_span(spans.AGENT_TURN) as turn_span:
             turn = thread.turn_count
             thread.turn_count += 1
             thread.record_turn_user_question(turn, request.user_question)
+
+            turn_span.set_attribute(spans.Attrs.SESSION_ID, session_id)
+            turn_span.set_attribute(spans.Attrs.THREAD_ID, thread_id)
+            turn_span.set_attribute(spans.Attrs.TURN_INDEX, turn)
+            turn_span.set_attribute(spans.Attrs.RUN_TYPE, _RUN_TYPE)
 
             # ------ Session-started ledger event ------
             await handles.ledger.write(
@@ -425,9 +485,24 @@ async def run_turn(
                     if t != turn  # exclude the just-recorded current question
                 }
                 if prior_qs:
-                    outcome = await detect_repeat(
-                        prior_qs, request.user_question, handles.repeat_agent
-                    )
+                    with _tracer.start_as_current_span(spans.REPEAT_DETECTION) as rd_span:
+                        outcome = await detect_repeat(
+                            prior_qs, request.user_question, handles.repeat_agent
+                        )
+                        is_repeat = outcome.repeat_of_turn is not None
+                        rd_span.set_attribute(spans.Attrs.REPEAT_IS_REPEAT, is_repeat)
+                        rd_span.set_attribute(
+                            spans.Attrs.REPEAT_USER_WANTS_REFRESH,
+                            outcome.user_explicitly_wants_refresh,
+                        )
+                        if is_repeat:
+                            rd_span.set_attribute(
+                                spans.Attrs.REPEAT_OF_TURN, outcome.repeat_of_turn
+                            )
+                        if outcome.reason:
+                            rd_span.set_attribute(
+                                spans.Attrs.REPEAT_REASON, outcome.reason
+                            )
                     if (
                         outcome.repeat_of_turn is not None
                         and not outcome.user_explicitly_wants_refresh
@@ -497,6 +572,12 @@ async def run_turn(
             narrative_text: str = result.output
 
             # ------ Process emitted claims ------
+            # One `claim.emitted` span per claim wrapping all gate calls
+            # so the trace tree shows per-claim trees: claim.emitted →
+            # (gate.placeholder, gate.structural, gate.constitution →
+            # gen_ai.chat). The final verdict attribute is set right
+            # before the SSE frame yield so a single span query gives
+            # the per-claim outcome history.
             approved_claims: list[claim_pb2.Claim] = []
             for ec in deps.emitted_claims:
                 claim = _build_claim(
@@ -505,89 +586,176 @@ async def run_turn(
                     session_started_at_ms=session_started_at_ms,
                 )
 
-                # Rule 1: empty provenance always retracts.
-                if not claim.provenance:
-                    _set_retracted(claim, "claim has empty provenance; cite at least one entity")
-                    yield _frame("Claim", claim)
-                    continue
-
-                # Deterministic placeholder validation.
-                ref_err = validate_refs(claim.body_markdown, len(claim.provenance))
-                if ref_err is not None:
-                    _set_retracted(claim, ref_err.to_human_string())
-                    yield _frame("Claim", claim)
-                    continue
-
-                # Structural value compare (ship 5a). Always run when
-                # there's a binding store with anything in it.
-                struct_err = verify_chip_values(list(claim.provenance), thread.bindings)
-                if struct_err is not None and request.switches.dont_fabricate:
-                    _set_retracted(claim, struct_err.to_human_string())
-                    yield _frame("Claim", claim)
-                    continue
-
-                # Constitution gate (only when stay_in_role is on; the
-                # constitution covers domain + identity + citation).
-                if request.switches.stay_in_role:
-                    verdict = await judge_claim(
-                        handles.constitution_agent,
-                        headline=claim.headline,
-                        body_markdown=claim.body_markdown,
-                        provenance_summary=_summarize_provenance(claim.provenance),
+                with _tracer.start_as_current_span(spans.CLAIM_EMITTED) as claim_span:
+                    claim_span.set_attribute(spans.Attrs.CLAIM_ID, claim.id)
+                    claim_span.set_attribute(
+                        spans.Attrs.CLAIM_KIND,
+                        claim_pb2.ClaimKind.Name(claim.kind),
                     )
-                    if verdict.verdict in ("retract", "reject"):
-                        _set_retracted(
-                            claim, verdict.reason or f"constitution {verdict.verdict}"
-                        )
+                    claim_span.set_attribute(spans.Attrs.CLAIM_HEADLINE, claim.headline)
+                    claim_span.set_attribute(
+                        spans.Attrs.CLAIM_PROVENANCE_COUNT, len(claim.provenance)
+                    )
+                    claim_span.set_attribute(
+                        spans.Attrs.CLAIM_BODY_CHARS, len(claim.body_markdown)
+                    )
+
+                    # Rule 1: empty provenance always retracts. No gate
+                    # span emitted for this case; the claim-level verdict
+                    # carries the reason.
+                    if not claim.provenance:
+                        _set_retracted(claim, "claim has empty provenance; cite at least one entity")
+                        claim_span.set_attribute(spans.Attrs.CLAIM_VERDICT, spans.VERDICT_RETRACTED)
                         yield _frame("Claim", claim)
                         continue
 
-                # Approved.
-                yield _frame("Claim", claim)
-                approved_claims.append(claim)
-                thread.record_claim(claim)
+                    # Deterministic placeholder validation.
+                    with _tracer.start_as_current_span(spans.GATE_PLACEHOLDER) as g:
+                        ref_err = validate_refs(claim.body_markdown, len(claim.provenance))
+                        if ref_err is not None:
+                            g.set_attribute(spans.Attrs.GATE_VERDICT, spans.VERDICT_RETRACTED)
+                            g.set_attribute(spans.Attrs.GATE_REASON, ref_err.to_human_string())
+                            _set_retracted(claim, ref_err.to_human_string())
+                            claim_span.set_attribute(spans.Attrs.CLAIM_VERDICT, spans.VERDICT_RETRACTED)
+                            yield _frame("Claim", claim)
+                            continue
+                        g.set_attribute(spans.Attrs.GATE_VERDICT, spans.VERDICT_APPROVED)
+
+                    # Structural value compare (ship 5a). Always runs;
+                    # only retracts when dont_fabricate is on.
+                    with _tracer.start_as_current_span(spans.GATE_STRUCTURAL) as g:
+                        g.set_attribute(spans.Attrs.GATE_BINDING_SIZE, len(thread.bindings.all_numbers()))
+                        struct_err = verify_chip_values(list(claim.provenance), thread.bindings)
+                        if struct_err is not None and request.switches.dont_fabricate:
+                            g.set_attribute(spans.Attrs.GATE_VERDICT, spans.VERDICT_RETRACTED)
+                            g.set_attribute(spans.Attrs.GATE_REASON, struct_err.to_human_string())
+                            g.set_attribute(spans.Attrs.GATE_FAILED_CHIP, str(getattr(struct_err, "kind", "unknown")))
+                            _set_retracted(claim, struct_err.to_human_string())
+                            claim_span.set_attribute(spans.Attrs.CLAIM_VERDICT, spans.VERDICT_RETRACTED)
+                            yield _frame("Claim", claim)
+                            continue
+                        g.set_attribute(spans.Attrs.GATE_VERDICT, spans.VERDICT_APPROVED)
+
+                    # Constitution gate (only when stay_in_role is on; the
+                    # constitution covers domain + identity + citation).
+                    # The constitution agent's gen_ai.chat span auto-nests
+                    # under this gate.constitution span via OTel context.
+                    if request.switches.stay_in_role:
+                        with _tracer.start_as_current_span(spans.GATE_CONSTITUTION) as g:
+                            verdict = await judge_claim(
+                                handles.constitution_agent,
+                                headline=claim.headline,
+                                body_markdown=claim.body_markdown,
+                                provenance_summary=_summarize_provenance(claim.provenance),
+                            )
+                            g.set_attribute(
+                                spans.Attrs.GATE_VERDICT,
+                                _normalize_verdict(verdict.verdict),
+                            )
+                            if verdict.reason:
+                                g.set_attribute(spans.Attrs.GATE_REASON, verdict.reason)
+                            if verdict.verdict in ("retract", "reject"):
+                                _set_retracted(
+                                    claim, verdict.reason or f"constitution {verdict.verdict}"
+                                )
+                                claim_span.set_attribute(
+                                    spans.Attrs.CLAIM_VERDICT,
+                                    _normalize_verdict(verdict.verdict),
+                                )
+                                yield _frame("Claim", claim)
+                                continue
+
+                    # Approved.
+                    claim_span.set_attribute(spans.Attrs.CLAIM_VERDICT, spans.VERDICT_APPROVED)
+                    yield _frame("Claim", claim)
+                    approved_claims.append(claim)
+                    thread.record_claim(claim)
 
             # ------ Narrative leg ------
+            # Wrapped in narrative.emitted so the trace tree shows the
+            # narrative path with its placeholder validation + optional
+            # constitution gate as children. One span per turn.
             assembled_provenance: list[provenance_pb2.ProvenanceRef] = []
             for c in approved_claims:
                 assembled_provenance.extend(c.provenance)
 
-            # Placeholder validation against assembled provenance.
-            ref_err = validate_refs(narrative_text, len(assembled_provenance))
-            if ref_err is not None:
-                ret = narrative_pb2.NarrativeRetracted(
-                    text=narrative_text, reason=ref_err.to_human_string()
+            with _tracer.start_as_current_span(spans.NARRATIVE_EMITTED) as nar_span:
+                nar_span.set_attribute(
+                    spans.Attrs.NARRATIVE_LENGTH_CHARS, len(narrative_text)
                 )
-                if handles.debug_public:
-                    ret.debug_reason = f"placeholder_validate: {ref_err.kind}"
-                yield _frame("NarrativeRetracted", ret)
-            elif request.switches.stay_in_role:
-                # Constitution gate on narrative (ship 5a's prose-judgement layer).
-                verdict = await judge_narrative(
-                    handles.constitution_agent,
-                    text=narrative_text,
-                    same_turn_claims=_claims_to_judgement_payload(approved_claims)
-                    + _claims_to_judgement_payload(thread.claims[:-len(approved_claims) or None]),
+                nar_span.set_attribute(
+                    spans.Attrs.NARRATIVE_ASSEMBLED_PROVENANCE_COUNT,
+                    len(assembled_provenance),
                 )
-                if verdict.verdict in ("retract", "reject"):
-                    ret = narrative_pb2.NarrativeRetracted(
-                        text=narrative_text,
-                        reason=verdict.reason or f"constitution {verdict.verdict}",
-                    )
-                    if handles.debug_public:
-                        ret.debug_reason = f"constitution: {verdict.reason}"
-                    yield _frame("NarrativeRetracted", ret)
+
+                # Placeholder validation against assembled provenance.
+                # Reuses the gate.placeholder span name for symmetry with
+                # the per-claim path; a downstream filter on
+                # SpanName='gate.placeholder' AND parent_span name
+                # discriminates which case it covered.
+                with _tracer.start_as_current_span(spans.GATE_PLACEHOLDER) as pg:
+                    ref_err = validate_refs(narrative_text, len(assembled_provenance))
+                    if ref_err is not None:
+                        pg.set_attribute(spans.Attrs.GATE_VERDICT, spans.VERDICT_RETRACTED)
+                        pg.set_attribute(spans.Attrs.GATE_REASON, ref_err.to_human_string())
+                        nar_span.set_attribute(
+                            spans.Attrs.NARRATIVE_VERDICT, spans.VERDICT_RETRACTED
+                        )
+                        ret = narrative_pb2.NarrativeRetracted(
+                            text=narrative_text, reason=ref_err.to_human_string()
+                        )
+                        if handles.debug_public:
+                            ret.debug_reason = f"placeholder_validate: {ref_err.kind}"
+                        yield _frame("NarrativeRetracted", ret)
+                    else:
+                        pg.set_attribute(spans.Attrs.GATE_VERDICT, spans.VERDICT_APPROVED)
+
+                if ref_err is not None:
+                    pass  # Already yielded; fall through to thread-state
+                elif request.switches.stay_in_role:
+                    # Constitution gate on narrative. The constitution
+                    # agent's gen_ai.chat span auto-nests under this.
+                    with _tracer.start_as_current_span(spans.GATE_NARRATIVE_CONSTITUTION) as g:
+                        verdict = await judge_narrative(
+                            handles.constitution_agent,
+                            text=narrative_text,
+                            same_turn_claims=_claims_to_judgement_payload(approved_claims)
+                            + _claims_to_judgement_payload(thread.claims[:-len(approved_claims) or None]),
+                        )
+                        g.set_attribute(
+                            spans.Attrs.GATE_VERDICT, _normalize_verdict(verdict.verdict)
+                        )
+                        if verdict.reason:
+                            g.set_attribute(spans.Attrs.GATE_REASON, verdict.reason)
+                        if verdict.verdict in ("retract", "reject"):
+                            nar_span.set_attribute(
+                                spans.Attrs.NARRATIVE_VERDICT,
+                                _normalize_verdict(verdict.verdict),
+                            )
+                            ret = narrative_pb2.NarrativeRetracted(
+                                text=narrative_text,
+                                reason=verdict.reason or f"constitution {verdict.verdict}",
+                            )
+                            if handles.debug_public:
+                                ret.debug_reason = f"constitution: {verdict.reason}"
+                            yield _frame("NarrativeRetracted", ret)
+                        else:
+                            nar_span.set_attribute(
+                                spans.Attrs.NARRATIVE_VERDICT, spans.VERDICT_APPROVED
+                            )
+                            nar = narrative_pb2.NarrativeWithRefs(
+                                text=narrative_text, provenance=assembled_provenance
+                            )
+                            yield _frame("Narrative", nar)
                 else:
+                    # raw-llm or agent-without-grounding: skip constitution.
+                    nar_span.set_attribute(
+                        spans.Attrs.NARRATIVE_VERDICT, spans.VERDICT_APPROVED
+                    )
                     nar = narrative_pb2.NarrativeWithRefs(
                         text=narrative_text, provenance=assembled_provenance
                     )
                     yield _frame("Narrative", nar)
-            else:
-                # raw-llm or agent-without-grounding: skip constitution.
-                nar = narrative_pb2.NarrativeWithRefs(
-                    text=narrative_text, provenance=assembled_provenance
-                )
-                yield _frame("Narrative", nar)
 
             # ------ Update thread state ------
             thread.message_history = list(result.all_messages())

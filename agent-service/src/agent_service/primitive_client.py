@@ -23,12 +23,15 @@ Snapshot lease usage:
 
 from __future__ import annotations
 
+import hashlib
+import time
 from dataclasses import dataclass
 
 import httpx
 import structlog
 from google.protobuf import json_format
 from google.protobuf.message import Message
+from opentelemetry import trace
 
 from multichain.wire.shared.v1 import (
     community_summary_pb2 as cs_pb,
@@ -37,6 +40,21 @@ from multichain.wire.shared.v1 import (
     snapshot_pb2 as snap_pb,
     wallet_profile_pb2 as wp_pb,
 )
+
+from . import spans
+
+# Module-level tracer. Honours whatever provider init_otel() registered;
+# resolves to a no-op tracer in tests where OTEL_SDK_DISABLED=true so
+# `with tracer.start_as_current_span(...)` stays cheap.
+_tracer = trace.get_tracer(__name__)
+
+
+def _digest12(body: bytes) -> str:
+    """sha256 of the response body, truncated to 12 hex chars. Used as
+    `primitive.output_digest` so two replays of the same primitive are
+    visibly identical in trace output without bloating span attrs with
+    the full payload (which can be 50KB of subgraph data)."""
+    return hashlib.sha256(body).hexdigest()[:12]
 
 log = structlog.get_logger(__name__)
 
@@ -181,18 +199,26 @@ class PrimitiveClient:
 
     async def begin_turn(self) -> SnapshotLease:
         # Empty body; only Accept header matters for the response format.
-        resp = await self._client.post(
-            "/turn/begin", headers={"Accept": CT_PROTOBUF}
-        )
-        if resp.status_code >= 400:
-            _raise_from_error(resp)
-        msg = snap_pb.SnapshotBeginResponse()
-        msg.ParseFromString(resp.content)
-        return SnapshotLease(
-            snapshot_id=msg.snapshot_id,
-            expires_at_ms=msg.expires_at_ms,
-            window_secs=msg.window_secs,
-        )
+        with _tracer.start_as_current_span(spans.SNAPSHOT_LEASE) as span:
+            t0 = time.monotonic()
+            resp = await self._client.post(
+                "/turn/begin", headers={"Accept": CT_PROTOBUF}
+            )
+            dur_ms = int((time.monotonic() - t0) * 1000)
+            span.set_attribute(spans.Attrs.SNAPSHOT_DURATION_MS, dur_ms)
+            if resp.status_code >= 400:
+                # Annotate the span before raising so a failed lease still
+                # carries the failure mode (kind, status) into the trace.
+                span.set_attribute("error", True)
+                _raise_from_error(resp)
+            msg = snap_pb.SnapshotBeginResponse()
+            msg.ParseFromString(resp.content)
+            span.set_attribute(spans.Attrs.SNAPSHOT_ID, msg.snapshot_id)
+            return SnapshotLease(
+                snapshot_id=msg.snapshot_id,
+                expires_at_ms=msg.expires_at_ms,
+                window_secs=msg.window_secs,
+            )
 
     async def end_turn(self, snapshot_id: str) -> None:
         """Idempotent. Failures are logged-and-swallowed because the GC
@@ -231,14 +257,22 @@ class PrimitiveClient:
             input=wp_pb.WalletProfileInput(addr=addr, time_scope=ts),
             snapshot_id=snapshot_id,
         )
-        resp = await self._client.post(
-            "/primitive/wallet_profile",
-            content=_encode(req),
-            headers=HEADERS_PROTO,
-        )
-        if resp.status_code >= 400:
-            _raise_from_error(resp)
-        return _decode_envelope(resp.content)
+        with _tracer.start_as_current_span(spans.PRIMITIVE_WALLET_PROFILE) as span:
+            span.set_attribute(spans.Attrs.SNAPSHOT_ID, snapshot_id)
+            span.set_attribute(spans.Attrs.PRIMITIVE_INPUT_ADDR, addr)
+            t0 = time.monotonic()
+            resp = await self._client.post(
+                "/primitive/wallet_profile",
+                content=_encode(req),
+                headers=HEADERS_PROTO,
+            )
+            dur_ms = int((time.monotonic() - t0) * 1000)
+            span.set_attribute(spans.Attrs.PRIMITIVE_DURATION_MS, dur_ms)
+            if resp.status_code >= 400:
+                span.set_attribute("error", True)
+                _raise_from_error(resp)
+            span.set_attribute(spans.Attrs.PRIMITIVE_OUTPUT_DIGEST, _digest12(resp.content))
+            return _decode_envelope(resp.content)
 
     async def community_summary(
         self,
@@ -255,14 +289,22 @@ class PrimitiveClient:
             ),
             snapshot_id=snapshot_id,
         )
-        resp = await self._client.post(
-            "/primitive/community_summary",
-            content=_encode(req),
-            headers=HEADERS_PROTO,
-        )
-        if resp.status_code >= 400:
-            _raise_from_error(resp)
-        return _decode_envelope(resp.content)
+        with _tracer.start_as_current_span(spans.PRIMITIVE_COMMUNITY_SUMMARY) as span:
+            span.set_attribute(spans.Attrs.SNAPSHOT_ID, snapshot_id)
+            span.set_attribute(spans.Attrs.PRIMITIVE_INPUT_COMMUNITY_ID, community_id)
+            t0 = time.monotonic()
+            resp = await self._client.post(
+                "/primitive/community_summary",
+                content=_encode(req),
+                headers=HEADERS_PROTO,
+            )
+            dur_ms = int((time.monotonic() - t0) * 1000)
+            span.set_attribute(spans.Attrs.PRIMITIVE_DURATION_MS, dur_ms)
+            if resp.status_code >= 400:
+                span.set_attribute("error", True)
+                _raise_from_error(resp)
+            span.set_attribute(spans.Attrs.PRIMITIVE_OUTPUT_DIGEST, _digest12(resp.content))
+            return _decode_envelope(resp.content)
 
 
 def _encode(msg: Message) -> bytes:
