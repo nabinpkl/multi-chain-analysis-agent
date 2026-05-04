@@ -477,7 +477,11 @@ pub const __AGENT_SESSION_STARTED_JSON_ANY: ::buffa::type_registry::JsonAnyEntry
     is_wkt: false,
 };
 /// Final SSE event payload. Emitted as the `done` event by the SSE
-/// handler. `elapsed_ms` is u32 (caps at ~50 days).
+/// handler. `elapsed_ms` is u32 (caps at ~50 days). `trace_id` is the
+/// 32-hex-char OTel trace id for this turn (Ship 1 of agent-
+/// observability, ADR 13); the frontend uses it to deep-link into
+/// Langfuse for the visual flame graph. Empty string means trace
+/// emission was disabled (OTEL_SDK_DISABLED) or otherwise unavailable.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
@@ -498,6 +502,14 @@ pub struct AgentDone {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
     )]
     pub elapsed_ms: u32,
+    /// Field 3: `trace_id`
+    #[serde(
+        rename = "traceId",
+        alias = "trace_id",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub trace_id: ::buffa::alloc::string::String,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -507,6 +519,7 @@ impl ::core::fmt::Debug for AgentDone {
         f.debug_struct("AgentDone")
             .field("session_id", &self.session_id)
             .field("elapsed_ms", &self.elapsed_ms)
+            .field("trace_id", &self.trace_id)
             .finish()
     }
 }
@@ -540,6 +553,9 @@ impl ::buffa::Message for AgentDone {
         if self.elapsed_ms != 0u32 {
             size += 1u32 + ::buffa::types::uint32_encoded_len(self.elapsed_ms) as u32;
         }
+        if !self.trace_id.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.trace_id) as u32;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -562,6 +578,14 @@ impl ::buffa::Message for AgentDone {
             ::buffa::encoding::Tag::new(2u32, ::buffa::encoding::WireType::Varint)
                 .encode(buf);
             ::buffa::types::encode_uint32(self.elapsed_ms, buf);
+        }
+        if !self.trace_id.is_empty() {
+            ::buffa::encoding::Tag::new(
+                    3u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
+                .encode(buf);
+            ::buffa::types::encode_string(&self.trace_id, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -596,6 +620,16 @@ impl ::buffa::Message for AgentDone {
                 }
                 self.elapsed_ms = ::buffa::types::decode_uint32(buf)?;
             }
+            3u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 3u32,
+                        expected: 2u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                ::buffa::types::merge_string(&mut self.trace_id, buf)?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, depth)?);
@@ -606,6 +640,7 @@ impl ::buffa::Message for AgentDone {
     fn clear(&mut self) {
         self.session_id.clear();
         self.elapsed_ms = 0u32;
+        self.trace_id.clear();
         self.__buffa_unknown_fields.clear();
     }
 }

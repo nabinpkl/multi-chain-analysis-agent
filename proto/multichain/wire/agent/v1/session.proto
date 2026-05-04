@@ -31,8 +31,13 @@ message AgentSessionStarted {
 }
 
 // Final SSE event payload. Emitted as the `done` event by the SSE
-// handler. `elapsed_ms` is u32 (caps at ~50 days).
+// handler. `elapsed_ms` is u32 (caps at ~50 days). `trace_id` is the
+// 32-hex-char OTel trace id for this turn (Ship 1 of agent-
+// observability, ADR 13); the frontend uses it to deep-link into
+// Langfuse for the visual flame graph. Empty string means trace
+// emission was disabled (OTEL_SDK_DISABLED) or otherwise unavailable.
 message AgentDone {
   string session_id = 1;
   uint32 elapsed_ms = 2;
+  string trace_id = 3;
 }

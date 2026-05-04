@@ -39,6 +39,16 @@ function formatPhase(phase: string, detail: string): string {
       return `planning… (${detail})`;
     case "tool_call":
       return `calling ${detail}…`;
+    case "drafting":
+      // Ship 1 of agent-observability surfaced that the primary LLM
+      // call dominates a turn (~5s p50 on free-tier OpenRouter). The
+      // backend now emits this phase right before that call so the
+      // UI gets feedback during the silence.
+      return `drafting response… (${detail})`;
+    case "judging":
+      // Constitution gate (the gpt-oss-20b policy LLM, issue #16) is
+      // ~11s p50, the longest single stage of a turn.
+      return `judging response… (${detail})`;
     case "synthesizing":
       return `synthesizing (${detail})`;
     default:

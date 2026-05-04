@@ -80,6 +80,8 @@ export function AgentSheet({
           <AgentClaimList turns={turns} status={status} />
         )}
 
+        <TraceLink status={status} />
+
         <DisclaimerFooter />
 
         <AgentInput
@@ -110,6 +112,39 @@ function DisclaimerFooter() {
         model-generated and can be wrong even when numbers are right. click any
         chip to verify the source.
       </p>
+    </div>
+  );
+}
+
+/**
+ * Deep-link to the Langfuse trace for the most recent turn. Visible
+ * only after a turn completes with a non-empty trace_id (Ship 1 of
+ * agent-observability, ADR 13). NEXT_PUBLIC_LANGFUSE_URL points at
+ * the self-hosted Langfuse web UI; project id matches LANGFUSE_INIT_
+ * PROJECT_ID in the compose env (default `agent`).
+ */
+function TraceLink({
+  status,
+}: {
+  status: AgentStreamState["status"];
+}) {
+  if (status.kind !== "done" || !status.traceId) return null;
+  const baseUrl = process.env.NEXT_PUBLIC_LANGFUSE_URL || "http://localhost:3001";
+  const projectId = process.env.NEXT_PUBLIC_LANGFUSE_PROJECT_ID || "agent";
+  const href = `${baseUrl}/project/${projectId}/traces/${status.traceId}`;
+  const seconds = (status.elapsedMs / 1000).toFixed(1);
+  return (
+    <div className="px-4 py-1.5 border-t border-mca-border bg-mca-bg/40 flex items-center justify-between text-[0.55rem] uppercase tracking-[1.5px] text-mca-dim">
+      <span className="tabular-nums">turn took {seconds}s</span>
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-mca-muted hover:text-mca-text transition-colors"
+        title="open this trace in Langfuse"
+      >
+        view trace ↗
+      </a>
     </div>
   );
 }

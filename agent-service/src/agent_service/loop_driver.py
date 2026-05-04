@@ -545,6 +545,14 @@ async def run_turn(
                 run_kwargs: dict = {"deps": deps, "usage_limits": _USAGE_LIMITS}
                 if thread.message_history:
                     run_kwargs["message_history"] = thread.message_history
+                # Heads-up to the UI that we are about to spend the
+                # bulk of the turn waiting on the primary LLM. Without
+                # this the spinner sits on "planning" through the
+                # entire generation (5-15s on free-tier OpenRouter).
+                yield _frame(
+                    "Progress",
+                    sse_pb2.Progress(phase="drafting", detail="primary model"),
+                )
                 result = await handles.primary_agent.run(user_msg, **run_kwargs)
             except Exception as e:  # noqa: BLE001
                 log.exception("primary_agent_run_failed", session_id=session_id)
@@ -661,6 +669,17 @@ async def run_turn(
             assembled_provenance: list[provenance_pb2.ProvenanceRef] = []
             for c in approved_claims:
                 assembled_provenance.extend(c.provenance)
+
+            # The constitution gate's policy LLM call (gpt-oss-20b on
+            # free-tier OpenRouter) is consistently the longest stage
+            # of a turn (~11s p50 per issue #16). Without this Progress
+            # frame the UI sits silent between the primary LLM finishing
+            # and the gated narrative arriving.
+            if request.switches.stay_in_role:
+                yield _frame(
+                    "Progress",
+                    sse_pb2.Progress(phase="judging", detail="constitution gate"),
+                )
 
             with _tracer.start_as_current_span(spans.NARRATIVE_EMITTED) as nar_span:
                 nar_span.set_attribute(
@@ -779,9 +798,18 @@ async def run_turn(
 
 def _terminal_done(session_id: str, session_started_at_ms: int) -> dict[str, str]:
     elapsed_ms = max(0, int(time.time() * 1000) - session_started_at_ms)
+    # Stamp the active OTel trace id onto the Done frame so the
+    # frontend can deep-link into Langfuse / SQL the trace by id.
+    # Empty string when the SDK is disabled (tests) or no active span.
+    span_ctx = trace.get_current_span().get_span_context()
+    trace_id_hex = format(span_ctx.trace_id, "032x") if span_ctx.is_valid else ""
     return _frame(
         "Done",
-        session_pb2.AgentDone(session_id=session_id, elapsed_ms=min(elapsed_ms, 0xFFFFFFFF)),
+        session_pb2.AgentDone(
+            session_id=session_id,
+            elapsed_ms=min(elapsed_ms, 0xFFFFFFFF),
+            trace_id=trace_id_hex,
+        ),
     )
 
 

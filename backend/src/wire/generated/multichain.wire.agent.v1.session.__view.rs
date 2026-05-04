@@ -480,13 +480,19 @@ impl<'v> ::buffa::DefaultViewInstance for AgentSessionStartedView<'v> {
     }
 }
 /// Final SSE event payload. Emitted as the `done` event by the SSE
-/// handler. `elapsed_ms` is u32 (caps at ~50 days).
+/// handler. `elapsed_ms` is u32 (caps at ~50 days). `trace_id` is the
+/// 32-hex-char OTel trace id for this turn (Ship 1 of agent-
+/// observability, ADR 13); the frontend uses it to deep-link into
+/// Langfuse for the visual flame graph. Empty string means trace
+/// emission was disabled (OTEL_SDK_DISABLED) or otherwise unavailable.
 #[derive(Clone, Debug, Default)]
 pub struct AgentDoneView<'a> {
     /// Field 1: `session_id`
     pub session_id: &'a str,
     /// Field 2: `elapsed_ms`
     pub elapsed_ms: u32,
+    /// Field 3: `trace_id`
+    pub trace_id: &'a str,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> AgentDoneView<'a> {
@@ -547,6 +553,16 @@ impl<'a> AgentDoneView<'a> {
                     }
                     view.elapsed_ms = ::buffa::types::decode_uint32(&mut cur)?;
                 }
+                3u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 3u32,
+                            expected: 2u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    view.trace_id = ::buffa::types::borrow_str(&mut cur)?;
+                }
                 _ => {
                     ::buffa::encoding::skip_field_depth(tag, &mut cur, depth)?;
                     let span_len = before_tag.len() - cur.len();
@@ -577,6 +593,7 @@ impl<'a> ::buffa::MessageView<'a> for AgentDoneView<'a> {
         super::super::AgentDone {
             session_id: self.session_id.to_string(),
             elapsed_ms: self.elapsed_ms,
+            trace_id: self.trace_id.to_string(),
             __buffa_unknown_fields: self
                 .__buffa_unknown_fields
                 .to_owned()
@@ -597,6 +614,9 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentDoneView<'a> {
         }
         if self.elapsed_ms != 0u32 {
             size += 1u32 + ::buffa::types::uint32_encoded_len(self.elapsed_ms) as u32;
+        }
+        if !self.trace_id.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.trace_id) as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
@@ -621,6 +641,14 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentDoneView<'a> {
             ::buffa::encoding::Tag::new(2u32, ::buffa::encoding::WireType::Varint)
                 .encode(buf);
             ::buffa::types::encode_uint32(self.elapsed_ms, buf);
+        }
+        if !self.trace_id.is_empty() {
+            ::buffa::encoding::Tag::new(
+                    3u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
+                .encode(buf);
+            ::buffa::types::encode_string(&self.trace_id, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }

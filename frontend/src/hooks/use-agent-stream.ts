@@ -49,7 +49,18 @@ export type AgentStatus =
   | { kind: "idle" }
   | { kind: "sending" }
   | { kind: "streaming"; sessionId: string }
-  | { kind: "done"; sessionId: string; elapsedMs: number }
+  | {
+      kind: "done";
+      sessionId: string;
+      elapsedMs: number;
+      /**
+       * 32-hex-char OTel trace id stamped on the Done frame by the
+       * loop driver (Ship 1 of agent-observability, ADR 13). The
+       * agent sheet renders a deep-link to Langfuse for this trace.
+       * Empty string when telemetry is disabled.
+       */
+      traceId: string;
+    }
   | { kind: "error"; message: string };
 
 /**
@@ -371,9 +382,10 @@ export function useAgentStream() {
             kind: "done",
             sessionId: done.sessionId,
             elapsedMs: done.elapsedMs,
+            traceId: done.traceId ?? "",
           });
         } catch {
-          setStatus({ kind: "done", sessionId, elapsedMs: 0 });
+          setStatus({ kind: "done", sessionId, elapsedMs: 0, traceId: "" });
         }
         // Defensive: if the loop ended without emitting anything,
         // mark the turn errored so the spinner doesn't hang.

@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file multichain/wire/agent/v1/session.proto.
  */
 export const file_multichain_wire_agent_v1_session: GenFile = /*@__PURE__*/
-  fileDesc("CiZtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc2Vzc2lvbi5wcm90bxIYbXVsdGljaGFpbi53aXJlLmFnZW50LnYxItIBCgxBZ2VudFJlcXVlc3QSFQoNdXNlcl9xdWVzdGlvbhgBIAEoCRI2Cgdjb250ZXh0GAIgASgLMiUubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLlZpZXdDb250ZXh0EhYKCXRocmVhZF9pZBgDIAEoCUgAiAEBEjkKCHN3aXRjaGVzGAQgASgLMicubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkFnZW50U3dpdGNoZXMSEgoKc2hvd190cmFjZRgFIAEoCEIMCgpfdGhyZWFkX2lkIkoKE0FnZW50U2Vzc2lvblN0YXJ0ZWQSEgoKc2Vzc2lvbl9pZBgBIAEoCRIRCgl0aHJlYWRfaWQYAiABKAkSDAoEdHVybhgDIAEoDSIzCglBZ2VudERvbmUSEgoKc2Vzc2lvbl9pZBgBIAEoCRISCgplbGFwc2VkX21zGAIgASgNYgZwcm90bzM", [file_multichain_wire_agent_v1_entity, file_multichain_wire_agent_v1_switches]);
+  fileDesc("CiZtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc2Vzc2lvbi5wcm90bxIYbXVsdGljaGFpbi53aXJlLmFnZW50LnYxItIBCgxBZ2VudFJlcXVlc3QSFQoNdXNlcl9xdWVzdGlvbhgBIAEoCRI2Cgdjb250ZXh0GAIgASgLMiUubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLlZpZXdDb250ZXh0EhYKCXRocmVhZF9pZBgDIAEoCUgAiAEBEjkKCHN3aXRjaGVzGAQgASgLMicubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkFnZW50U3dpdGNoZXMSEgoKc2hvd190cmFjZRgFIAEoCEIMCgpfdGhyZWFkX2lkIkoKE0FnZW50U2Vzc2lvblN0YXJ0ZWQSEgoKc2Vzc2lvbl9pZBgBIAEoCRIRCgl0aHJlYWRfaWQYAiABKAkSDAoEdHVybhgDIAEoDSJFCglBZ2VudERvbmUSEgoKc2Vzc2lvbl9pZBgBIAEoCRISCgplbGFwc2VkX21zGAIgASgNEhAKCHRyYWNlX2lkGAMgASgJYgZwcm90bzM", [file_multichain_wire_agent_v1_entity, file_multichain_wire_agent_v1_switches]);
 
 /**
  * User question + ViewContext. `thread_id` is None on the first
@@ -95,7 +95,11 @@ export const AgentSessionStartedSchema: GenMessage<AgentSessionStarted> = /*@__P
 
 /**
  * Final SSE event payload. Emitted as the `done` event by the SSE
- * handler. `elapsed_ms` is u32 (caps at ~50 days).
+ * handler. `elapsed_ms` is u32 (caps at ~50 days). `trace_id` is the
+ * 32-hex-char OTel trace id for this turn (Ship 1 of agent-
+ * observability, ADR 13); the frontend uses it to deep-link into
+ * Langfuse for the visual flame graph. Empty string means trace
+ * emission was disabled (OTEL_SDK_DISABLED) or otherwise unavailable.
  *
  * @generated from message multichain.wire.agent.v1.AgentDone
  */
@@ -109,6 +113,11 @@ export type AgentDone = Message<"multichain.wire.agent.v1.AgentDone"> & {
    * @generated from field: uint32 elapsed_ms = 2;
    */
   elapsedMs: number;
+
+  /**
+   * @generated from field: string trace_id = 3;
+   */
+  traceId: string;
 };
 
 /**
