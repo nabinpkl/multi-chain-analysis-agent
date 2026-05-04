@@ -66,25 +66,36 @@ exporters:
   debug:
     verbosity: basic
 
-  # ---------------------------------------------------------------
-  # Step C of Ship 1 wires Langfuse here:
-  #
-  # otlphttp/langfuse:
-  #   endpoint: http://langfuse-web:3000/api/public/otel
-  #   headers:
-  #     Authorization: "Basic ${env:LANGFUSE_OTEL_AUTH_BASIC}"
-  #
-  # And the traces pipeline below adds otlphttp/langfuse to its
-  # exporters list. Left commented until the Langfuse stack lands
-  # so the collector boots cleanly in Step A.
-  # ---------------------------------------------------------------
+  # CH-A's twin: the same span batch fans out to Langfuse for the
+  # human UI. This is the CQRS shape from ADR 13: one source of
+  # truth at the collector input, two query-optimised projections
+  # at the consumer (CH-A for SQL/joins with multichain, Langfuse
+  # for visual debugging + prompt diff + cost panels). Auth is
+  # base64(public_key:secret_key); LANGFUSE_OTEL_AUTH_BASIC is
+  # pre-computed in .env to avoid encoding inside the YAML.
+  # OTLP HTTP exporter appends /v1/traces to the base endpoint.
+  otlphttp/langfuse:
+    endpoint: http://langfuse-web:3000/api/public/otel
+    headers:
+      Authorization: "Basic ${env:LANGFUSE_OTEL_AUTH_BASIC}"
+    timeout: 10s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [clickhouse, debug]
+      # Three exporters, all fed from one batch. Langfuse failure
+      # (e.g. cold-start in-progress) will not starve CH-A: the
+      # batch processor publishes to all exporters concurrently and
+      # each retries independently. retry_on_failure on each exporter
+      # rides out transient blips.
+      exporters: [clickhouse, otlphttp/langfuse, debug]
 
   telemetry:
     logs:
