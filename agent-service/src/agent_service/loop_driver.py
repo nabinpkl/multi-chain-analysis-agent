@@ -8,7 +8,7 @@ Per turn:
    so concurrent SSE GETs on the same thread serialize.
 2. (ship 4) If `dont_repeat_yourself` is on AND `turn >= 2`, run the
    repeat detector. On hit: replay prior turn's tool calls, run diff,
-   emit `NoMovement` or `ChangedSince`, write ledger events, return.
+   emit `NoMovement` or `ChangedSince`, return.
 3. Open a snapshot lease so every primitive call this turn reads from
    the same materialized window.
 4. Build user message with `<context>` block.
@@ -29,7 +29,14 @@ Per turn:
 10. Emit `Narrative` or `NarrativeRetracted`.
 11. Update thread state (turn count, message history, claims, bindings,
     tool calls, user question).
-12. Release snapshot lease, write closing ledger events, emit `Done`.
+12. Release snapshot lease, emit `Done`.
+
+Ship 1 of agent-observability (ADR 13) made OTel spans the single
+source of truth; the prior bespoke `agent_ledger` table + writer were
+deleted. Every event the ledger used to record now lives as a span
+attribute on a properly-parented trace, fanned out by the otel-
+collector to CH-A `otel.otel_traces` (SQL + cross-store joins) and
+to Langfuse (visual flame graph).
 
 Optional `GatePath` SSE frame on approved claim emissions when
 `request.show_trace=true`. Same toggle as the Rust loop's
@@ -82,7 +89,6 @@ from multichain.wire.shared.v1 import provenance_pb2
 from .agent import AgentDeps, EmitClaimInput, ToolCallRecord
 from .boundary import build_context_block
 from .diff import diff_outputs, spec_for
-from .ledger.writer import Ledger, LedgerEventDraft, LedgerEventKind
 from .policy.binding_store import PrimitiveBindingStore
 from .policy.constitution import (
     ConstitutionVerdict,
@@ -126,7 +132,6 @@ class LoopHandles:
     repeat_agent: Agent
     primitive_client: PrimitiveClient
     threads: ThreadRegistry
-    ledger: Ledger
     debug_public: bool
 
 
@@ -381,20 +386,6 @@ async def _run_repeat_path(
             cs = diff_pb2.ChangedSince(prior_turn=repeat_of_turn, delta=delta, prose=prose)
             yield _frame("ChangedSince", cs)
 
-        # Ledger: record the repeat decision + diff result.
-        await handles.ledger.write(
-            LedgerEventDraft(
-                session_id=session_id,
-                kind=LedgerEventKind.TURN_DIFF,
-                payload={
-                    "repeat_of_turn": repeat_of_turn,
-                    "primitives_replayed": primitives_replayed,
-                    "changed_count": len(all_changed),
-                    "unchanged_count": total_unchanged,
-                },
-            )
-        )
-
 
 def _format_changed_prose(changes: list[diff_pb2.FieldDelta]) -> str:
     """Deterministic single-paragraph summary of what diff fields
@@ -459,19 +450,11 @@ async def run_turn(
             turn_span.set_attribute(spans.Attrs.THREAD_ID, thread_id)
             turn_span.set_attribute(spans.Attrs.TURN_INDEX, turn)
             turn_span.set_attribute(spans.Attrs.RUN_TYPE, _RUN_TYPE)
-
-            # ------ Session-started ledger event ------
-            await handles.ledger.write(
-                LedgerEventDraft(
-                    session_id=session_id,
-                    kind=LedgerEventKind.SESSION_STARTED,
-                    payload={
-                        "thread_id": thread_id,
-                        "turn": turn,
-                        "user_question": request.user_question,
-                    },
-                )
-            )
+            # The user question lives on the agent.turn span so traces
+            # are searchable by what was asked. Previously this also
+            # went into the SESSION_STARTED ledger row; ledger deletion
+            # consolidated it into the span attribute set.
+            turn_span.set_attribute("agent.user_question", request.user_question)
 
             # ------ Repeat path (ship 4) ------
             if (
@@ -771,20 +754,14 @@ async def run_turn(
                         ),
                     )
 
-            # Final ledger row for this turn.
-            await handles.ledger.write(
-                LedgerEventDraft(
-                    session_id=session_id,
-                    kind=LedgerEventKind.TURN_COMPLETED,
-                    payload={
-                        "turn": turn,
-                        "claims_emitted": len(deps.emitted_claims),
-                        "claims_approved": len(approved_claims),
-                        "tool_calls": len(deps.tool_call_records),
-                        "narrative_chars": len(narrative_text),
-                    },
-                )
-            )
+            # Final per-turn aggregates stamped on the agent.turn span
+            # so SQL queries can answer "how many claims got approved
+            # this turn" without scanning per-claim spans. Replaces the
+            # prior TURN_COMPLETED ledger row.
+            turn_span.set_attribute("agent.claims_emitted", len(deps.emitted_claims))
+            turn_span.set_attribute("agent.claims_approved", len(approved_claims))
+            turn_span.set_attribute("agent.tool_calls", len(deps.tool_call_records))
+            turn_span.set_attribute("agent.narrative_chars", len(narrative_text))
 
             yield _terminal_done(session_id, session_started_at_ms)
 
@@ -798,11 +775,6 @@ async def run_turn(
     finally:
         if snapshot_id is not None:
             await handles.primitive_client.end_turn(snapshot_id)
-        # Ledger: drop the per-session sequence counter so memory stays bounded.
-        try:
-            handles.ledger.drop_session(session_id)
-        except Exception:  # noqa: BLE001
-            pass
 
 
 def _terminal_done(session_id: str, session_started_at_ms: int) -> dict[str, str]:

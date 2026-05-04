@@ -19,8 +19,11 @@ camelCase field names.
 
 Loop orchestration lives in `loop_driver.run_turn`; this module
 handles HTTP wiring, session handoff, lifespan setup of the long-lived
-clients (Pydantic AI agents, primitive client, thread registry,
-ledger).
+clients (Pydantic AI agents, primitive client, thread registry). The
+prior bespoke `agent_ledger` table was deleted in Ship 1 of the
+agent-observability foundation (ADR 13); OTel spans are now the
+single source of truth, fanned out by the otel-collector to CH-A's
+`otel.otel_traces` and to Langfuse.
 """
 
 from __future__ import annotations
@@ -42,7 +45,6 @@ from sse_starlette.sse import EventSourceResponse
 from multichain.wire.agent.v1 import session_pb2 as sess_pb
 
 from .agent import build_agent
-from .ledger.writer import Ledger
 from .loop_driver import LoopHandles, run_turn
 from .otel import init_otel, instrument_fastapi
 from .policy.constitution import build_constitution_agent
@@ -88,7 +90,6 @@ async def lifespan(app: FastAPI):
 
     primitive_client = PrimitiveClient(base_url=base_url)
     threads = ThreadRegistry()
-    ledger = await Ledger.connect()
 
     handles = LoopHandles(
         primary_agent=build_agent(),
@@ -96,7 +97,6 @@ async def lifespan(app: FastAPI):
         repeat_agent=build_repeat_agent(),
         primitive_client=primitive_client,
         threads=threads,
-        ledger=ledger,
         debug_public=debug_public,
     )
     app.state.handles = handles
@@ -108,7 +108,6 @@ async def lifespan(app: FastAPI):
     finally:
         log.info("agent_service_stopping")
         await primitive_client.close()
-        await ledger.close()
 
 
 app = FastAPI(title="multichain agent-service", version="0.2.0", lifespan=lifespan)

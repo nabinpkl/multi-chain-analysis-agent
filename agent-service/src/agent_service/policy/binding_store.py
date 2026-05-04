@@ -1,4 +1,4 @@
-"""Primitive-binding ledger (ship 3). Captures every successful
+"""Primitive-binding store (ship 3). Captures every successful
 primitive output during a thread's lifetime so the policy gate can
 verify that numbers and entities cited by the model trace back to real
 data we returned, not values invented out of whole cloth.
@@ -97,8 +97,8 @@ class PrimitiveBindingStore:
 
     def call_ids(self) -> list[str]:
         """Concatenate every binding's call_id in chronological order.
-        Used by the ledger PolicyVerdict event so eval suites can replay
-        "what primitives did this turn rely on"."""
+        Useful for "what primitives did this turn rely on" queries
+        from spans or eval probes."""
         return [b.call_id for b in self._bindings]
 
 

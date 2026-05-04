@@ -9,8 +9,9 @@ structured extraction sidecar of numbers seen in the prose.
 
 The Pydantic output type is a plain pydantic model (not a proto) so
 Pydantic AI can derive a JSON schema for the LLM. The loop driver
-maps the result into `multichain.wire.agent.v1.ConstitutionVerdict`
-proto for ledger / wire emission.
+reads the verdict + reason inline; the gate.constitution and
+gate.narrative_constitution OTel spans carry the verdict as
+attributes (per ADR 13).
 
 Lenient parsing: the LLM occasionally adds extra fields or tweaks the
 extraction shape. We accept what we can, log the rest, and never let

@@ -18,8 +18,9 @@ from .crosscheck import CrosscheckConfig, UnitClass, classify_metric, within_tol
 @dataclass(frozen=True, slots=True)
 class MismatchError:
     """Reason a structural compare failed. The retract message surfaces
-    this on the SSE wire and into the ledger so retries can name the
-    specific entry that didn't trace.
+    this on the SSE wire (and as the gate.structural span's
+    `gate.reason` attribute) so retries can name the specific entry
+    that didn't trace.
 
     Three variants share the dataclass. `kind` selects, the other
     fields populate per kind (number / wallet / community)."""
