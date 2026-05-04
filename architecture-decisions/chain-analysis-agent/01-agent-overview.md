@@ -336,7 +336,7 @@ describe the target state.
 Format: `YYYY-MM-DD :: <decision identifier> :: <one-paragraph
 rationale>`. Reference an earlier decision by id when overriding.
 
-(empty)
+2026-05-03 :: agent-plane-to-python (overrides D-1, D-2, partially D-4) :: Split the agent runtime out of the Rust process into a Python service on `:8003` running Pydantic AI; Rust on `:8002` keeps the data plane (ingestion, graph window, primitive compute, snapshot lease). D-1's single-process argument was load-bearing for primitive compute (still in process) but never for the LLM loop, where turn latency is dominated 99.9% by the model call and a localhost JSON hop is invisible. D-2's `rig` choice is gone; no maintained Rust LLM client passes `AGENTS.md`'s bar. D-4's `ts-rs` source for `Claim` is gone; wire types now live in protobuf and codegen to Rust + Python + TS. D-3, D-5, D-6, D-7 unchanged. The six locked invariants in this document are unchanged. Full rationale in `02-python-agent-migration.md`.
 
 ## References
 
