@@ -42,10 +42,3 @@ regen-wire-types:
     buf generate
     @echo ">> wire types regenerated"
 
-# Sync prompt files from Rust source. Byte-copy; tests verify
-# divergence fails CI.
-sync-prompts:
-    @echo ">> copying prompts from backend → agent-service"
-    cp backend/src/agent/prompt_v4.txt agent-service/src/agent_service/prompts/system_v4.txt
-    cp backend/src/agent/policy_prompt_v4.txt agent-service/src/agent_service/prompts/policy_v4.txt
-    @echo ">> prompts synced"

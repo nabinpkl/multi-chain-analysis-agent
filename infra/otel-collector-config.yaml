@@ -1,0 +1,91 @@
+# OTel collector config for the agent-service telemetry pipeline.
+#
+# Ship 1 of agent-observability (ADR 13). Receives OTLP from
+# agent-service over HTTP/4318, batches, fans out to:
+#   - clickhouse (CH-A `otel.otel_traces`) for SQL + cross-store
+#     joins with `multichain` graph data
+#   - (Step C) Langfuse OTel ingest for the human debugging UI
+#
+# Two design rules from ADR 13 are encoded here:
+#   1. Telemetry doesn't know about consumers: the agent-service
+#      always emits the same OTel spans regardless of what's hooked
+#      up on the receiving side. Adding/removing exporters is a pure
+#      collector-config change.
+#   2. Persistence doesn't know about business meaning: the
+#      `clickhouse` exporter auto-creates a generic OTel-spec table
+#      with `create_schema: true`. Span semantics live in span
+#      names + attributes the producer chose, not in CH columns.
+#
+# Substitution: ${env:VAR} reads from the collector's process env.
+# docker-compose.yml passes CLICKHOUSE_PASSWORD through.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+    # Conservative batch size for portfolio-scale traffic. Tune up
+    # only if span volume goes 10x.
+    send_batch_size: 512
+    timeout: 5s
+
+exporters:
+  # CH-A: shares the existing multichain ClickHouse instance under
+  # a separate `otel` database. Native protocol on :9000. The
+  # exporter creates `otel.otel_traces` (and `otel.otel_logs` if
+  # logs ever land here) on first write via `create_schema: true`.
+  # TTL 90 days matches our existing graph-data retention horizon.
+  clickhouse:
+    endpoint: tcp://clickhouse:9000?dial_timeout=10s
+    database: otel
+    username: default
+    password: ${env:CLICKHOUSE_PASSWORD}
+    create_schema: true
+    traces_table_name: otel_traces
+    logs_table_name: otel_logs
+    ttl: 2160h  # 90 days
+    timeout: 10s
+    compress: lz4
+    async_insert: true
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  # Verification aid for Ship 1 bring-up. Logs every received span
+  # to collector stdout at `detailed` verbosity so the smoke test
+  # can confirm spans land at the receiver before we trust the
+  # async ClickHouse path. Drop down to `basic` once stable, or
+  # remove entirely once we trust the pipeline.
+  debug:
+    verbosity: basic
+
+  # ---------------------------------------------------------------
+  # Step C of Ship 1 wires Langfuse here:
+  #
+  # otlphttp/langfuse:
+  #   endpoint: http://langfuse-web:3000/api/public/otel
+  #   headers:
+  #     Authorization: "Basic ${env:LANGFUSE_OTEL_AUTH_BASIC}"
+  #
+  # And the traces pipeline below adds otlphttp/langfuse to its
+  # exporters list. Left commented until the Langfuse stack lands
+  # so the collector boots cleanly in Step A.
+  # ---------------------------------------------------------------
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse, debug]
+
+  telemetry:
+    logs:
+      level: info

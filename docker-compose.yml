@@ -114,11 +114,51 @@ services:
       # CORS origin for browser fetches. Frontend dev runs on :3008
       # (see .claude/launch.json). Override per environment.
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3008}
+      # Ship 1 of agent-observability (ADR 13). Send OTel spans to
+      # the collector sidecar; collector fans out to CH-A `otel` DB
+      # (and Langfuse, once Step C lands). Setting this here means
+      # the agent-service Python code does not need to know the
+      # endpoint; otel.py reads OTEL_EXPORTER_OTLP_ENDPOINT.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
     depends_on:
       api:
         condition: service_started
       clickhouse:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
+    restart: unless-stopped
+
+  otel-collector:
+    # Ship 1 of agent-observability (ADR 13). One ingest, multiple
+    # exporters. Runs the contrib distribution because the
+    # `clickhouse` exporter (and later the `otlphttp/langfuse`
+    # exporter) live in contrib, not core. Pinned to a specific
+    # release tag so collector behaviour is reproducible across
+    # rebuilds. The contrib image is the official OpenTelemetry
+    # project release; passes the AGENTS.md maintenance bar.
+    image: otel/opentelemetry-collector-contrib:0.118.0
+    container_name: multichain-otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./infra/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    environment:
+      # Substituted into the clickhouse exporter password field via
+      # ${env:CLICKHOUSE_PASSWORD} in the config.
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
+    ports:
+      # 4318 = OTLP HTTP, 4317 = OTLP gRPC. Both bound on host for
+      # local debugging (curl/grpcurl from host into the collector).
+      - "4318:4318"
+      - "4317:4317"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      # The clickhouse exporter requires the `otel` database to exist
+      # (its `create_schema: true` only creates tables, not databases
+      # in v0.118.0). state-reset pre-creates it on every boot.
+      state-reset:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   tunnel:

@@ -44,6 +44,7 @@ from multichain.wire.agent.v1 import session_pb2 as sess_pb
 from .agent import build_agent
 from .ledger.writer import Ledger
 from .loop_driver import LoopHandles, run_turn
+from .otel import init_otel, instrument_fastapi
 from .policy.constitution import build_constitution_agent
 from .primitive_client import PrimitiveClient
 from .repeat_detector import build_repeat_agent
@@ -79,6 +80,12 @@ async def lifespan(app: FastAPI):
     debug_public = os.environ.get("AGENT_DEBUG_PUBLIC", "0") == "1"
     log.info("agent_service_starting", data_plane=base_url, debug_public=debug_public)
 
+    # Ship 1 of agent-observability foundation (ADR 13). Bring up OTel
+    # before agents are built so Agent.instrument_all() is in place
+    # when build_agent / build_constitution_agent / build_repeat_agent
+    # construct their Pydantic AI Agent instances.
+    init_otel("multichain-agent")
+
     primitive_client = PrimitiveClient(base_url=base_url)
     threads = ThreadRegistry()
     ledger = await Ledger.connect()
@@ -105,6 +112,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="multichain agent-service", version="0.2.0", lifespan=lifespan)
+
+# Wrap every HTTP request in an OTel server span. The agent-stream
+# handler then nests Pydantic AI agent.run + our domain spans under
+# it, giving one trace per browser request. /health is excluded so
+# liveness probes don't flood the collector.
+instrument_fastapi(app)
 
 # CORS for browser hops. Frontend (Next dev or Vercel) is a different
 # origin from this service. Mirrors the Rust `CORS_ORIGIN` env-var

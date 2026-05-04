@@ -35,6 +35,18 @@ curl -sS --fail -u "${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}" \
   --data "TRUNCATE TABLE IF EXISTS multichain.ingestion_state" \
   "${CLICKHOUSE_URL}/"
 
+# Ship 1 of agent-observability (ADR 13). The OTel collector's
+# clickhouseexporter creates its own tables with `create_schema: true`
+# but won't create the database itself in v0.118.0; pre-create here so
+# the collector boots cleanly. The exporter then owns the schema of
+# `otel_traces` (and `otel_logs` if logs ever flow). This database
+# lives alongside `multichain` on the same instance (CH-A) so SQL can
+# join across them, per the architectural decision in ADR 13.
+echo "[reset] ensuring otel database exists..."
+curl -sS --fail -u "${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}" \
+  --data "CREATE DATABASE IF NOT EXISTS otel" \
+  "${CLICKHOUSE_URL}/"
+
 echo "[reset] ensuring topic exists..."
 rpk -X brokers="${REDPANDA_BROKERS}" topic create solana.raw-edges \
   --partitions 1 --replicas 1 \

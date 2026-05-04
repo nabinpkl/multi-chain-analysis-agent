@@ -30,6 +30,15 @@ from pydantic_ai import Agent
 # because `llm.py`'s module-level constructor errors if it's missing.
 os.environ.setdefault("AGENT_API_KEY", "test-dummy-key")
 
+# Disable OTel SDK before any agent_service module imports. The lifespan
+# handler calls init_otel(), which would otherwise spin up a real
+# TracerProvider + BatchSpanProcessor pointing at the in-compose
+# `otel-collector` hostname; in unit tests that's an unresolvable name,
+# producing 5+ seconds of retry-and-backoff log noise per test that
+# uses the FastAPI TestClient. The disabled-mode short-circuits to a
+# no-op tracer so wiring stays exercised but no network is touched.
+os.environ.setdefault("OTEL_SDK_DISABLED", "true")
+
 from agent_service.main import app  # noqa: E402
 from agent_service.primitive_client import PrimitiveClient  # noqa: E402
 
