@@ -454,7 +454,7 @@ Integration with reactive:
 ## Resume prompt for chat
 
 > Phase 08 (proactive pulse). Start from
-> `architecture-decisions/chain-analysis-agent/08-proactive-pulse.md`.
+> `docs/agent-design/08-proactive-pulse.md`.
 > Resolve open questions 1-7, implement the signal extractor
 > catalog, the bounded buffer with per-class quotas, the analyst
 > loop with versioned prompt, the SSE pulse channel, and the

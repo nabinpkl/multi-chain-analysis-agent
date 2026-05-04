@@ -1,4 +1,4 @@
-# 03: Agent observability foundation (OpenTelemetry + Langfuse)
+# 14: Agent observability foundation (OpenTelemetry + Langfuse)
 
 This document records the decision to lay the agent observability
 substrate as OpenTelemetry spans (single source of truth, replacing
@@ -12,7 +12,7 @@ at `/Users/nabin/.claude/plans/agent-observability.md`.
 
 ## Problem
 
-The Phase II Python rewrite (ADR 02) shipped without per-step
+The Phase II Python rewrite (ADR 13) shipped without per-step
 telemetry. The ad-hoc `agent_ledger` table writes only 3 of the 10
 event kinds the Rust version had: `session_started`, `turn_diff`,
 `turn_completed`. The remaining 7 (`llm_call`, `llm_response`,
@@ -158,15 +158,15 @@ swap in our pinned versions, and run as a cohesive stack.
 
 ## What this overrides
 
-From ADR 02 (Python agent migration):
+From ADR 13 (Python agent migration):
 
-| Original (ADR 02) | Now |
+| Original (ADR 13) | Now |
 |---|---|
 | Python owns the `agent_ledger` writes via `clickhouse-connect`; the only writer to `multichain.agent_ledger` after Phase C | Ledger module + table deleted entirely. OTel spans replace per-step records. The ledger stops being a thing. |
 | Schema for `agent_ledger` (kind enum, payload JSON, sequence counter) | All gone. `otel.otel_traces` (auto-created by `clickhouseexporter`) is the only per-step record. |
 
 The split between data plane (Rust) and agent plane (Python) from
-ADR 02 is unchanged. The "no backward compat" and "all data refreshes"
+ADR 13 is unchanged. The "no backward compat" and "all data refreshes"
 rules from `AGENTS.md` are what permit this clean replacement.
 
 ## Rationale
@@ -388,7 +388,7 @@ End-to-end smoke (`just observability-smoke`):
 
 ## References
 
-- ADR 02 (`02-python-agent-migration.md`), the document this
+- ADR 13 (`13-python-agent-migration.md`), the document this
   modifies (ledger ownership and existence).
 - AGENTS.md sections "Library maintenance bar" (Langfuse and OTel
   collector contrib qualify; Helicone OSS in maintenance mode does

@@ -876,7 +876,7 @@ Changes for next ships:
 ## Resume prompt for chat
 
 > Build order. Start from
-> `architecture-decisions/chain-analysis-agent/00-build-order.md`.
+> `docs/agent-design/00-build-order.md`.
 > Identify the current ship from the status tracker. Resume work
 > on that ship. Phase docs (01-08) are the source of truth for
 > design decisions; this file is the source of truth for what gets

@@ -1,8 +1,9 @@
-# 02: Migrating the agent plane to Python (Pydantic AI)
+# 13: Migrating the agent plane to Python (Pydantic AI)
 
 This document records the decision to split the agent runtime out of
 the Rust process into a separate Python service, why the split is
-worth its cost, and what it overrides from `01-agent-overview.md`.
+worth its cost, and what it overrides from
+`docs/agent-design/01-agent-overview.md`.
 
 ## Status
 
@@ -101,7 +102,7 @@ Python, done. Per `AGENTS.md` "no backward compat layers."
 
 ## What this overrides
 
-From `01-agent-overview.md`:
+From `docs/agent-design/01-agent-overview.md`:
 
 | Original | Now |
 |---|---|
@@ -288,7 +289,7 @@ reference; not authoritative going forward).
 
 ## References
 
-- `01-agent-overview.md` (the document this ADR overrides D-1, D-2,
+- `docs/agent-design/01-agent-overview.md` (the document this ADR overrides D-1, D-2,
   partially D-4 of).
 - `AGENTS.md`, sections "Wire type ownership" (proto single source
   of truth), "Library maintenance bar" (LiteLLM exclusion), "Wire

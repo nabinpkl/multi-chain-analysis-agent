@@ -333,7 +333,7 @@ that one provenance ref per output is well-formed.
 ## Resume prompt for chat
 
 > Phase 02 (typed primitive layer). Start from
-> `architecture-decisions/chain-analysis-agent/02-typed-primitive-layer.md`.
+> `docs/agent-design/02-typed-primitive-layer.md`.
 > Resolve open questions 1-5, then implement the seven primitives
 > with the cost-class metadata and provenance refs as designed. No
 > agent loop yet, no budget gating yet.

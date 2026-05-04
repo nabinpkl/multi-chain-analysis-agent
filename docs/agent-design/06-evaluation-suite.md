@@ -1,5 +1,15 @@
 # 06: Evaluation suite
 
+> **PARTIALLY SUPERSEDED by ADR 14 (Agent observability foundation).**
+> This phase doc pre-dated the OTel substrate. ADR 14 establishes
+> per-step traces in `otel.otel_traces` (CH-A) plus Langfuse-rendered
+> trace UI as the foundation eval probes consume. The eval shape
+> from this phase doc (datasets + structural + cost assertions)
+> still holds; the data substrate moves from a bespoke ledger to
+> OTel spans, and probes will use `pydantic_evals.HasMatchingSpan`.
+> Kept here as historical record of the original design; the
+> eval-harness ship will be planned fresh against the OTel substrate.
+
 A fixed set of analytical questions, replayable against the agent on
 every change, with structural and cost assertions on the responses.
 The mechanism by which model upgrades, prompt revisions, and primitive
@@ -343,7 +353,7 @@ CI integration (Cloudflare-tunneled deployment uses GitHub Actions):
 ## Resume prompt for chat
 
 > Phase 06 (evaluation suite). Start from
-> `architecture-decisions/chain-analysis-agent/06-evaluation-suite.md`.
+> `docs/agent-design/06-evaluation-suite.md`.
 > Resolve open questions 1-6, then write 30+ golden questions across
 > the categories, implement the runner with live and ledger-replay
 > modes, the report renderer, and the regression-gating thresholds.

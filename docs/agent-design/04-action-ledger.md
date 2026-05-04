@@ -1,5 +1,14 @@
 # 04: Action ledger
 
+> **SUPERSEDED by ADR 14 (Agent observability foundation).** This
+> phase doc planned a bespoke append-only ledger as the per-step
+> record. ADR 14 replaces it with OpenTelemetry spans (Pydantic AI
+> built-ins + custom domain spans) as the single source of truth.
+> The `agent_ledger` table and module are deleted in Ship 1 of the
+> observability foundation. Kept here as historical record of the
+> original design; current design lives at
+> `architecture-decisions/14-agent-observability.md`.
+
 Append-only structured record of every prompt, tool call, tool
 result, claim emission, and policy verdict the agent produces.
 Foundational data shape that the cost-rate-limit (phase 05) and
@@ -276,7 +285,7 @@ ClickHouse user setup:
 ## Resume prompt for chat
 
 > Phase 04 (action ledger). Start from
-> `architecture-decisions/chain-analysis-agent/04-action-ledger.md`.
+> `docs/agent-design/04-action-ledger.md`.
 > Resolve open questions 1-6, then implement the schema, the writer
 > service, the replay function, and the blob spillover. Wire the
 > writer into the agent runtime so every loop iteration produces

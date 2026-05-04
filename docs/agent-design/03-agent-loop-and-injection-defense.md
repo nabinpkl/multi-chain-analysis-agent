@@ -436,7 +436,7 @@ Streaming behavior:
 
 > Phase 03 (agent loop + injection defense + claim slices). Start
 > from
-> `architecture-decisions/chain-analysis-agent/03-agent-loop-and-injection-defense.md`.
+> `docs/agent-design/03-agent-loop-and-injection-defense.md`.
 > Resolve open questions 1-5, then implement the ReAct loop, the
 > three defense layers, the SSE Claim stream, and the sidebar UI.
 > Phase 02 must be in place; phase 04 ledger writes can be stubbed

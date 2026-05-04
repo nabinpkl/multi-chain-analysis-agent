@@ -301,7 +301,7 @@ Polish items each have their own success criteria:
 ## Resume prompt for chat
 
 > Phase 07 (polish + analyst surfaces). Start from
-> `architecture-decisions/chain-analysis-agent/07-polish-and-analyst-surfaces.md`.
+> `docs/agent-design/07-polish-and-analyst-surfaces.md`.
 > Pick which P-1 through P-7 items ship in what order. Phase 06
 > must be in place; specific items have additional dependencies
 > (e.g. P-1 needs phase 04 ledger).
