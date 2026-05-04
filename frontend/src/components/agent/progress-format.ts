@@ -1,63 +1,42 @@
-"use client";
-
-import { Loader2Icon } from "lucide-react";
+/**
+ * Phase formatter for the SSE Progress event.
+ *
+ * Was previously a `ProgressStrip` React component sitting at the top
+ * of the agent sheet. The strip drifted from the per-turn pending
+ * placeholder ("thinking...") and the user saw two indicators saying
+ * different things at the same time. Merged into the per-turn
+ * placeholder; this module is now formatter-only and the rendering
+ * lives in `claim-cards/user-message-card.tsx`.
+ *
+ * Dual-mode by audience:
+ *
+ * - Default user view (`builderView=false`): plain language a non-
+ *   technical user can map to what they see in the UI. Same posture
+ *   as AWS Bedrock chat or Anthropic Claude consumer surfaces:
+ *   describe intent, not the API call shape.
+ *
+ * - Builder view (`builderView=true`): same Progress phase carries
+ *   the backend-specific detail string the loop driver emits
+ *   ("primary model", "constitution gate", etc). Builder view is the
+ *   audit / dev iteration surface; the technical leak is the point.
+ */
 
 export interface ProgressEvent {
   phase: string;
   detail: string;
 }
 
-/**
- * Renders the current Progress event above the claim list. v0 surfaces
- * just the most recent phase + detail; ship 4+ may show a fuller
- * timeline. Only visible while the loop is in flight.
- *
- * Dual-mode text per audience:
- *
- * - Default user view (`builderView=false`): plain language a non-
- *   technical user can map to what they see in the UI. They know they
- *   asked about a wallet; "Agent is analyzing the wallet" tells them
- *   the model is working without leaking that there is a "primary
- *   model" or "constitution gate" or "primitive call" underneath.
- *   Same posture as AWS Bedrock chat or Anthropic Claude consumer
- *   surfaces: status text describes intent, not the API call shape.
- *
- * - Builder view (`builderView=true`): the same Progress phase carries
- *   the backend-specific detail string the loop driver emits
- *   ("primary model", "constitution gate", etc). Builder view is the
- *   audit/transparency surface for power users and dev iteration; the
- *   technical leak is the point there.
- */
-export function ProgressStrip({
-  current,
-  active,
-  builderView,
-}: {
-  current: ProgressEvent | null;
-  active: boolean;
-  builderView: boolean;
-}) {
-  if (!active && !current) return null;
-  const text = current
-    ? formatPhase(current.phase, current.detail, builderView)
-    : builderView
-      ? "preparing…"
-      : "Agent is starting…";
-  return (
-    <div className="px-4 py-2 border-b border-mca-border bg-mca-bg flex items-center gap-2 text-xs text-mca-muted">
-      {active ? (
-        <Loader2Icon className="size-3 animate-spin text-mca-text" />
-      ) : null}
-      <span className="tabular-nums">{text}</span>
-    </div>
-  );
-}
-
-function formatPhase(phase: string, detail: string, builderView: boolean): string {
-  if (builderView) {
-    return formatBuilderPhase(phase, detail);
+export function formatProgressPhase(
+  current: ProgressEvent | null,
+  builderView: boolean,
+): string {
+  if (current === null) {
+    return builderView ? "preparing…" : "Agent is starting…";
   }
-  return formatUserPhase(phase);
+  if (builderView) {
+    return formatBuilderPhase(current.phase, current.detail);
+  }
+  return formatUserPhase(current.phase);
 }
 
 /**

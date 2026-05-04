@@ -6,7 +6,7 @@ import {
   type Claim,
 } from "@/lib/wire/multichain/wire/agent/v1/claim_pb";
 import type { AgentStatus, ChatTurn } from "@/hooks/use-agent-stream";
-import { useAgentSwitches } from "@/stores/use-agent-switches";
+import type { ProgressEvent } from "./progress-format";
 import { ProfileCard } from "./claim-cards/profile-card";
 import {
   ComparisonCard,
@@ -26,22 +26,27 @@ import { DiffBubble } from "./diff-bubble";
  *   - user message card (right-aligned, "you" tag)
  *   - optional Claim card (structured, with provenance chips)
  *   - optional Narrative bubble (free-form interpretation prose)
- *   - "thinking..." placeholder while nothing has arrived yet
+ *   - live progress placeholder while the turn is in flight
  *
  * Ship 1.6 split agent output into two channels (Claim + Narrative);
  * a turn can carry one, both, or neither. The user's message is shown
  * immediately on send so they have a record of what they asked while
- * the agent works.
+ * the agent works. The pending placeholder reads the latest SSE
+ * Progress phase so the user sees what stage the agent is at, not a
+ * static "thinking..." that never updates.
  */
 export function AgentClaimList({
   turns,
   status,
+  progress,
+  builderView,
 }: {
   turns: ChatTurn[];
   status: AgentStatus;
+  progress: ProgressEvent | null;
+  builderView: boolean;
 }) {
   const [modalSlice, setModalSlice] = useState<Claim | null>(null);
-  const builderViewOn = useAgentSwitches((s) => s.builderViewOn);
 
   return (
     <>
@@ -58,6 +63,8 @@ export function AgentClaimList({
               <UserMessageCard
                 text={turn.userText}
                 pending={pending}
+                progress={progress}
+                builderView={builderView}
                 errorMessage={turn.error}
                 errorDebug={turn.errorDebug}
               />
@@ -84,7 +91,7 @@ export function AgentClaimList({
                   ) : null}
                 </>
               )}
-              {builderViewOn && turn.gatePaths.length > 0 ? (
+              {builderView && turn.gatePaths.length > 0 ? (
                 <div className="space-y-1.5 pt-1">
                   {turn.gatePaths.map((path, i) => (
                     <GatePathTimeline key={`${turn.id}-path-${i}`} path={path} />

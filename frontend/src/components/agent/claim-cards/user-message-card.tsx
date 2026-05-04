@@ -2,11 +2,24 @@
 
 import { Loader2Icon } from "lucide-react";
 
+import {
+  formatProgressPhase,
+  type ProgressEvent,
+} from "../progress-format";
+
 /**
  * Renders the user's submitted question as a chat-style card. Shown
  * inline above the assistant's claim so the conversation reads as a
- * back-and-forth. While the claim is still pending, a "thinking..."
- * placeholder renders below this card.
+ * back-and-forth. While the claim is still pending, a live progress
+ * placeholder renders below this card carrying the latest SSE
+ * Progress phase (planning / drafting / judging / etc) formatted for
+ * the active audience (default user vs builder view).
+ *
+ * Was previously a static "thinking..." string here AND a separate
+ * sticky strip at the top of the sheet showing the same progress.
+ * The two drifted (top said "Agent is double-checking the answer…",
+ * bottom said "thinking..."). Merged: only this placeholder renders
+ * the progress now.
  *
  * Ship 2.6.1: `errorDebug` is the raw underlying error (rig prompt
  * failure, HTTP status, etc.)  present only when the backend ships
@@ -17,11 +30,15 @@ import { Loader2Icon } from "lucide-react";
 export function UserMessageCard({
   text,
   pending,
+  progress,
+  builderView,
   errorMessage,
   errorDebug,
 }: {
   text: string;
   pending: boolean;
+  progress: ProgressEvent | null;
+  builderView: boolean;
   errorMessage: string | null;
   errorDebug?: string | null;
 }) {
@@ -38,7 +55,9 @@ export function UserMessageCard({
       {pending ? (
         <div className="flex items-center gap-2 text-xs text-mca-muted px-1">
           <Loader2Icon className="size-3 animate-spin" />
-          <span>thinking...</span>
+          <span className="tabular-nums">
+            {formatProgressPhase(progress, builderView)}
+          </span>
         </div>
       ) : null}
       {errorMessage ? (

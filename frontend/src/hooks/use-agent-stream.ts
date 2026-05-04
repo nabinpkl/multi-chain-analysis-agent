@@ -30,7 +30,7 @@ import {
 } from "@/lib/wire/multichain/wire/agent/v1/narrative_pb";
 import { type ProvenanceRef } from "@/lib/wire/multichain/wire/shared/v1/provenance_pb";
 
-import type { ProgressEvent } from "@/components/agent/progress-strip";
+import type { ProgressEvent } from "@/components/agent/progress-format";
 
 const DEFAULT_AGENT_URL = "http://localhost:8003";
 

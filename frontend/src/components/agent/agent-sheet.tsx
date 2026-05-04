@@ -8,7 +8,6 @@ import { AgentEmptyState } from "./agent-empty-state";
 import { AgentClaimList } from "./agent-claim-list";
 import { AgentInput } from "./agent-input";
 import { BuilderViewToggle } from "./builder-view-toggle";
-import { ProgressStrip } from "./progress-strip";
 import { SwitchPanel } from "./switch-panel";
 
 /**
@@ -72,16 +71,22 @@ export function AgentSheet({
 
         {builderViewOn ? <SwitchPanel /> : null}
 
-        <ProgressStrip
-          current={progress}
-          active={inFlight}
-          builderView={builderViewOn}
-        />
-
         {turns.length === 0 && !inFlight ? (
           <AgentEmptyState focusedAddr={focusedAddr} />
         ) : (
-          <AgentClaimList turns={turns} status={status} />
+          // Live SSE progress used to render in a sticky strip above
+          // the conversation. It drifted from the per-turn pending
+          // placeholder ("thinking…") and the user saw two indicators
+          // saying different things at the same time. Now the per-
+          // turn placeholder reads the same `progress` and renders
+          // the formatted phase inline under the user's message
+          // bubble; only one indicator total.
+          <AgentClaimList
+            turns={turns}
+            status={status}
+            progress={progress}
+            builderView={builderViewOn}
+          />
         )}
 
         <TraceLink status={status} builderView={builderViewOn} />
