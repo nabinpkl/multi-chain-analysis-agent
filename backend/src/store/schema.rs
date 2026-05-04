@@ -54,35 +54,11 @@ pub async fn bootstrap(client: &Client) -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    // Agent action ledger. Per phase 04 + ship-1 plan: append-only,
-    // partitioned by day, ordered by (session_id, sequence) for cheap
-    // session replay. TTL drops rows older than 90 days. Cost columns
-    // exist now and are zero until ship 4 fills them.
-    client
-        .query(
-            r#"
-            CREATE TABLE IF NOT EXISTS multichain.agent_ledger (
-                session_id            String,
-                sequence              UInt64,
-                timestamp_ms          UInt64,
-                kind                  LowCardinality(String),
-                principal_hash        String,
-                payload               String,
-                payload_hash          String,
-                pre_estimate_units    UInt32,
-                post_actual_units     UInt32,
-                cost_relevant         UInt8,
-                redaction_policy_ver  UInt32,
-                inserted_at           DateTime DEFAULT now()
-            ) ENGINE = MergeTree()
-            PARTITION BY toYYYYMMDD(toDateTime(timestamp_ms / 1000))
-            ORDER BY (session_id, sequence)
-            TTL toDateTime(timestamp_ms / 1000) + INTERVAL 90 DAY
-            SETTINGS index_granularity = 8192
-            "#,
-        )
-        .execute()
-        .await?;
+    // Ship 1 of agent-observability (ADR 13) replaced the bespoke
+    // multichain.agent_ledger table with OTel spans in otel.otel_traces
+    // (auto-managed by the otel-collector clickhouseexporter). The
+    // CREATE TABLE that used to live here was deleted along with the
+    // agent_ledger writer module in agent-service.
 
     Ok(())
 }
