@@ -1,7 +1,7 @@
 # 06: Evaluation suite
 
-> **PARTIALLY SUPERSEDED by ADR 14 (Agent observability foundation).**
-> This phase doc pre-dated the OTel substrate. ADR 14 establishes
+> **PARTIALLY SUPERSEDED by ADR 13 (Agent observability foundation).**
+> This phase doc pre-dated the OTel substrate. ADR 13 establishes
 > per-step traces in `otel.otel_traces` (CH-A) plus Langfuse-rendered
 > trace UI as the foundation eval probes consume. The eval shape
 > from this phase doc (datasets + structural + cost assertions)

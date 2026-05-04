@@ -1,13 +1,13 @@
 # 04: Action ledger
 
-> **SUPERSEDED by ADR 14 (Agent observability foundation).** This
+> **SUPERSEDED by ADR 13 (Agent observability foundation).** This
 > phase doc planned a bespoke append-only ledger as the per-step
-> record. ADR 14 replaces it with OpenTelemetry spans (Pydantic AI
+> record. ADR 13 replaces it with OpenTelemetry spans (Pydantic AI
 > built-ins + custom domain spans) as the single source of truth.
 > The `agent_ledger` table and module are deleted in Ship 1 of the
 > observability foundation. Kept here as historical record of the
 > original design; current design lives at
-> `architecture-decisions/14-agent-observability.md`.
+> `architecture-decisions/13-agent-observability.md`.
 
 Append-only structured record of every prompt, tool call, tool
 result, claim emission, and policy verdict the agent produces.

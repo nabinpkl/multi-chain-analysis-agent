@@ -20,9 +20,9 @@ what per turn.
 ## Status
 
 Accepted. Switch system locked in ship 5a; implementation paths
-updated as the agent moved Rust → Python in ADR 13. This document
+updated as the agent moved Rust → Python in ADR 12. This document
 moved from `docs/architecture/switches.md` to its proper home as
-ADR 12 alongside other architectural decisions, and the
+ADR 11 alongside other architectural decisions, and the
 implementation maps below were refreshed to point at the current
 Python file paths in `agent-service/src/agent_service/`.
 
@@ -104,11 +104,11 @@ narrative provenance.
   walks both the JSON output (typed-by-field-name via
   `classify_metric`) AND `ProvenanceRef::Number` entries from
   the primitive's provenance array.
-- `agent-service/src/agent_service/policy/placeholder.py` (ship 5a in Rust; ported in ADR 13) is the
+- `agent-service/src/agent_service/policy/placeholder.py` (ship 5a in Rust; ported in ADR 12) is the
   `${ref:N}` parser + index validator. Single ASCII regex
   `\$\{ref:(\d+)\}` to locate tokens; `validate_refs` checks each
   N is in bounds of the surrounding provenance array.
-- `agent-service/src/agent_service/policy/structural.py:verify_chip_values` (ship 5a in Rust; ported in ADR 13) walks
+- `agent-service/src/agent_service/policy/structural.py:verify_chip_values` (ship 5a in Rust; ported in ADR 12) walks
   the typed provenance vec and validates every entry against the
   binding store: Number refs via `within_tolerance` (10% default,
   reused from `agent-service/src/agent_service/policy/crosscheck.py`); Wallet refs against
@@ -202,7 +202,7 @@ disappear because we stopped asking regex to interpret prose.
 The panel preset list shrunk 7 → 6 with text_match's removal.
 Ledger replay of pre-5a sessions can resolve their gate behavior
 via the older constitution version tags compiled into
-`agent-service/src/agent_service/prompts/` (ADR 13 ports only the active v4; older prompt versions for ledger replay are gone with the Rust agent module per Phase C).
+`agent-service/src/agent_service/prompts/` (ADR 12 ports only the active v4; older prompt versions for ledger replay are gone with the Rust agent module per Phase C).
 
 ### `cross_check.paraphrase_aware_match`
 
@@ -316,27 +316,27 @@ information.
 
 **Implementation map (current).**
 
-- `agent-service/src/agent_service/repeat_detector.py:detect_repeat` (ship 4 in Rust; ported in ADR 13) is a small
+- `agent-service/src/agent_service/repeat_detector.py:detect_repeat` (ship 4 in Rust; ported in ADR 12) is a small
   pre-loop LLM gate. Reuses the cheap policy model. Takes prior
   turn questions + new user message, returns
   `Optional[int]` (turn id of the repeat) plus
   `user_explicitly_wants_refresh` flag. Failure modes (timeout,
   parse failure) all return `no_repeat` so detection never
   blocks a turn.
-- `agent-service/src/agent_service/diff.py:diff_outputs` (ship 4 in Rust; ported in ADR 13) walks each primitive's
+- `agent-service/src/agent_service/diff.py:diff_outputs` (ship 4 in Rust; ported in ADR 12) walks each primitive's
   `diff_spec()` field-by-field. Numeric fields use
   `agent-service/src/agent_service/policy/crosscheck.py:within_tolerance` (the same tolerance
   machinery from ship 2.5's cross-check); count fields exact-
   compare; entity sets do set-membership compare. Produces a
   typed `Delta` proto (`changed: list[FieldDelta]`,
   `unchanged_field_count: int`).
-- `agent-service/src/agent_service/diff.py:spec_for(primitive_name)` (ship 4 in Rust as a trait method; flat function in ADR 13 port) declares per-
+- `agent-service/src/agent_service/diff.py:spec_for(primitive_name)` (ship 4 in Rust as a trait method; flat function in ADR 12 port) declares per-
   primitive field semantics. `wallet_profile` and
   `community_summary` ship with diff_specs covering all
   replay-meaningful fields. `emit_claim` returns empty (its
   outputs aren't replay-meaningful, so it's naturally excluded
   from capture and replay).
-- `agent-service/src/agent_service/loop_driver.py:_run_repeat_path` (ship 4 in Rust as `try_diff_path`, renamed from `try_incremental_path`; ported in ADR 13) is the pre-loop branch. When the switch
+- `agent-service/src/agent_service/loop_driver.py:_run_repeat_path` (ship 4 in Rust as `try_diff_path`, renamed from `try_incremental_path`; ported in ADR 12) is the pre-loop branch. When the switch
   is on AND the thread has prior turns, it runs the detector; on
   a hit (and no explicit refresh), it replays the prior turn's
   tool calls, diffs against the captured outputs, and emits
@@ -344,7 +344,7 @@ information.
   `ChangedSince` SSE frame (small narrative call on the changed
   set). Either path bypasses the constitution gate by design;
   input to narration is grounded primitive output.
-- Per-thread `agent_service.thread_state.AgentThread.tool_calls_per_turn` + `user_questions_per_turn` (ship 4 in Rust; ported in ADR 13) capture replay-meaningful
+- Per-thread `agent_service.thread_state.AgentThread.tool_calls_per_turn` + `user_questions_per_turn` (ship 4 in Rust; ported in ADR 12) capture replay-meaningful
   tool calls per turn so a future repeat can replay against
   fresh data. Bounded by `MAX_THREAD_TOOL_CALL_TURNS`.
 - `DiffBubble.tsx` (ship 4, renamed from `IncrementalBubble`)

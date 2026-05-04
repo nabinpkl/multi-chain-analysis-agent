@@ -116,4 +116,4 @@ For 50k-360k edges total at 30s tick interval, A is almost certainly enough. Sol
 
 - Locked decision: **affected-component-only BFS, rayon parallelism across dirty components**. Refinement (spanning-tree non-tree skip) deferred until profiling shows need.
 
-Want me to update `05-differential-rendering.md` with this?
+Want me to update `04-differential-rendering.md` with this?

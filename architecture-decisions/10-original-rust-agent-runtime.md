@@ -3,7 +3,7 @@
 This ADR records the original decision to write the agent in Rust as
 a tokio task in the same process as the data plane. It was the
 load-bearing decision for the entire chain-analysis-agent through
-ships 1 through 5a. ADR 13 superseded it on 2026-05-03; the Rust
+ships 1 through 5a. ADR 12 superseded it on 2026-05-03; the Rust
 agent code was deleted in commit `04b7141`.
 
 Recorded here so the iteration history is visible: we shipped Rust,
@@ -13,7 +13,7 @@ changed", not "guessed Python from the start."
 
 ## Status
 
-Superseded by ADR 13 (Python agent migration), 2026-05-03.
+Superseded by ADR 12 (Python agent migration), 2026-05-03.
 Implementation removed in Phase C of the migration (commit
 `04b7141`).
 
@@ -76,7 +76,7 @@ The cost-amplification risk that often motivates a separate process
 (agent runaway pegging the host) was addressed by the per-principal
 budget bucket framework (phase 05), not by a process boundary.
 
-## Why this was later overridden (ADR 13)
+## Why this was later overridden (ADR 12)
 
 Three things shifted between the original decision and 2026-05-03.
 
@@ -105,14 +105,14 @@ uvicorn. The cost was paid forward.
 
 ## Consequences (the original ones, in hindsight)
 
-### Accepted at the time, now resolved by ADR 13
+### Accepted at the time, now resolved by ADR 12
 
 - Bound to Rust LLM client ecosystem maturity. Resolved by moving
   to the Python ecosystem.
 - Prompt iteration speed limited by `cargo rebuild`. Resolved by
   hot-reload via uvicorn.
 - Agent test infrastructure in Rust. Replaced by pytest +
-  pydantic-ai test models in ADR 13.
+  pydantic-ai test models in ADR 12.
 
 ### What survived
 
@@ -133,13 +133,13 @@ process as `GraphState`." Still true.
 
 D-2 wholly replaced: `rig` is gone, deleted with the rest of the
 Rust agent module in commit `04b7141`. Pydantic AI is the agent
-framework now (ADR 13).
+framework now (ADR 12).
 
 ## References
 
 - `docs/agent-design/01-agent-overview.md`  original D-1 and D-2
   formulations live here, in the locked-in design context
-- ADR 13 (`13-python-agent-migration.md`)  the override; spells
+- ADR 12 (`12-python-agent-migration.md`)  the override; spells
   out the migration rationale and cutover ritual in detail
 - `AGENTS.md` "Library maintenance bar"  the discipline that
   eventually disqualified `rig-core` and ruled out LiteLLM

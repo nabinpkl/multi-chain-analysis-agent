@@ -202,7 +202,7 @@ The shipped code is the source of truth:
 
 ## References
 
-- ADR 09 (moving layout to a Web Worker), the prior step in
+- ADR 8 (moving layout to a Web Worker), the prior step in
   unblocking the frontend main thread.
 - Louvain method: Blondel, Guillaume, Lambiotte, Lefebvre (2008),
   "Fast unfolding of communities in large networks."
