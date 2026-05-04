@@ -1,20 +1,35 @@
-# Agent switches: behavior contracts and implementation map
+# 12: Agent behavior switches as durable contracts
 
-This document tracks each ablation switch in the agent's gate. Each
-switch is a **durable behavior contract**: when on, the agent has
-that behavior; when off, it does not. Multiple ships may contribute
-code that realizes a single switch. Future ships strengthen
-behaviors under existing switches rather than spawning new ones.
+This ADR records the switch system as a stable API surface for the
+agent's behavior gates. Each switch is a **durable behavior
+contract**: when on, the agent has that behavior; when off, it
+does not. Multiple ships may contribute code that realizes a
+single switch. Future ships strengthen behaviors under existing
+switches rather than spawning new ones.
 
-The switch is the API surface. The implementation map below is what
-this document tracks. As new ships land, append to the relevant
-implementation map; do not invent new switches unless a genuinely
-new behavior class appears.
+The switch is the API surface. The implementation map below is
+what this document tracks. As new ships land, append to the
+relevant implementation map; do not invent new switches unless a
+genuinely new behavior class appears.
 
-The frontend's "show builder view" toggle reveals these switches in
-the UI panel. Visitors flip them to see how the agent's behavior
-changes; the builder trace renders which switch caught what per
-turn.
+The frontend's "show builder view" toggle reveals these switches
+in the UI panel. Visitors flip them to see how the agent's
+behavior changes; the builder trace renders which switch caught
+what per turn.
+
+## Status
+
+Accepted. Switch system locked in ship 5a; implementation paths
+updated as the agent moved Rust → Python in ADR 13. This document
+moved from `docs/architecture/switches.md` to its proper home as
+ADR 12 alongside other architectural decisions, and the
+implementation maps below were refreshed to point at the current
+Python file paths in `agent-service/src/agent_service/`.
+
+The switch contract surface itself is unchanged across the Rust →
+Python migration (the wire-side `AgentSwitches` proto message is
+the API; both implementations realized the same contracts). Only
+the file paths in the implementation maps changed.
 
 ---
 
@@ -37,20 +52,24 @@ audit numbers from descriptive ones.
 
 **Implementation map (current).**
 
-- Constitution rules 1-6 in `policy_prompt_v4.txt` (ship 5a;
+- Constitution rules 1-6 in `agent-service/src/agent_service/prompts/policy_v4.txt` (ship 5a;
   Rule 5 reframed from "no calculation" to citation discipline).
   Prior versions (`v1`, `v2`, `v3`) compiled in for ledger
   replay. Active is v4.
 - Prompt v4 identity + citation-discipline sections in
-  `prompt_v4.txt` (ship 5a). Prior versions kept for replay.
-- Retry feedback loop in `loop.rs` re-prompts the model with the
+  `agent-service/src/agent_service/prompts/system_v4.txt` (ship 5a). Prior versions kept for replay.
+- Retry feedback loop in `agent-service/src/agent_service/loop_driver.py` re-prompts the model with the
   retract reason when the constitution leg flags identity /
   domain drift / uncited audit numbers (ship 2.6 + ship 5a's
   new citation rule).
 
 **Realized at gate run time by.** The constitution leg in
-`policy.rs::OutputPolicy::run_gate` returns the verdict; consumed
-by `check_narrative` (ship 3.5) when `switches.stay_in_role=true`.
+`agent-service/src/agent_service/policy/constitution.py:judge_claim`
+(and `judge_narrative`) returns the verdict; consumed by the gate
+sections of `agent-service/src/agent_service/loop_driver.py:run_turn`
+when `switches.stay_in_role=true` (the `check_narrative` /
+`check_claim` split that lived in Rust's `policy.rs` is now inline
+in `run_turn`).
 
 **Future ships expected to contribute.** Prompt-injection
 hardening, jailbreak resistance patterns, off-chain data
@@ -79,32 +98,31 @@ narrative provenance.
 
 **Implementation map (current).**
 
-- `primitives::binding_store` records every successful primitive
+- `agent-service/src/agent_service/policy/binding_store.py:PrimitiveBindingStore` records every successful primitive
   output's numbers + entities into a per-thread ring-buffered
   `PrimitiveBindingStore` (ship 3, cap 64). `build_binding`
   walks both the JSON output (typed-by-field-name via
   `classify_metric`) AND `ProvenanceRef::Number` entries from
   the primitive's provenance array.
-- `agent::policy_placeholder` (ship 5a) is the
+- `agent-service/src/agent_service/policy/placeholder.py` (ship 5a in Rust; ported in ADR 13) is the
   `${ref:N}` parser + index validator. Single ASCII regex
   `\$\{ref:(\d+)\}` to locate tokens; `validate_refs` checks each
   N is in bounds of the surrounding provenance array.
-- `agent::policy_structural::verify_chip_values` (ship 5a) walks
+- `agent-service/src/agent_service/policy/structural.py:verify_chip_values` (ship 5a in Rust; ported in ADR 13) walks
   the typed provenance vec and validates every entry against the
   binding store: Number refs via `within_tolerance` (10% default,
-  reused from `policy_crosscheck`); Wallet refs against
+  reused from `agent-service/src/agent_service/policy/crosscheck.py`); Wallet refs against
   `binding.all_wallets()`; Community refs against
   `binding.all_communities()`. Edge / TimeRange refs are skipped
   pending ship 5b.
-- `policy.rs::check_claim` and `check_narrative` `dont_fabricate`
+- the per-claim and narrative gate sections of `agent-service/src/agent_service/loop_driver.py:run_turn` `dont_fabricate`
   legs each run two sub-stages: `*.placeholder_validation` (calls
   `validate_refs`) and `*.structural_value_compare` (calls
   `verify_chip_values`). Both stages emit individual
   `PathStep`s so the builder trace shows which sub-stage caught
   what. The breakdown's `dont_fabricate` SubVerdict is the AND
   of the two stages (retract on either).
-- For narrative, the loop assembles `narrative_provenance` by
-  concatenating `same_turn_claims[*].provenance` arrays in
+- For narrative, the loop in `agent-service/src/agent_service/loop_driver.py` assembles `narrative_provenance` by concatenating `same_turn_claims[*].provenance` arrays in
   emission order. Index N in `${ref:N}` resolves against this
   flat vec; documented in prompt v4.
 
@@ -184,7 +202,7 @@ disappear because we stopped asking regex to interpret prose.
 The panel preset list shrunk 7 → 6 with text_match's removal.
 Ledger replay of pre-5a sessions can resolve their gate behavior
 via the older constitution version tags compiled into
-`policy_prompt.rs` (`v3`, etc.).
+`agent-service/src/agent_service/prompts/` (ADR 13 ports only the active v4; older prompt versions for ledger replay are gone with the Rust agent module per Phase C).
 
 ### `cross_check.paraphrase_aware_match`
 
@@ -210,19 +228,20 @@ drives wire verdict from this leg; advisory only.
 
 **Implementation map (current).**
 
-- Constitution v4 prompt (`policy_prompt_v4.txt`) instructs the
+- Constitution v4 prompt (`agent-service/src/agent_service/prompts/policy_v4.txt`) instructs the
   cheap model to emit an `extraction` JSON sidecar listing every
   numeric quantity in the narrative + claims (kept from ship 2.7;
   v4 reframes the sidecar's role as coherence advisory, not
   factuality enforcement).
-- `policy_crosscheck::cross_check_extracted_pair` runs the same
+- `agent-service/src/agent_service/policy/crosscheck.py:cross_check_extracted_pair` runs the same
   deterministic compare on the LLM-extracted set; kept across the
   ship 5a regex retirement because the LLM extractor's output is
   typed (no regex involvement on the comparison side).
-- `policy.rs::check_narrative` records the verdict at
-  `narrative.cross_check.paraphrase_aware_match`; merge_narrative
-  excludes this leg from `push_if_retract` so it can't drive the
-  wire verdict alone.
+- the narrative gate section of
+  `agent-service/src/agent_service/loop_driver.py:run_turn` records
+  the verdict at `narrative.cross_check.paraphrase_aware_match`;
+  the merge logic excludes this leg from the retract-driving set so
+  it can't drive the wire verdict alone (advisory-only).
 
 **Future ships expected to contribute.** Hedge-marker awareness
 in the LLM extractor's output. Surface coherence retracts as a
@@ -243,12 +262,13 @@ match a fabricated-and-cited claim (the binding leg catches the
 fabricated claim, but a stale-claim case can survive that check).
 
 **Implementation map (current).** **Stub.** When the switch is on,
-`policy.rs::check_narrative` records a path step
-`narrative.cross_check.ground_truth_match` with `NotApplicable {
-detail: "not implemented yet (lands in ship 5b: warehouse
-primitives)" }`. Toggle is exposed in the panel so visitors can
-see "this is where the project is going" without a panel redesign
-when ship 5b lands.
+the narrative gate section of
+`agent-service/src/agent_service/loop_driver.py:run_turn` records a
+path step `narrative.cross_check.ground_truth_match` with
+`NotApplicable { detail: "not implemented yet (lands in ship 5b:
+warehouse primitives)" }`. Toggle is exposed in the panel so
+visitors can see "this is where the project is going" without a
+panel redesign when ship 5b lands.
 
 **Future ships expected to contribute.**
 
@@ -296,36 +316,35 @@ information.
 
 **Implementation map (current).**
 
-- `agent::repeat_detector::detect_repeat` (ship 4) is a small
+- `agent-service/src/agent_service/repeat_detector.py:detect_repeat` (ship 4 in Rust; ported in ADR 13) is a small
   pre-loop LLM gate. Reuses the cheap policy model. Takes prior
   turn questions + new user message, returns
-  `Option<u32>` (turn id of the repeat) plus
+  `Optional[int]` (turn id of the repeat) plus
   `user_explicitly_wants_refresh` flag. Failure modes (timeout,
   parse failure) all return `no_repeat` so detection never
   blocks a turn.
-- `agent::diff::diff_outputs` (ship 4) walks each primitive's
+- `agent-service/src/agent_service/diff.py:diff_outputs` (ship 4 in Rust; ported in ADR 13) walks each primitive's
   `diff_spec()` field-by-field. Numeric fields use
-  `policy_crosscheck::within_tolerance` (the same tolerance
+  `agent-service/src/agent_service/policy/crosscheck.py:within_tolerance` (the same tolerance
   machinery from ship 2.5's cross-check); count fields exact-
   compare; entity sets do set-membership compare. Produces a
-  typed `Delta { changed: Vec<FieldDelta>, unchanged_field_count }`.
-- `Primitive::diff_spec()` trait method (ship 4) declares per-
+  typed `Delta` proto (`changed: list[FieldDelta]`,
+  `unchanged_field_count: int`).
+- `agent-service/src/agent_service/diff.py:spec_for(primitive_name)` (ship 4 in Rust as a trait method; flat function in ADR 13 port) declares per-
   primitive field semantics. `wallet_profile` and
   `community_summary` ship with diff_specs covering all
   replay-meaningful fields. `emit_claim` returns empty (its
   outputs aren't replay-meaningful, so it's naturally excluded
   from capture and replay).
-- `agent::loop::try_diff_path` (ship 4, renamed from
-  `try_incremental_path`) is the pre-loop branch. When the switch
+- `agent-service/src/agent_service/loop_driver.py:_run_repeat_path` (ship 4 in Rust as `try_diff_path`, renamed from `try_incremental_path`; ported in ADR 13) is the pre-loop branch. When the switch
   is on AND the thread has prior turns, it runs the detector; on
   a hit (and no explicit refresh), it replays the prior turn's
   tool calls, diffs against the captured outputs, and emits
-  either `SseFrame::NoMovement` (empty diff, no LLM call) or
-  `SseFrame::ChangedSince` (small narrative call on the changed
+  either a `NoMovement` SSE frame (empty diff, no LLM call) or a
+  `ChangedSince` SSE frame (small narrative call on the changed
   set). Either path bypasses the constitution gate by design;
   input to narration is grounded primitive output.
-- Per-thread `AgentThread.tool_calls_per_turn` +
-  `user_questions_per_turn` (ship 4) capture replay-meaningful
+- Per-thread `agent_service.thread_state.AgentThread.tool_calls_per_turn` + `user_questions_per_turn` (ship 4 in Rust; ported in ADR 13) capture replay-meaningful
   tool calls per turn so a future repeat can replay against
   fresh data. Bounded by `MAX_THREAD_TOOL_CALL_TURNS`.
 - `DiffBubble.tsx` (ship 4, renamed from `IncrementalBubble`)

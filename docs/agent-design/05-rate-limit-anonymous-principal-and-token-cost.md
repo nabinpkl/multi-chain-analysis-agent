@@ -340,7 +340,7 @@ Frontend:
 ## Resume prompt for chat
 
 > Phase 05 (anonymous principal + cost rate-limiting). Start from
-> `docs/agent-design/05-anonymous-principal-and-cost-rate-limiting.md`.
+> `docs/agent-design/05-rate-limit-anonymous-principal-and-token-cost.md`.
 > Resolve open questions 1-7, then implement principal construction,
 > the four buckets, pre-flight estimation per axis, the EXPLAIN
 > wrapper, ClickHouse-side defense-in-depth limits, and ledger

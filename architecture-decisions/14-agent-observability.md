@@ -7,8 +7,7 @@ to two ClickHouse instances and a self-hosted Langfuse stack.
 
 ## Status
 
-Accepted, 2026-05-04. Implementation pending in Ship 1 per the plan
-at `/Users/nabin/.claude/plans/agent-observability.md`.
+Accepted, 2026-05-04.
 
 ## Problem
 
