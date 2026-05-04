@@ -4,9 +4,9 @@
     {
       "name": "frontend",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--dir", "frontend", "dev"],
-      "port": 3000,
-      "autoPort": true
+      "runtimeArgs": ["--dir", "frontend", "dev", "--port", "3008"],
+      "port": 3008,
+      "autoPort": false
     }
   ]
 }

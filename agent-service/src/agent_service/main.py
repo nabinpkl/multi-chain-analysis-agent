@@ -35,6 +35,7 @@ from dataclasses import dataclass
 
 import structlog
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from google.protobuf import json_format
 from sse_starlette.sse import EventSourceResponse
 
@@ -104,6 +105,32 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="multichain agent-service", version="0.2.0", lifespan=lifespan)
+
+# CORS for browser hops. Frontend (Next dev or Vercel) is a different
+# origin from this service. Mirrors the Rust `CORS_ORIGIN` env-var
+# convention (see backend/src/config.rs + backend/src/main.rs):
+# `*` (default) -> permissive; otherwise an exact origin string. The
+# preflight OPTIONS requests the browser sends before POST /agent/ask
+# (Content-Type: application/json triggers preflight) hit this layer
+# and respond 200 with the right Access-Control-* headers, so the
+# browser allows the actual fetch through.
+_cors_origin = os.environ.get("CORS_ORIGIN", "*")
+if _cors_origin == "*":
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=".*",
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[_cors_origin],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 # ---------------------------------------------------------------------------
