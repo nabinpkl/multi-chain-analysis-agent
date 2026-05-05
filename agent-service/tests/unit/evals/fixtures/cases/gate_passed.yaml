@@ -11,6 +11,5 @@
   probes:
     - probe_id: narrative-constitution-v4-approves
       kind: gate_passed
-      args:
-        kind: narrative_constitution
-        version: "v4"
+      gate_kind: narrative_constitution
+      version: "v4"

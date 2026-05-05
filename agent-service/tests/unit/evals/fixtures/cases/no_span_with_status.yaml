@@ -11,6 +11,5 @@
   probes:
     - probe_id: no-primitive-call-errored
       kind: no_span_with_status
-      args:
-        span_name: mcae.primitive.wallet_profile
-        status: error
+      span_name: mcae.primitive.wallet_profile
+      status: error

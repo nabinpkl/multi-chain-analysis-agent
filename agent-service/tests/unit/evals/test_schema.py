@@ -1,22 +1,23 @@
 """Schema round-trip + validation tests for Layer 1 of Ship 2 (ADR 14).
 
-Three test groups:
+Probe specs are a discriminated union over `kind`. Each probe kind
+has its own typed `*Spec` class with args inlined as fields. Tests
+exercise:
 
-1. **Round-trip per probe kind** (one fixture per kind, 7 total): YAML
-   on disk -> ruamel.yaml -> EvalCase.model_validate -> model_dump ->
-   EvalCase.model_validate again. Catches schema drift the moment a
-   field becomes non-round-trippable (e.g. set[str] instead of
-   list[str]) or the YAML format silently diverges from the pydantic
-   shape.
+1. **Round-trip per probe kind** (one fixture per kind, 7 total):
+   YAML on disk -> ruamel.yaml -> EvalCase.model_validate (which
+   dispatches each probe to the right *Spec via the discriminator)
+   -> model_dump -> EvalCase.model_validate again. Catches schema
+   drift the moment a field becomes non-round-trippable.
 
 2. **Validation negative cases**: every `Field` constraint and
-   `field_validator` in schema.py has at least one test that exercises
-   the rejection path. Confirms the schema is a real contract, not
-   decorative.
+   `field_validator` in schema.py has at least one test that
+   exercises the rejection path. Includes the discriminator
+   negative case (unknown `kind`).
 
-3. **Cross-type sanity**: ProbeResult references probe_id/case_id/run_id
-   strings that match what an EvalCase + RunMetadata would produce.
-   Catches the "we changed one type, forgot the consumer" class of bug.
+3. **Cross-type sanity**: ProbeResult references probe_id/case_id/
+   run_id strings that match what an EvalCase + RunMetadata would
+   produce.
 
 Tests are sync (no asyncio fixtures); the schema layer has zero IO.
 """
@@ -25,20 +26,30 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import get_args
 
 import pytest
-from pydantic import ValidationError
+from pydantic import ValidationError, TypeAdapter
 from ruamel.yaml import YAML
 
 from agent_service.evals.schema import (
+    ClaimGroundedInSpec,
     EvalCase,
+    GatePassedSpec,
+    HasMatchingSpanSpec,
+    LlmCallUsedModelSpec,
+    NoSpanWithStatusSpec,
+    ProbeKind,
     ProbeResult,
     ProbeSpec,
     RunMetadata,
+    SpanLatencyP50UnderSpec,
+    ToolCalledWithArgsSpec,
 )
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "cases"
 _YAML = YAML(typ="safe")
+_PROBE_SPEC_ADAPTER = TypeAdapter(ProbeSpec)
 
 
 def _load_yaml_cases(name: str) -> list[dict]:
@@ -89,10 +100,6 @@ def test_every_probe_kind_has_a_fixture() -> None:
     """Adding a probe kind to the Literal without adding a fixture
     leaves Layer 1 untested. Forcing a fixture row keeps the schema
     and its examples in sync."""
-    from typing import get_args
-
-    from agent_service.evals.schema import ProbeKind
-
     declared = set(get_args(ProbeKind))
     fixtured = {kind for _, kind in _PROBE_KIND_FIXTURES}
     missing = declared - fixtured
@@ -106,12 +113,40 @@ def test_every_probe_kind_has_a_fixture() -> None:
 
 def test_probe_id_must_be_non_empty() -> None:
     with pytest.raises(ValidationError, match="probe_id must be non-empty"):
-        ProbeSpec(probe_id="   ", kind="has_matching_span", args={})
+        HasMatchingSpanSpec(probe_id="   ", span_name="mcae.snapshot.lease")
 
 
 def test_invalid_probe_kind_rejected() -> None:
+    """Discriminator with no matching union member fails at parse time."""
     with pytest.raises(ValidationError):
-        ProbeSpec(probe_id="x", kind="not_a_real_kind", args={})  # type: ignore[arg-type]
+        _PROBE_SPEC_ADAPTER.validate_python(
+            {"probe_id": "x", "kind": "not_a_real_kind", "span_name": "x"}
+        )
+
+
+def test_missing_required_arg_fails_at_load() -> None:
+    """The whole point of the discriminated union refactor: a malformed
+    case fails at YAML-load time pointing at the missing arg, not later
+    at probe-call time."""
+    with pytest.raises(ValidationError, match="source_kind"):
+        _PROBE_SPEC_ADAPTER.validate_python(
+            {"probe_id": "p", "kind": "claim_grounded_in"}  # missing source_kind
+        )
+
+
+def test_extra_field_on_probe_spec_rejected() -> None:
+    """Each *Spec class has extra='forbid' (via _ProbeSpecBase). A
+    YAML field that doesn't exist on the matched spec class fails
+    rather than silently dropping."""
+    with pytest.raises(ValidationError):
+        _PROBE_SPEC_ADAPTER.validate_python(
+            {
+                "probe_id": "p",
+                "kind": "has_matching_span",
+                "span_name": "x",
+                "wat": "this field does not exist on HasMatchingSpanSpec",
+            }
+        )
 
 
 def test_case_id_must_be_non_empty() -> None:
@@ -120,7 +155,7 @@ def test_case_id_must_be_non_empty() -> None:
             case_id="",
             suite="s",
             inputs={"userQuestion": "x"},
-            probes=[ProbeSpec(probe_id="p", kind="has_matching_span", args={})],
+            probes=[HasMatchingSpanSpec(probe_id="p", span_name="x")],
         )
 
 
@@ -130,7 +165,7 @@ def test_suite_must_be_non_empty() -> None:
             case_id="c",
             suite="   ",
             inputs={"userQuestion": "x"},
-            probes=[ProbeSpec(probe_id="p", kind="has_matching_span", args={})],
+            probes=[HasMatchingSpanSpec(probe_id="p", span_name="x")],
         )
 
 
@@ -146,10 +181,17 @@ def test_probe_ids_must_be_unique_within_a_case() -> None:
             suite="s",
             inputs={"userQuestion": "x"},
             probes=[
-                ProbeSpec(probe_id="dup", kind="has_matching_span", args={}),
-                ProbeSpec(probe_id="dup", kind="claim_grounded_in", args={}),
+                HasMatchingSpanSpec(probe_id="dup", span_name="x"),
+                ClaimGroundedInSpec(probe_id="dup", source_kind="primitive"),
             ],
         )
+
+
+def test_span_latency_ms_must_be_positive() -> None:
+    """Field(gt=0) rejects zero and negative values; catches typos
+    like ms=0 that would pass any latency."""
+    with pytest.raises(ValidationError):
+        SpanLatencyP50UnderSpec(probe_id="p", span_name="x", ms=0)
 
 
 def test_score_out_of_unit_interval_rejected() -> None:
@@ -168,8 +210,8 @@ def test_score_out_of_unit_interval_rejected() -> None:
 
 
 def test_score_none_is_allowed() -> None:
-    """Pure pass/fail probes leave score=None. Make sure the unit-interval
-    check doesn't reject the absent case."""
+    """Pure pass/fail probes leave score=None. Make sure the
+    unit-interval check doesn't reject the absent case."""
     now = datetime.now(timezone.utc)
     r = ProbeResult(
         run_id="r",
@@ -206,7 +248,9 @@ def test_extra_fields_rejected_on_eval_case() -> None:
                 "case_id": "c",
                 "suite": "s",
                 "inputs": {"userQuestion": "x"},
-                "probes": [{"probe_id": "p", "kind": "has_matching_span", "args": {}}],
+                "probes": [
+                    {"probe_id": "p", "kind": "has_matching_span", "span_name": "x"}
+                ],
                 "wat": "this field does not exist on the schema",
             }
         )
@@ -242,7 +286,19 @@ def test_probe_result_keys_compose_with_case_and_run() -> None:
         started_at=now,
         finished_at=now,
     )
-    # All three primary-key fields are str on both sides.
     assert result.run_id == run.run_id
     assert result.case_id == case.case_id
     assert result.probe_id == case.probes[0].probe_id
+
+
+def test_typed_spec_consumed_directly_by_layer_2_signature() -> None:
+    """Sanity check that typed *Spec classes are usable as direct
+    function arguments without the `args` indirection that the
+    discriminated-union refactor was meant to eliminate."""
+    spec = ClaimGroundedInSpec(probe_id="p", source_kind="primitive")
+    # A Layer 2 probe will declare its `run` like:
+    #   async def run(spec: ClaimGroundedInSpec, ...) -> ProbeResult
+    # so the consuming code reads spec.source_kind directly. No
+    # _Args.model_validate(spec.args) step.
+    assert spec.source_kind == "primitive"
+    assert spec.kind == "claim_grounded_in"

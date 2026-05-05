@@ -13,6 +13,5 @@
   probes:
     - probe_id: narrative-constitution-p50-under-15s
       kind: span_latency_p50_under
-      args:
-        span_name: mcae.gate.narrative_constitution
-        ms: 15000
+      span_name: mcae.gate.narrative_constitution
+      ms: 15000

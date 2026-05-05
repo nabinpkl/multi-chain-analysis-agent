@@ -9,5 +9,4 @@
   probes:
     - probe_id: every-claim-is-primitive-grounded
       kind: claim_grounded_in
-      args:
-        source_kind: primitive
+      source_kind: primitive

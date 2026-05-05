@@ -9,5 +9,4 @@
   probes:
     - probe_id: primary-uses-nemotron
       kind: llm_call_used_model
-      args:
-        model_name: "nvidia/nemotron-3-super-120b-a12b:free"
+      model_name: "nvidia/nemotron-3-super-120b-a12b:free"

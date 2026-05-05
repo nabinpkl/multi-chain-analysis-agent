@@ -11,5 +11,4 @@
   probes:
     - probe_id: snapshot-lease-span-present
       kind: has_matching_span
-      args:
-        span_name: mcae.snapshot.lease
+      span_name: mcae.snapshot.lease

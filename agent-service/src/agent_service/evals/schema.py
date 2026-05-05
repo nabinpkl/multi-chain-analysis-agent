@@ -2,29 +2,39 @@
 
 These types are the contract every other layer depends on:
 
-- Layer 2 probes return `ProbeResult`.
+- Layer 2 probes consume one typed `*Spec` (e.g. `ClaimGroundedInSpec`),
+  return `ProbeResult`.
 - Layer 3 runner loads `EvalCase` from YAML, persists `ProbeResult`,
   emits `RunMetadata`.
-- Layer 4 adapter translates `EvalCase`/`ProbeSpec` into pydantic_evals
+- Layer 4 adapter translates `EvalCase`/`*Spec` into pydantic_evals
   Case/Evaluator and back.
 
 The four invariants this layer protects:
 
 1. A case is data, not code (YAML-loadable, stable IDs).
-2. A probe is a predicate over an OTel trace (kind + args).
+2. A probe is a predicate over an OTel trace (typed spec class per
+   kind; one source of truth for probe args).
 3. A probe result is a structured artifact (JSON-persistable).
 4. The agent under test is invoked exactly the way production
    invokes it (`inputs` is shaped like the production AgentRequest).
 
+Probe specs are a discriminated union over the `kind` field. Each
+probe kind has its own `*Spec` pydantic class with its args inlined
+as typed fields (no `args: dict[str, Any]` indirection). Benefits:
+
+- One source of truth for probe args. Layer 2 probes consume the
+  typed spec class directly; no per-probe re-validation.
+- YAML cases fail at load time with a precise error pointing to the
+  bad arg, not later at probe-call time.
+- IDE/type-checker catches probe-implementation/spec-shape drift.
+
 Rules for evolving this file:
 
-- Adding a probe kind: extend `ProbeKind` Literal, add a probe module
-  in `probes/`, register in dispatch. No schema migration.
-- Adding a probe-kind-specific arg: put it in `ProbeSpec.args` (the
-  `dict[str, Any]` is intentional). Do NOT add a sibling field to
-  `ProbeSpec` for one probe kind's needs.
-- Adding a result field: append to `ProbeResult` with a default. Old
-  results stay readable; new probes can populate.
+- Adding a probe kind: add a new `*Spec` class, append it to the
+  `ProbeSpec` union, register the probe module in `probes/__init__.py`.
+  No schema migration of existing YAML cases.
+- Adding an arg to an existing probe kind: add a field to that
+  probe's `*Spec` class with a default; old YAML cases keep parsing.
 - Renaming any field: requires migrating committed YAML cases AND
   baseline JSON files. Avoid.
 
@@ -36,7 +46,7 @@ leaf; framework swap touches Layer 4 only).
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, Union, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -69,17 +79,14 @@ FrameworkAdapter = Literal[
 
 
 # ---------------------------------------------------------------------------
-# Probe spec
+# Probe specs (one class per kind; discriminated union below)
 # ---------------------------------------------------------------------------
 
 
-class ProbeSpec(BaseModel):
-    """A single predicate the runner evaluates against one trace.
-
-    `kind` selects which probe module runs. `args` is the
-    kind-specific parameter bag; each probe module validates its own
-    args at call time so this layer stays kind-agnostic.
-    """
+class _ProbeSpecBase(BaseModel):
+    """Common shape every probe spec inherits. Holds the discriminator
+    field machinery and the probe_id non-empty check. Concrete
+    subclasses set `kind` to a literal and add their own typed args."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -90,8 +97,6 @@ class ProbeSpec(BaseModel):
             "are distinguishable."
         ),
     )
-    kind: ProbeKind
-    args: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("probe_id")
     @classmethod
@@ -99,6 +104,115 @@ class ProbeSpec(BaseModel):
         if not v.strip():
             raise ValueError("probe_id must be non-empty")
         return v
+
+
+class HasMatchingSpanSpec(_ProbeSpecBase):
+    """Pass if the trace contains at least one span with `span_name`
+    and (if `attrs` is set) all listed attribute key/value pairs."""
+
+    kind: Literal["has_matching_span"] = "has_matching_span"
+    span_name: str
+    attrs: dict[str, str] = Field(default_factory=dict)
+
+
+class ToolCalledWithArgsSpec(_ProbeSpecBase):
+    """Pass if a tool by `tool_name` was invoked and (if
+    `arg_predicates` is set) the parsed `mcae.primitive.input`
+    JSON contains all listed key/value matches."""
+
+    kind: Literal["tool_called_with_args"] = "tool_called_with_args"
+    tool_name: str
+    arg_predicates: dict[str, Any] = Field(default_factory=dict)
+
+
+class ClaimGroundedInSpec(_ProbeSpecBase):
+    """Pass if every `mcae.claim.emitted` span in the trace has
+    `mcae.claim.source_kind == source_kind`. Today every claim is
+    `primitive`; the `exploratory` value lights up when the planned
+    sql_explore tool ships."""
+
+    kind: Literal["claim_grounded_in"] = "claim_grounded_in"
+    source_kind: Literal["primitive", "exploratory"]
+
+
+class GatePassedSpec(_ProbeSpecBase):
+    """Pass if the named gate span (`mcae.gate.<gate_kind>`) carries
+    `mcae.gate.verdict='approved'` and (if `version` is set)
+    `mcae.gate.version=<version>`. The arg name is `gate_kind`
+    rather than `kind` because `kind` is the discriminator field."""
+
+    kind: Literal["gate_passed"] = "gate_passed"
+    gate_kind: Literal[
+        "placeholder", "structural", "constitution", "narrative_constitution"
+    ]
+    version: str | None = None
+
+
+class SpanLatencyP50UnderSpec(_ProbeSpecBase):
+    """Pass if the median (p50) duration across all matching spans
+    in the trace is under `ms` milliseconds. Uses ClickHouse's
+    quantile(0.5) aggregate over OTel `Duration` (nanoseconds)."""
+
+    kind: Literal["span_latency_p50_under"] = "span_latency_p50_under"
+    span_name: str
+    ms: int = Field(gt=0)
+
+
+class NoSpanWithStatusSpec(_ProbeSpecBase):
+    """Pass if no span by `span_name` carries the named status.
+    `error` matches our `error=true` attribute convention from
+    primitive_client; `ok` matches the absence of an error mark."""
+
+    kind: Literal["no_span_with_status"] = "no_span_with_status"
+    span_name: str
+    status: Literal["error", "ok"]
+
+
+class LlmCallUsedModelSpec(_ProbeSpecBase):
+    """Pass if any `chat <model>` span in the trace has
+    `gen_ai.request.model == model_name`. Useful for asserting the
+    eval ran against the expected primary or policy model."""
+
+    kind: Literal["llm_call_used_model"] = "llm_call_used_model"
+    model_name: str
+
+
+# Discriminated union: pydantic dispatches on `kind` at parse time,
+# so a YAML case with `kind: claim_grounded_in` and a missing
+# `source_kind` fails immediately with a precise error pointing to
+# `ClaimGroundedInSpec.source_kind`, not at probe-run time.
+ProbeSpec = Annotated[
+    Union[
+        HasMatchingSpanSpec,
+        ToolCalledWithArgsSpec,
+        ClaimGroundedInSpec,
+        GatePassedSpec,
+        SpanLatencyP50UnderSpec,
+        NoSpanWithStatusSpec,
+        LlmCallUsedModelSpec,
+    ],
+    Field(discriminator="kind"),
+]
+
+
+# Sanity check: every ProbeKind has a spec class in the union, and
+# every union member has a kind in ProbeKind. Raises at import time
+# if drift sneaks in.
+def _assert_kind_union_exhaustive() -> None:
+    union_kinds: set[str] = set()
+    for member in get_args(get_args(ProbeSpec)[0]):  # unwrap Annotated, then Union
+        kind_field = member.model_fields["kind"]
+        union_kinds.add(get_args(kind_field.annotation)[0])
+    declared_kinds = set(get_args(ProbeKind))
+    if union_kinds != declared_kinds:
+        missing = declared_kinds - union_kinds
+        extra = union_kinds - declared_kinds
+        raise RuntimeError(
+            f"ProbeKind / ProbeSpec union drift: missing={missing}, extra={extra}"
+        )
+
+
+_assert_kind_union_exhaustive()
 
 
 # ---------------------------------------------------------------------------
@@ -146,13 +260,12 @@ class EvalCase(BaseModel):
 
     @field_validator("probes")
     @classmethod
-    def _probes_non_empty(cls, v: list[ProbeSpec]) -> list[ProbeSpec]:
+    def _probes_non_empty_unique(cls, v: list[ProbeSpec]) -> list[ProbeSpec]:
         if not v:
             raise ValueError(
                 "at least one probe required; a case with no probes "
                 "asserts nothing about the trace and silently passes"
             )
-        # probe_ids must be unique within a case for ProbeResult to key cleanly
         ids = [p.probe_id for p in v]
         if len(ids) != len(set(ids)):
             raise ValueError("probe_id values must be unique within a case")
@@ -200,8 +313,8 @@ class ProbeResult(BaseModel):
         default=None,
         description=(
             "Set when the probe could not run (e.g. trace not in CH "
-            "yet, args malformed). Distinguishes 'predicate is false' "
-            "from 'predicate could not be evaluated'."
+            "yet, transient query failure). Distinguishes 'predicate "
+            "is false' from 'predicate could not be evaluated'."
         ),
     )
     started_at: datetime
