@@ -111,11 +111,40 @@ async def wait_for_trace_indexed(
     every child has flushed, so its presence is the proxy for
     "the whole trace is exported."
 
+    Why polling and not an event:
+
+    The agent process, the otel-collector, and ClickHouse are
+    three independent processes coordinating asynchronously. There
+    is no shared synchronous primitive that says "the trace is
+    visible to SELECT now":
+
+    - ClickHouse has no insert-event API. LISTEN/NOTIFY does not
+      exist; LIVE VIEW / WATCH was deprecated. CH is built for
+      batched analytics, not event-driven coordination.
+    - The OTel SDK's force_flush() drains the agent-side buffer to
+      the collector but does not propagate through the collector's
+      own batch processor (which exists for CH's sake: 1-row
+      INSERTs are ~100x slower than batched ones and create part-
+      churn that triggers merge backpressure).
+    - The collector publishes nothing back to the agent or eval
+      caller when its batch flushes downstream.
+
+    So the consumer asks. That is polling, by definition.
+
+    The cost is negligible: each poll is a single point query on
+    an indexed TraceId column, sub-millisecond CH-side. Sixty polls
+    spread over 30 seconds is well below noise compared to the
+    agent-run cost of the turn itself.
+
+    Do NOT replace this with: a tighter collector batch (breaks
+    production write throughput), force_flush in the agent (fixes
+    only one of three buffering layers), Kafka fan-out (real
+    infra cost for no real win at our scale), or a separate eval
+    pipeline (over-engineered against a non-problem). The polling
+    is structurally correct.
+
     Raises TimeoutError if the span doesn't appear within
-    `timeout_s`. The default (30s) is comfortably above the OTel
-    SDK BatchSpanProcessor delay (5s) plus the otel-collector
-    batch interval, with margin for slow CH inserts. Increase
-    via the timeout_s arg for unusually large turns.
+    `timeout_s`.
     """
     deadline = asyncio.get_running_loop().time() + timeout_s
     while True:
