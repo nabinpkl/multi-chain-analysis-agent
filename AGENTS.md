@@ -3,6 +3,7 @@
 - Use latest docs for frontend and backend libraries before coding.
 - For every library you need to add always search is it maintained. If not maintained we don't use it.
 - Every article, blog post, doc page, or release note cited must have its publication date verified before being treated as a current source. Web-search results often surface stale content (1+ year old) ranked for relevance, not recency. Before quoting a fact from a URL: open the page or its metadata, find the published-or-updated date, compare against today, and if the article is older than ~6 months explicitly say so when reporting it. If the date can't be found, say "no date verifiable" instead of pretending the source is current. Apply this to research delegated to subagents too; the prompt must require dated citations and the subagent's report must show dates next to claims, not just URLs.
+- Commit messages describe what the change does. Do NOT reference internal narrative scaffolding like "Ship N", "Pass M", "Session K", "Step X"  those are personal-plan vocabulary, not durable explanations a future reader can interpret. Reference a tracked issue (`#NNN`) when one exists; otherwise just describe the change and why. The commit subject is an action phrase ("add X", "fix Y", "refactor Z"), the body explains what the change does and the reasoning behind it. A reader six months from now should understand the commit from its message alone, without needing to know what arc or ship it belonged to.
 
 # Don'ts
 - No God component. Extract component if make sense.
