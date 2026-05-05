@@ -62,7 +62,7 @@ from opentelemetry import trace
 from pydantic_ai import Agent
 from pydantic_ai.usage import UsageLimits
 
-from . import spans
+from agent_service import spans
 
 # Module-level tracer. init_otel() registered the global TracerProvider
 # at app startup; this resolves through to it. Tests with
@@ -86,19 +86,19 @@ from multichain.wire.agent.v1 import (
 )
 from multichain.wire.shared.v1 import provenance_pb2
 
-from .agent import AgentDeps, EmitClaimInput, ToolCallRecord
-from .boundary import build_context_block
-from .diff import diff_outputs, spec_for
-from .policy.binding_store import PrimitiveBindingStore
-from .policy import constitution as constitution_module
-from .policy import structural as structural_module
-from .policy.constitution import (
+from agent_service.agent import AgentDeps, EmitClaimInput, ToolCallRecord
+from agent_service.boundary import build_context_block
+from agent_service.diff import diff_outputs, spec_for
+from agent_service.policy.binding_store import PrimitiveBindingStore
+from agent_service.policy import constitution as constitution_module
+from agent_service.policy import structural as structural_module
+from agent_service.policy.constitution import (
     ConstitutionVerdict,
     judge_claim,
     judge_narrative,
 )
-from .policy.placeholder import validate_refs
-from .policy.structural import verify_chip_values
+from agent_service.policy.placeholder import validate_refs
+from agent_service.policy.structural import verify_chip_values
 
 # Gate version pinned at module load. The placeholder gate is purely
 # deterministic ref-validation with no version notion of its own;
@@ -107,9 +107,9 @@ from .policy.structural import verify_chip_values
 # their own VERSION constants so a prompt swap or algorithm bump
 # propagates without touching the loop driver.
 _PLACEHOLDER_VERSION = "v1"
-from .primitive_client import PrimitiveClient, PrimitiveError
-from .repeat_detector import RepeatDetectorOutcome, detect_repeat
-from .thread_state import (
+from agent_service.primitive_client import PrimitiveClient, PrimitiveError
+from agent_service.repeat_detector import RepeatDetectorOutcome, detect_repeat
+from agent_service.thread_state import (
     AgentThread,
     ThreadRegistry,
     TurnToolCallRecord,

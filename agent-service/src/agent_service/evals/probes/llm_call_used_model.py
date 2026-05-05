@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from ..ch import ClickHouseClient
-from ..schema import LlmCallUsedModelSpec, ProbeResult
+from agent_service.evals.ch import ClickHouseClient
+from agent_service.evals.schema import LlmCallUsedModelSpec, ProbeResult
 
 
 async def run(

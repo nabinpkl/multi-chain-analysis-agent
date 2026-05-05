@@ -26,7 +26,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent
 
-from .llm import policy_model
+from agent_service.llm import policy_model
 
 log = structlog.get_logger(__name__)
 

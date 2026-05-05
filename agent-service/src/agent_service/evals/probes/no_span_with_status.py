@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from ..ch import ClickHouseClient
-from ..schema import NoSpanWithStatusSpec, ProbeResult
+from agent_service.evals.ch import ClickHouseClient
+from agent_service.evals.schema import NoSpanWithStatusSpec, ProbeResult
 
 
 async def run(

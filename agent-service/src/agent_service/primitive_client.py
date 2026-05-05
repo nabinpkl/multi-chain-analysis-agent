@@ -41,7 +41,7 @@ from multichain.wire.shared.v1 import (
     wallet_profile_pb2 as wp_pb,
 )
 
-from . import spans
+from agent_service import spans
 
 # Module-level tracer. Honours whatever provider init_otel() registered;
 # resolves to a no-op tracer in tests where OTEL_SDK_DISABLED=true so

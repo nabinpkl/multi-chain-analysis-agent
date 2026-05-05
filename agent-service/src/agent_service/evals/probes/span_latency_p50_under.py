@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from ..ch import ClickHouseClient
-from ..schema import ProbeResult, SpanLatencyP50UnderSpec
+from agent_service.evals.ch import ClickHouseClient
+from agent_service.evals.schema import ProbeResult, SpanLatencyP50UnderSpec
 
 
 async def run(

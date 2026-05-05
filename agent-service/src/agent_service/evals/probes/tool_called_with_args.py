@@ -21,8 +21,8 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from ..ch import ClickHouseClient
-from ..schema import ProbeResult, ToolCalledWithArgsSpec
+from agent_service.evals.ch import ClickHouseClient
+from agent_service.evals.schema import ProbeResult, ToolCalledWithArgsSpec
 
 
 def _all_predicates_match(parsed_input: dict[str, Any], predicates: dict[str, Any]) -> bool:

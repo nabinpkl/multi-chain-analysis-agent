@@ -25,10 +25,10 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent, RunContext
 
-from .boundary import wrap_external_data
-from .llm import primary_model
-from .policy.binding_store import PrimitiveBindingStore, build_binding
-from .primitive_client import PrimitiveClient, PrimitiveError
+from agent_service.boundary import wrap_external_data
+from agent_service.llm import primary_model
+from agent_service.policy.binding_store import PrimitiveBindingStore, build_binding
+from agent_service.primitive_client import PrimitiveClient, PrimitiveError
 
 log = structlog.get_logger(__name__)
 

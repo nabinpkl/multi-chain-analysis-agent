@@ -20,7 +20,7 @@ from typing import Any, Iterable
 
 from multichain.wire.shared.v1 import provenance_pb2
 
-from .crosscheck import ExtractedNumber, UnitClass
+from agent_service.policy.crosscheck import ExtractedNumber, UnitClass
 
 # FIFO cap on per-thread bindings. 64 covers tens of turns of typical
 # dogfood without unbounded growth. Tunable; matches the Rust constant.

@@ -44,7 +44,7 @@ from pydantic_ai.messages import ModelMessage
 
 from multichain.wire.agent.v1 import claim_pb2
 
-from .policy.binding_store import PrimitiveBindingStore
+from agent_service.policy.binding_store import PrimitiveBindingStore
 
 # FIFO cap on `claims`. Matches Rust's `MAX_THREAD_CLAIMS = 20`. Covers
 # ~5-10 turns of typical conversation; older Claims drop.

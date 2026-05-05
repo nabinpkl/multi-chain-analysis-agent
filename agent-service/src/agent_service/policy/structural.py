@@ -12,8 +12,8 @@ from dataclasses import dataclass
 
 from multichain.wire.shared.v1 import provenance_pb2
 
-from .binding_store import PrimitiveBindingStore
-from .crosscheck import CrosscheckConfig, UnitClass, classify_metric, within_tolerance
+from agent_service.policy.binding_store import PrimitiveBindingStore
+from agent_service.policy.crosscheck import CrosscheckConfig, UnitClass, classify_metric, within_tolerance
 
 # Version pin for the gate.structural span attribute. Bumps when the
 # verification algorithm itself changes (not when bindings change).

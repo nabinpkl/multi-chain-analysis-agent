@@ -26,8 +26,8 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, get_args
 
-from ..schema import ProbeKind, ProbeResult
-from . import (
+from agent_service.evals.schema import ProbeKind, ProbeResult
+from agent_service.evals.probes import (
     claim_grounded_in,
     gate_passed,
     has_matching_span,

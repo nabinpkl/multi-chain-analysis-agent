@@ -25,7 +25,7 @@ from typing import Any
 
 from multichain.wire.agent.v1 import diff_pb2
 
-from .policy.crosscheck import within_tolerance
+from agent_service.policy.crosscheck import within_tolerance
 
 # Default tolerance for numeric fields when the per-class spec doesn't
 # override. Matches `CrosscheckConfig.declarative_tolerance`. Hedging

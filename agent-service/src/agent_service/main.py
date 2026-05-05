@@ -44,13 +44,13 @@ from sse_starlette.sse import EventSourceResponse
 
 from multichain.wire.agent.v1 import session_pb2 as sess_pb
 
-from .agent import build_agent
-from .loop_driver import LoopHandles, run_turn
-from .otel import init_otel, instrument_fastapi
-from .policy.constitution import build_constitution_agent
-from .primitive_client import PrimitiveClient
-from .repeat_detector import build_repeat_agent
-from .thread_state import ThreadRegistry
+from agent_service.agent import build_agent
+from agent_service.loop_driver import LoopHandles, run_turn
+from agent_service.otel import init_otel, instrument_fastapi
+from agent_service.policy.constitution import build_constitution_agent
+from agent_service.primitive_client import PrimitiveClient
+from agent_service.repeat_detector import build_repeat_agent
+from agent_service.thread_state import ThreadRegistry
 
 log = structlog.get_logger(__name__)
 
