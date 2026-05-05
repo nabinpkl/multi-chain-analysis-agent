@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file multichain/wire/agent/v1/session.proto.
  */
 export const file_multichain_wire_agent_v1_session: GenFile = /*@__PURE__*/
-  fileDesc("CiZtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc2Vzc2lvbi5wcm90bxIYbXVsdGljaGFpbi53aXJlLmFnZW50LnYxItIBCgxBZ2VudFJlcXVlc3QSFQoNdXNlcl9xdWVzdGlvbhgBIAEoCRI2Cgdjb250ZXh0GAIgASgLMiUubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLlZpZXdDb250ZXh0EhYKCXRocmVhZF9pZBgDIAEoCUgAiAEBEjkKCHN3aXRjaGVzGAQgASgLMicubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkFnZW50U3dpdGNoZXMSEgoKc2hvd190cmFjZRgFIAEoCEIMCgpfdGhyZWFkX2lkIkoKE0FnZW50U2Vzc2lvblN0YXJ0ZWQSEgoKc2Vzc2lvbl9pZBgBIAEoCRIRCgl0aHJlYWRfaWQYAiABKAkSDAoEdHVybhgDIAEoDSJFCglBZ2VudERvbmUSEgoKc2Vzc2lvbl9pZBgBIAEoCRISCgplbGFwc2VkX21zGAIgASgNEhAKCHRyYWNlX2lkGAMgASgJYgZwcm90bzM", [file_multichain_wire_agent_v1_entity, file_multichain_wire_agent_v1_switches]);
+  fileDesc("CiZtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc2Vzc2lvbi5wcm90bxIYbXVsdGljaGFpbi53aXJlLmFnZW50LnYxIuQBCgxBZ2VudFJlcXVlc3QSFQoNdXNlcl9xdWVzdGlvbhgBIAEoCRI2Cgdjb250ZXh0GAIgASgLMiUubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLlZpZXdDb250ZXh0EhYKCXRocmVhZF9pZBgDIAEoCUgAiAEBEjkKCHN3aXRjaGVzGAQgASgLMicubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkFnZW50U3dpdGNoZXMSEgoKc2hvd190cmFjZRgFIAEoCBIQCghydW5fdHlwZRgGIAEoCUIMCgpfdGhyZWFkX2lkIkoKE0FnZW50U2Vzc2lvblN0YXJ0ZWQSEgoKc2Vzc2lvbl9pZBgBIAEoCRIRCgl0aHJlYWRfaWQYAiABKAkSDAoEdHVybhgDIAEoDSJFCglBZ2VudERvbmUSEgoKc2Vzc2lvbl9pZBgBIAEoCRISCgplbGFwc2VkX21zGAIgASgNEhAKCHRyYWNlX2lkGAMgASgJYgZwcm90bzM", [file_multichain_wire_agent_v1_entity, file_multichain_wire_agent_v1_switches]);
 
 /**
  * User question + ViewContext. `thread_id` is None on the first
@@ -24,6 +24,15 @@ export const file_multichain_wire_agent_v1_session: GenFile = /*@__PURE__*/
  * `switches` defaults to the production preset (everything except
  * ground_truth_match). `show_trace` controls whether GatePath
  * frames are emitted; trace is always built and ledgered regardless.
+ *
+ * `run_type` discriminates production traffic from eval-driven
+ * traffic in the OTel/Langfuse/ClickHouse trace store. Empty
+ * string maps to "production" on the agent side. The eval CLI
+ * sets "eval" so analytics filters can exclude eval volume from
+ * production aggregates without running a separate agent process.
+ * Conventional values: "" | "production" | "eval" | "dev". Other
+ * values pass through unchanged so callers can extend without a
+ * proto bump.
  *
  * @generated from message multichain.wire.agent.v1.AgentRequest
  */
@@ -52,6 +61,11 @@ export type AgentRequest = Message<"multichain.wire.agent.v1.AgentRequest"> & {
    * @generated from field: bool show_trace = 5;
    */
   showTrace: boolean;
+
+  /**
+   * @generated from field: string run_type = 6;
+   */
+  runType: string;
 };
 
 /**

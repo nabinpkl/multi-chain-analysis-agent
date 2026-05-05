@@ -8,6 +8,15 @@
 /// `switches` defaults to the production preset (everything except
 /// ground_truth_match). `show_trace` controls whether GatePath
 /// frames are emitted; trace is always built and ledgered regardless.
+///
+/// `run_type` discriminates production traffic from eval-driven
+/// traffic in the OTel/Langfuse/ClickHouse trace store. Empty
+/// string maps to "production" on the agent side. The eval CLI
+/// sets "eval" so analytics filters can exclude eval volume from
+/// production aggregates without running a separate agent process.
+/// Conventional values: "" | "production" | "eval" | "dev". Other
+/// values pass through unchanged so callers can extend without a
+/// proto bump.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
@@ -47,6 +56,14 @@ pub struct AgentRequest {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
     )]
     pub show_trace: bool,
+    /// Field 6: `run_type`
+    #[serde(
+        rename = "runType",
+        alias = "run_type",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub run_type: ::buffa::alloc::string::String,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -59,6 +76,7 @@ impl ::core::fmt::Debug for AgentRequest {
             .field("thread_id", &self.thread_id)
             .field("switches", &self.switches)
             .field("show_trace", &self.show_trace)
+            .field("run_type", &self.run_type)
             .finish()
     }
 }
@@ -112,6 +130,9 @@ impl ::buffa::Message for AgentRequest {
         if self.show_trace {
             size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
         }
+        if !self.run_type.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.run_type) as u32;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -160,6 +181,14 @@ impl ::buffa::Message for AgentRequest {
             ::buffa::encoding::Tag::new(5u32, ::buffa::encoding::WireType::Varint)
                 .encode(buf);
             ::buffa::types::encode_bool(self.show_trace, buf);
+        }
+        if !self.run_type.is_empty() {
+            ::buffa::encoding::Tag::new(
+                    6u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
+                .encode(buf);
+            ::buffa::types::encode_string(&self.run_type, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -237,6 +266,16 @@ impl ::buffa::Message for AgentRequest {
                 }
                 self.show_trace = ::buffa::types::decode_bool(buf)?;
             }
+            6u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 6u32,
+                        expected: 2u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                ::buffa::types::merge_string(&mut self.run_type, buf)?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, depth)?);
@@ -250,6 +289,7 @@ impl ::buffa::Message for AgentRequest {
         self.thread_id = ::core::option::Option::None;
         self.switches = ::buffa::MessageField::none();
         self.show_trace = false;
+        self.run_type.clear();
         self.__buffa_unknown_fields.clear();
     }
 }

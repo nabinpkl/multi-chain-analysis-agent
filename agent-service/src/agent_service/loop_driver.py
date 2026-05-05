@@ -55,7 +55,6 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
-import os
 import structlog
 from google.protobuf import json_format
 from opentelemetry import trace
@@ -70,10 +69,14 @@ from agent_service import spans
 # stays cheap.
 _tracer = trace.get_tracer(__name__)
 
-# Default `run.type` for the agent.turn root span. Eval harness (Ship 2)
-# overrides via env var so its traces are filterable in the same store
-# without per-call wiring on every test case.
-_RUN_TYPE = os.environ.get("AGENT_RUN_TYPE", spans.RUN_TYPE_PRODUCTION)
+
+def _resolve_run_type(raw: str) -> str:
+    """Map an `AgentRequest.run_type` string to the value stamped on
+    the mcae.turn span. Empty string (the proto3 default) means
+    'production'. Other values pass through verbatim so callers can
+    extend with new types (e.g. 'dev', custom suite labels) without
+    a proto bump."""
+    return raw or spans.RUN_TYPE_PRODUCTION
 
 from multichain.wire.agent.v1 import (
     claim_pb2,
@@ -459,7 +462,9 @@ async def run_turn(
             turn_span.set_attribute(spans.Attrs.SESSION_ID, session_id)
             turn_span.set_attribute(spans.Attrs.THREAD_ID, thread_id)
             turn_span.set_attribute(spans.Attrs.TURN_INDEX, turn)
-            turn_span.set_attribute(spans.Attrs.RUN_TYPE, _RUN_TYPE)
+            turn_span.set_attribute(
+                spans.Attrs.RUN_TYPE, _resolve_run_type(request.run_type)
+            )
             # The user question lives on the mcae.turn span so traces
             # are searchable by what was asked. Previously this also
             # went into the SESSION_STARTED ledger row; ledger deletion
