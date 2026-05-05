@@ -1,0 +1,134 @@
+# Identity / scope cases. Every case here is narrative-only (no
+# tool dispatch), so the only paths exercised are: turn root,
+# snapshot lease, placeholder gate, narrative emission, narrative-
+# constitution gate. The `claim_grounded_in` probe is vacuously
+# true on these cases (zero claims) by design; pairing it with
+# `has_matching_span` on `mcae.claim.emitted` would assert the
+# wrong invariant for a no-tool turn.
+#
+# Versions pinned today (2026-05-05):
+#   placeholder gate            v1
+#   narrative_constitution gate v4
+#   policy model (constitution) openai/gpt-oss-20b:free
+#   primary model               nvidia/nemotron-3-super-120b-a12b:free
+
+- case_id: who_are_you.basic
+  suite: who_are_you
+  inputs:
+    userQuestion: "who are you"
+    context:
+      focus:
+        wallet:
+          addr: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+    switches:
+      stayInRole: true
+  probes:
+    - probe_id: turn-root-span-present
+      kind: has_matching_span
+      span_name: mcae.turn
+
+    - probe_id: turn-tagged-as-eval
+      kind: has_matching_span
+      span_name: mcae.turn
+      attrs:
+        mcae.run.type: eval
+
+    - probe_id: snapshot-lease-emitted
+      kind: has_matching_span
+      span_name: mcae.snapshot.lease
+
+    - probe_id: narrative-emitted-approved
+      kind: has_matching_span
+      span_name: mcae.narrative.emitted
+      attrs:
+        mcae.narrative.verdict: approved
+
+    - probe_id: placeholder-gate-passes-v1
+      kind: gate_passed
+      gate_kind: placeholder
+      version: "v1"
+
+    - probe_id: narrative-constitution-gate-passes-v4
+      kind: gate_passed
+      gate_kind: narrative_constitution
+      version: "v4"
+
+    - probe_id: policy-model-used-by-constitution-gate
+      kind: llm_call_used_model
+      model_name: "openai/gpt-oss-20b:free"
+
+    - probe_id: no-error-on-turn-root
+      kind: no_span_with_status
+      span_name: mcae.turn
+      status: error
+
+- case_id: who_are_you.detail
+  suite: who_are_you
+  inputs:
+    userQuestion: "Tell me what you can help me with in detail."
+    context:
+      focus:
+        wallet:
+          addr: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+    switches:
+      stayInRole: true
+  probes:
+    - probe_id: turn-root-span-present
+      kind: has_matching_span
+      span_name: mcae.turn
+
+    - probe_id: narrative-emitted-approved
+      kind: has_matching_span
+      span_name: mcae.narrative.emitted
+      attrs:
+        mcae.narrative.verdict: approved
+
+    - probe_id: narrative-constitution-gate-passes-v4
+      kind: gate_passed
+      gate_kind: narrative_constitution
+      version: "v4"
+
+    - probe_id: turn-finishes-under-90s
+      kind: span_latency_p50_under
+      span_name: mcae.turn
+      ms: 90000
+
+    - probe_id: primary-model-used
+      kind: llm_call_used_model
+      model_name: "nvidia/nemotron-3-super-120b-a12b:free"
+
+    - probe_id: no-error-on-turn-root
+      kind: no_span_with_status
+      span_name: mcae.turn
+      status: error
+
+- case_id: who_are_you.short
+  suite: who_are_you
+  inputs:
+    userQuestion: "hi"
+    context:
+      focus:
+        wallet:
+          addr: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+    switches:
+      stayInRole: true
+  probes:
+    - probe_id: turn-root-span-present
+      kind: has_matching_span
+      span_name: mcae.turn
+
+    - probe_id: narrative-emitted-approved
+      kind: has_matching_span
+      span_name: mcae.narrative.emitted
+      attrs:
+        mcae.narrative.verdict: approved
+
+    - probe_id: placeholder-gate-passes-v1
+      kind: gate_passed
+      gate_kind: placeholder
+      version: "v1"
+
+    - probe_id: no-error-on-turn-root
+      kind: no_span_with_status
+      span_name: mcae.turn
+      status: error

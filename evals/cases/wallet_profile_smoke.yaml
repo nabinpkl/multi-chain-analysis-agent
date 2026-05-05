@@ -1,0 +1,147 @@
+# Wallet-profile cases. Exercises the primitive-call path:
+#   user question -> tool dispatch -> mcae.primitive.wallet_profile
+#   -> mcae.claim.emitted -> placeholder gate -> structural gate
+#   -> constitution gate -> narrative emission -> narrative_constitution
+#
+# Wallet picks (verified 2026-05-05 against multichain.edges):
+#   observable: HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC (1387 edges)
+#   empty:      4Mh7GmBzFY6RqdR5Q8oqkGW7vZxjwkKfEcN7JYY9p1xA (0 edges)
+#
+# Versions pinned today (2026-05-05):
+#   placeholder gate v1, structural gate 5a, constitution gate v4
+#
+# `wallet_profile.unknown_wallet` is a philosophy-2 case: probes
+# encode the desired contract ("agent must recognize zero-data
+# wallet without fabricating") rather than pinning today's behavior.
+# If today's agent fails any of these probes, that is a real bug
+# the eval has surfaced, not a probe to weaken.
+
+- case_id: wallet_profile.basic
+  suite: wallet_profile_smoke
+  inputs:
+    userQuestion: "Profile this wallet."
+    context:
+      focus:
+        wallet:
+          addr: "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC"
+    switches:
+      stayInRole: true
+      dontFabricate: true
+  probes:
+    - probe_id: turn-root-span-present
+      kind: has_matching_span
+      span_name: mcae.turn
+
+    - probe_id: turn-tagged-as-eval
+      kind: has_matching_span
+      span_name: mcae.turn
+      attrs:
+        mcae.run.type: eval
+
+    # No arg_predicates: today's tool_called_with_args probe matches
+    # only top-level JSON keys, but the wallet addr lives at
+    # input.addr (nested) in the proto canonical JSON. Asserting
+    # "primitive was called" is the contract here; pinning the addr
+    # awaits a future probe extension (or a `claim_grounded_in_addr`
+    # kind) that reads nested JSON paths.
+    - probe_id: wallet-profile-primitive-called
+      kind: tool_called_with_args
+      tool_name: wallet_profile
+
+    - probe_id: structural-gate-passes-5a
+      kind: gate_passed
+      gate_kind: structural
+      version: "5a"
+
+    - probe_id: claims-grounded-in-primitive
+      kind: claim_grounded_in
+      source_kind: primitive
+
+    - probe_id: at-least-one-claim-emitted
+      kind: has_matching_span
+      span_name: mcae.claim.emitted
+
+    - probe_id: narrative-emitted-approved
+      kind: has_matching_span
+      span_name: mcae.narrative.emitted
+      attrs:
+        mcae.narrative.verdict: approved
+
+    - probe_id: no-error-on-turn-root
+      kind: no_span_with_status
+      span_name: mcae.turn
+      status: error
+
+- case_id: wallet_profile.unknown_wallet
+  suite: wallet_profile_smoke
+  inputs:
+    userQuestion: "Profile this wallet."
+    context:
+      focus:
+        wallet:
+          addr: "4Mh7GmBzFY6RqdR5Q8oqkGW7vZxjwkKfEcN7JYY9p1xA"
+    switches:
+      stayInRole: true
+      dontFabricate: true
+  probes:
+    - probe_id: turn-root-span-present
+      kind: has_matching_span
+      span_name: mcae.turn
+
+    # Philosophy 2: agent MUST hit the primitive even on a wallet it
+    # has never seen. Skipping the primitive and answering from the
+    # LLM's parametric memory is the failure mode this probe catches.
+    - probe_id: wallet-profile-primitive-called
+      kind: tool_called_with_args
+      tool_name: wallet_profile
+
+    # Philosophy 2: any claim that does emit must be primitive-
+    # sourced. Vacuously true if zero claims emit (which is the
+    # ideal outcome for an empty wallet); fails the moment a
+    # narrative-side fabricated claim appears.
+    #
+    # Note we deliberately do NOT pair this with a `gate_passed`
+    # probe on `mcae.gate.structural`: that gate runs per-claim, so
+    # zero claims means zero gate spans, which `gate_passed` reads
+    # as a fail. For an unknown wallet zero claims is the right
+    # outcome, so the gate's silence is correct. A probe that
+    # distinguishes "didn't run" from "ran and retracted" would let
+    # us assert "no retraction" specifically; absent that, we rely
+    # on `claims-grounded-in-primitive` to flag fabrication.
+    - probe_id: claims-grounded-in-primitive
+      kind: claim_grounded_in
+      source_kind: primitive
+
+    - probe_id: no-error-on-turn-root
+      kind: no_span_with_status
+      span_name: mcae.turn
+      status: error
+
+- case_id: wallet_profile.primary_model
+  suite: wallet_profile_smoke
+  inputs:
+    userQuestion: "Profile this wallet."
+    context:
+      focus:
+        wallet:
+          addr: "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC"
+    switches:
+      stayInRole: true
+      dontFabricate: true
+  probes:
+    - probe_id: turn-root-span-present
+      kind: has_matching_span
+      span_name: mcae.turn
+
+    - probe_id: primary-model-used
+      kind: llm_call_used_model
+      model_name: "nvidia/nemotron-3-super-120b-a12b:free"
+
+    - probe_id: policy-model-used
+      kind: llm_call_used_model
+      model_name: "openai/gpt-oss-20b:free"
+
+    - probe_id: no-error-on-turn-root
+      kind: no_span_with_status
+      span_name: mcae.turn
+      status: error
