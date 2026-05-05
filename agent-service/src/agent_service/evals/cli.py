@@ -1,8 +1,21 @@
 """Eval CLI. Entry point for `python -m agent_service.evals <suite>`.
 
-Prints a one-line summary on completion and exits non-zero if any
-probe failed, so `just eval` integrates cleanly with shell short-
-circuit operators.
+After the run completes, the CLI loads the matching baseline file
+(default lookup: `<baselines_root>/<suite_stem>.json`) and diffs
+the run's pass/fail map against it. Any non-empty delta (new
+failures, newly passing, schema changes) prints a report and
+exits non-zero. `--no-baseline` skips the diff for ad-hoc runs.
+
+Exit codes:
+  0  Run completed AND baseline diff is clean (or --no-baseline).
+  1  Run completed but at least one probe failed AND no baseline
+     to compare against (first-run case for a fresh suite, or
+     --no-baseline). Exit non-zero so shells short-circuit.
+  2  Run completed but baseline diff is non-empty (regression or
+     unacknowledged drift). The probe-level pass/fail counts may
+     even be unchanged (e.g. one new pass + one new fail), so
+     having a distinct exit code from 1 lets shell automation
+     differentiate "run failed" from "run drifted".
 """
 
 from __future__ import annotations
@@ -14,11 +27,17 @@ from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import get_args
 
+from agent_service.evals.baseline import (
+    diff_against_baseline,
+    load_baseline,
+    render_report,
+)
 from agent_service.evals.runner import run_suite
 from agent_service.evals.schema import FrameworkAdapter
 
 _DEFAULT_BASE_URL = "http://localhost:8003"
 _DEFAULT_RUNS_ROOT = Path("evals/runs")
+_DEFAULT_BASELINES_ROOT = Path("evals/baselines")
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -46,6 +65,35 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--baselines-root",
+        type=Path,
+        default=_DEFAULT_BASELINES_ROOT,
+        help=(
+            "Directory holding committed baseline JSON files "
+            f"(default: {_DEFAULT_BASELINES_ROOT}). The baseline for "
+            "a suite is looked up at <baselines-root>/<suite-stem>.json."
+        ),
+    )
+    parser.add_argument(
+        "--baseline",
+        type=Path,
+        default=None,
+        help=(
+            "Override the default baseline lookup with an explicit "
+            "path. Useful when comparing a run against a baseline "
+            "from a different suite or a saved snapshot."
+        ),
+    )
+    parser.add_argument(
+        "--no-baseline",
+        action="store_true",
+        help=(
+            "Skip the baseline diff entirely. Use for ad-hoc runs "
+            "or while iterating on probes before locking the first "
+            "baseline. Exit code reflects raw probe pass/fail only."
+        ),
+    )
+    parser.add_argument(
         "--adapter",
         choices=list(get_args(FrameworkAdapter)),
         default="framework_free",
@@ -56,6 +104,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     return parser.parse_args(argv)
+
+
+def _resolve_baseline_path(args: argparse.Namespace) -> Path:
+    if args.baseline is not None:
+        return args.baseline
+    return args.baselines_root / f"{args.suite.stem}.json"
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -76,7 +130,30 @@ async def _run(args: argparse.Namespace) -> int:
         f"{meta.run_id}: {meta.pass_count}/{meta.probe_count} probes pass "
         f"across {meta.case_count} cases  ({args.runs_root}/{meta.run_id})"
     )
-    return 0 if meta.pass_count == meta.probe_count else 1
+
+    if args.no_baseline:
+        return 0 if meta.pass_count == meta.probe_count else 1
+
+    baseline_path = _resolve_baseline_path(args)
+    baseline = load_baseline(baseline_path)
+    if baseline is None:
+        print(
+            f"no baseline at {baseline_path}; mint one with "
+            f"`just eval-baseline {args.suite}` once the run looks right."
+        )
+        return 0 if meta.pass_count == meta.probe_count else 1
+
+    run_root = args.runs_root / meta.run_id
+    report = diff_against_baseline(baseline, run_root)
+    if report.is_clean:
+        print(f"baseline diff clean against {baseline_path}.")
+        return 0
+    print(render_report(report))
+    print(
+        f"\nbaseline drift detected. If intended, refresh with "
+        f"`just eval-baseline {args.suite}`."
+    )
+    return 2
 
 
 def main(argv: list[str] | None = None) -> int:

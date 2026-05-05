@@ -379,6 +379,58 @@ Ship 2 day-1 work:
   Revisit on the basis of CURRENT (<=6mo) evidence per the
   AGENTS.md research-dating rule.
 
+## Implementation notes (2026-05-05, post-Layer-3-and-baselines)
+
+Actual file inventory after Layers 1, 2, 3 plus the regression
+baselines layer landed:
+
+| File | LOC | Notes |
+|---|---|---|
+| `evals/schema.py` | ~370 | Bigger than the ADR's 80 LOC estimate; the discriminated-union per-probe-spec design + import-time exhaustiveness checks earned their length. |
+| `evals/probes/*` (7 modules + `__init__.py`) | ~470 | One probe per file plus a registry. ADR estimated 150; reality is more verbose because each probe ships its own SQL + observed-field hydration + try/except for transient CH errors. |
+| `evals/agent_runner.py` | ~210 | The /agent/ask + SSE + trace-id capture path. Includes the `wait_for_trace_indexed` polling + its docstring justifying why polling is structurally correct. |
+| `evals/runner.py` | ~175 | YAML load + per-case orchestration + try/except/finally for partial-run state preservation. |
+| `evals/baseline.py` | ~190 | Pass/fail diff, three delta classes (new failures / newly passing / schema deltas), pure-JSON renderer. |
+| `evals/cli.py` + `update_baseline.py` | ~250 | Two CLI entry points. |
+| `evals/persist.py`, `ch.py`, `adapters/_stub.py` | ~180 | I/O layer plus the framework-free dispatcher. |
+
+Three deviations from the ADR worth recording:
+
+1. **No Layer 4 framework adapter.** The 2026-05-05 addendum above
+   explains. `FrameworkAdapter` Literal narrowed to a single value;
+   the dispatch site stays as a one-line `if` so a future adapter
+   that fits our cross-process architecture can slot in without
+   reshaping the runner.
+
+2. **YAML field names must be the proto's wire field names.**
+   `EntityRefWallet` has field `id`, not `addr`. The /agent/ask
+   parser uses `json_format.Parse(..., ignore_unknown_fields=True)`
+   per proto canonical-JSON spec, so unknown fields drop silently.
+   Misnamed YAML fields don't error; they make the agent see an
+   empty or default-filled message. Cases that depend on focus
+   must use `id`. ProvenanceRef (a different proto) uses `addr`;
+   the two are easily confused when authoring cases. The README
+   calls this out explicitly.
+
+3. **Baseline diff is pass/fail only.** ADR's "regression diff"
+   bullet was vague about whether to compare numeric `observed`
+   fields. We chose pure pass/fail. The probe spec carries any
+   numeric bound; the baseline tracks whether the probe held
+   against its bound. Day-to-day variance under a bound is never
+   a regression event. Same shape as a unit-test suite.
+
+Two known probe-shape limitations carried as accepted tech debt:
+
+- `tool_called_with_args` matches only top-level JSON keys;
+  `input.addr` (nested) is not assertable. Documented in
+  `evals/README.md`.
+- `gate_passed` conflates "gate did not run" with "gate retracted".
+  Documented likewise.
+
+A `gate_did_not_retract` probe kind would close the second; a
+JSON-path-walking variant of `tool_called_with_args` would close
+the first. Both are candidate follow-ons after #27.
+
 ## References
 
 - ADR 13: Agent observability foundation (OpenTelemetry + Langfuse).

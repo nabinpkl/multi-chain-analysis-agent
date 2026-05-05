@@ -57,5 +57,19 @@ regen-wire-types:
 eval suite="evals/cases/wallet_profile_smoke.yaml":
     uv --directory agent-service run python -m agent_service.evals \
         "{{ absolute_path(suite) }}" \
-        --runs-root "{{ justfile_directory() }}/evals/runs"
+        --runs-root "{{ justfile_directory() }}/evals/runs" \
+        --baselines-root "{{ justfile_directory() }}/evals/baselines"
+
+# Refresh a suite's committed regression baseline from the latest
+# matching run. Run `just eval <suite>` first; this consumes the
+# run artifacts and writes evals/baselines/<suite>.json. Refuses
+# to lock in failing probes without --force; the escape hatch is
+# for philosophy-2 cases where a known-failing probe IS the
+# contract.
+eval-baseline suite *flags:
+    uv --directory agent-service run python -m agent_service.evals.update_baseline \
+        "{{ absolute_path(suite) }}" \
+        --runs-root "{{ justfile_directory() }}/evals/runs" \
+        --baselines-root "{{ justfile_directory() }}/evals/baselines" \
+        {{ flags }}
 

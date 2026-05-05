@@ -1,0 +1,32 @@
+{
+  "suite": "who_are_you",
+  "captured_at": "2026-05-05T22:09:41.232768Z",
+  "git_sha": "a39304a7b653",
+  "agent_version": "0.1.0",
+  "results": {
+    "who_are_you.basic": {
+      "narrative-constitution-gate-passes-v4": "pass",
+      "narrative-emitted-approved": "pass",
+      "no-error-on-turn-root": "pass",
+      "placeholder-gate-passes-v1": "pass",
+      "policy-model-used-by-constitution-gate": "pass",
+      "snapshot-lease-emitted": "pass",
+      "turn-root-span-present": "pass",
+      "turn-tagged-as-eval": "pass"
+    },
+    "who_are_you.detail": {
+      "narrative-constitution-gate-passes-v4": "pass",
+      "narrative-emitted-approved": "pass",
+      "no-error-on-turn-root": "pass",
+      "primary-model-used": "pass",
+      "turn-finishes-under-90s": "pass",
+      "turn-root-span-present": "pass"
+    },
+    "who_are_you.short": {
+      "narrative-emitted-approved": "pass",
+      "no-error-on-turn-root": "pass",
+      "placeholder-gate-passes-v1": "pass",
+      "turn-root-span-present": "pass"
+    }
+  }
+}
