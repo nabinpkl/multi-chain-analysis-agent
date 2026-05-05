@@ -50,9 +50,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         choices=list(get_args(FrameworkAdapter)),
         default="framework_free",
         help=(
-            "Eval framework adapter. framework_free dispatches probes "
-            "directly; pydantic_evals wraps them as Evaluators "
-            "(when available)."
+            "Eval framework adapter. Only `framework_free` is wired "
+            "today (dispatches probes directly). Reserved for a "
+            "future adapter; see ADR 14 2026-05-05 addendum."
         ),
     )
     return parser.parse_args(argv)

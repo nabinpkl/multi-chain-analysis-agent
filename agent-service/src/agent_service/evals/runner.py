@@ -4,8 +4,8 @@
 2. For each case, invoke the agent over HTTP with `runType=eval`
    and capture the OTel trace id from the AgentDone frame.
 3. Dispatch every probe in the case against that trace id via the
-   selected framework adapter (`_stub` for now;
-   `pydantic_evals_adapter` after that lands).
+   `framework_free` adapter (the only one wired; ADR 14 2026-05-05
+   addendum explains why we didn't end up with a framework on top).
 4. Persist every ProbeResult and a RunMetadata summary under
    `evals/runs/<run_id>/`.
 
@@ -68,10 +68,12 @@ def load_suite(suite_path: Path) -> list[EvalCase]:
 
 
 def _select_adapter(name: FrameworkAdapter) -> AdapterRunCase:
+    # Single-arm dispatch today. Stays as a function (not inlined)
+    # so adding a future adapter is a one-line `elif` against the
+    # `name` Literal, matched by the type checker.
     if name == "framework_free":
         return _stub.run_case
-    # pydantic_evals adapter slots in here once written.
-    raise NotImplementedError(f"adapter {name!r} not wired yet")
+    raise AssertionError(f"unreachable adapter value: {name!r}")
 
 
 def _make_run_id() -> str:

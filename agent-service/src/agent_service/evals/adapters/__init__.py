@@ -2,9 +2,13 @@
 `framework_adapter` value from `schema.FrameworkAdapter`. The runner
 selects an adapter by name and calls its `run_case` function.
 
-The `framework_free` (a.k.a. `_stub`) adapter dispatches to our pure-
-function probes directly with no framework involvement. The
-`pydantic_evals` adapter (next change) wraps the same probes as
-pydantic_evals Evaluators so we get its case dataset / scorer / report
-machinery for free, while keeping probe semantics in our code.
+Only the `framework_free` (`_stub`) adapter is wired today. It
+dispatches to our pure-function probes directly with no framework
+involvement. ADR 14's 2026-05-05 addendum explains why a
+pydantic_evals adapter, originally planned as Layer 4, was dropped:
+its span-querying primitive captures spans in-process, which is
+incompatible with our cross-process OTel → ClickHouse pipeline.
+The seam stays here as a single-arm dispatch so a future adapter
+that does fit our architecture can slot in without reshaping the
+runner.
 """

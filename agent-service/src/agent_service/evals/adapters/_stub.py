@@ -1,10 +1,12 @@
 """Framework-free adapter. Dispatches each probe in a case directly
 to its `run` function with no eval-framework involvement.
 
-This is what running framework-free looks like at the call-site
-shape; it is also what the runner uses while the pydantic_evals
-adapter is being built. Intentionally small (~30 LOC) so it stays
-honest about how little the framework layer actually has to do.
+This is the only adapter wired today. ADR 14's 2026-05-05 addendum
+records why a pydantic_evals adapter, originally planned as Layer
+4, was dropped (its `SpanQuery` primitive requires in-process span
+capture, incompatible with our cross-process OTel → CH pipeline).
+Intentionally small (~30 LOC) so it stays honest about how little
+the framework layer actually has to do.
 """
 
 from __future__ import annotations

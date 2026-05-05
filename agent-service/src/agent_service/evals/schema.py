@@ -1,4 +1,4 @@
-"""Canonical eval types. Layer 1 of the Ship 2 stack (ADR 14).
+"""Canonical eval types. Layer 1 of the eval substrate (ADR 14).
 
 These types are the contract every other layer depends on:
 
@@ -6,8 +6,16 @@ These types are the contract every other layer depends on:
   return `ProbeResult`.
 - Layer 3 runner loads `EvalCase` from YAML, persists `ProbeResult`,
   emits `RunMetadata`.
-- Layer 4 adapter translates `EvalCase`/`*Spec` into pydantic_evals
-  Case/Evaluator and back.
+
+ADR 14 originally planned a Layer 4 framework adapter on top
+(pydantic_evals). The 2026-05-05 ADR addendum reverses that: the
+framework's span-querying primitive (`HasMatchingSpan`/`SpanQuery`)
+captures spans in-process via a `SimpleSpanProcessor` on the local
+TracerProvider, which is incompatible with our cross-process trace
+flow (agent → otel-collector → ClickHouse). The adapter would buy
+us nothing the probes don't already do. New probe-class additions
+(LLM-as-judge, etc.) ride the existing `ProbeKind` Literal +
+`probes/<kind>.py` extension point.
 
 The four invariants this layer protects:
 
@@ -68,14 +76,13 @@ ProbeKind = Literal[
     "llm_call_used_model",
 ]
 
-# Framework adapters live under `adapters/<value>_adapter.py`. The
-# active adapter is recorded on every run so cross-run comparisons
-# can detect adapter changes that might have shifted what passes.
-FrameworkAdapter = Literal[
-    "pydantic_evals",
-    "framework_free",
-    "inspect_ai",
-]
+# Recorded on every run so cross-run comparisons can detect a swap
+# that might have shifted what passes. Only `framework_free` is
+# wired today (per ADR 14 2026-05-05 addendum). The Literal stays a
+# closed enum; if a future framework earns its keep against our
+# probe set, add a value here and a sibling adapter file. YAGNI says
+# don't keep dead optionality, so we only carry values that ship.
+FrameworkAdapter = Literal["framework_free"]
 
 
 # ---------------------------------------------------------------------------
@@ -340,9 +347,9 @@ class RunMetadata(BaseModel):
     `evals/runs/<run_id>/run.json`.
 
     `framework_adapter` is recorded so a regression diff that spans
-    an adapter swap (e.g. pydantic_evals → framework_free) can flag
-    pass/fail changes that might be adapter-induced rather than
-    real agent regressions.
+    an adapter swap (only `framework_free` exists today; see ADR 14
+    addendum) can flag pass/fail changes that might be
+    adapter-induced rather than real agent regressions.
     """
 
     model_config = ConfigDict(extra="forbid")

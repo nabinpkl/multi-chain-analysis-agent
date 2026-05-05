@@ -9,7 +9,105 @@ ambiguous and decide later.
 
 ## Status
 
-Accepted, 2026-05-04.
+Accepted, 2026-05-04. **Amended 2026-05-05**: the planned Layer 4
+pydantic_evals adapter was dropped after deeper investigation. See
+"2026-05-05 addendum" below. Layers 1-3 stand unchanged.
+
+## 2026-05-05 addendum: dropping the Layer 4 framework adapter
+
+After Layers 1-3 landed and the smoke suite passed 6/6 against the
+live stack, we revisited Layer 4 (pydantic_evals adapter) before
+implementing it. Two findings reversed the decision:
+
+1. **`HasMatchingSpan` / `SpanQuery` is in-process-only.** The
+   feature that justified the framework on top, span-tree querying
+   beyond what hand-written CH SQL gives us, captures spans by
+   registering a `SimpleSpanProcessor`+`_ContextInMemorySpanExporter`
+   on the local `TracerProvider` and scoping them via `contextvars`
+   to the `task()` callable. Source:
+   `pydantic_evals/otel/_context_in_memory_span_exporter.py` on
+   `pydantic-ai@main`. Our spans flow agent process →
+   otel-collector → ClickHouse, across processes. The eval runner
+   cannot register a span processor on the agent's TracerProvider.
+   The open feature request to "create SpanTree from historical
+   data" (`pydantic-ai#3946`, open as of 2026-05-05) confirms this
+   is a known gap, and even when it lands it targets logfire's API,
+   not arbitrary OTel backends. So the SpanQuery primitive is
+   structurally unreachable for our architecture.
+
+2. **The remaining adapter benefits don't justify a runtime
+   dependency.** Without SpanQuery, what pydantic_evals would still
+   give us reduces to: `LLMJudge` evaluator, `generate_dataset`
+   case authoring, `ConfusionMatrix`/`PrecisionRecall` aggregate
+   metrics, and a parallelism model tied to in-process tasks. Each
+   is additive and reachable as a native probe kind or a small CLI:
+   - `LLMJudge` → new `llm_judge` `ProbeKind`, ~150 LOC, reuses our
+     dispatch + persistence.
+   - `generate_dataset` → standalone `just eval-gen` CLI; a custom
+     ~50 LOC implementation or wrapping pydantic_evals's function
+     standalone (no runtime coupling either way).
+   - Aggregate metrics → can be added to `summarize_run` if a real
+     case load makes them load-bearing.
+   - Parallelism → still deferred behind the
+     rate-limit-per-provider question regardless of framework.
+
+   Each path is independent and small. Bundling them under a
+   framework adapter trades that independence for an upgrade-path
+   coupling we don't need.
+
+3. **Industry pattern, recheck (2026-05-05).** Anthropic's
+   2026-01-09 post says "pick a framework that fits your workflow,
+   then invest in the cases" -- not "always adopt one". LangChain
+   2026-02-12 markets LangSmith as framework-neutral observability;
+   "many customers don't use our open source frameworks but rely on
+   LangSmith for observability and evals". Vercel's recent
+   AGENTS.md-vs-skills evals post and Arize's MCP-vs-CLI evals post
+   both describe in-house probe writing on top of platform-managed
+   trace storage. The pattern is layered: platform for storage and
+   UI (we have CH + Langfuse, the ClickStack-shaped equivalent),
+   custom probes for semantics. We are already on the typical 2026
+   pattern; the framework adapter would have been redundant.
+
+The earlier ADR rationale (above) treated the OTel-events-driven
+2026-04-21 pydantic_evals shipment as evidence that the framework
+already met us where we were. It turns out that shipment is
+consumer-side OTel ingestion via logfire's tracer integration, not
+"pull from arbitrary OTel backend like CH". That was the missed
+detail.
+
+**Effect on Layers 1-3:** none. The probe dispatch, schema, and
+runner were all designed framework-agnostic on purpose. Dropping
+Layer 4 simply means the seam exists and stays empty.
+
+**Effect on Layer 1's `FrameworkAdapter` Literal:** narrowed from
+`Literal["pydantic_evals", "framework_free", "inspect_ai"]` to
+`Literal["framework_free"]`. AGENTS.md "no dead optionality" applies
+to Literals too: a value with no implementation doesn't earn its
+keep. The single-arm dispatch in `_select_adapter` stays as a
+function so a future adapter that *does* fit our architecture can
+slot in at one site, but until that day arrives the type checker
+sees one option.
+
+**Effect on the four invariants:** unchanged. They were always the
+substance; the framework layer was scaffolding.
+
+**Replacement work:** two narrow tickets supersede the dropped
+Layer 4 ticket (#24, closed):
+
+- `llm_judge` probe kind (subjective grading by an LLM with a
+  rubric). Net new probe class; reuses existing dispatch and
+  persistence.
+- `generate_cases` CLI (LLM-authored YAML expansion from a
+  description). Standalone tool; not wired into the runner.
+
+**Trigger to re-add a framework adapter:** if (a) `pydantic-ai#3946`
+ships AND that feature reads from arbitrary OTel backends (not
+logfire-only), OR (b) a different framework appears that natively
+ingests OTel from CH/Tempo/etc. with a query DSL more expressive
+than our hand-written probes, then revisit per the same dating
+rule (`<=6mo` evidence) that drove this addendum.
+
+
 
 ## Problem
 
