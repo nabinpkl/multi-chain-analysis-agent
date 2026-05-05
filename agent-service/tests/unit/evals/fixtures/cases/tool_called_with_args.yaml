@@ -1,0 +1,15 @@
+- case_id: tool_called_with_args.wallet_profile.001
+  suite: schema_fixtures.tool_called_with_args
+  inputs:
+    userQuestion: "Profile this wallet"
+    context:
+      focus:
+        wallet:
+          addr: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+  probes:
+    - probe_id: wallet-profile-called-with-focus-addr
+      kind: tool_called_with_args
+      args:
+        tool_name: wallet_profile
+        arg_predicates:
+          addr: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"

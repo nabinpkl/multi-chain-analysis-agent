@@ -9,3 +9,7 @@ tmp/
 
 # Claude Code per-session scheduled-task lock (transient).
 .claude/
+
+# Eval run output. Per-run JSON results live under evals/runs/<run_id>/
+# and are gitignored; baselines under evals/baselines/ ARE committed.
+evals/runs/

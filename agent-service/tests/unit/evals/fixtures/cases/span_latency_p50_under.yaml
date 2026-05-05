@@ -1,0 +1,18 @@
+- case_id: span_latency_p50_under.constitution.001
+  suite: schema_fixtures.span_latency_p50_under
+  inputs:
+    userQuestion: "who are you"
+    context:
+      focus:
+        wallet:
+          addr: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+    switches:
+      stayInRole: true
+  metadata:
+    note: "Issue #16 SLO: constitution gate p50 should drop under 5s when we move off gpt-oss-20b free tier."
+  probes:
+    - probe_id: narrative-constitution-p50-under-15s
+      kind: span_latency_p50_under
+      args:
+        span_name: mcae.gate.narrative_constitution
+        ms: 15000

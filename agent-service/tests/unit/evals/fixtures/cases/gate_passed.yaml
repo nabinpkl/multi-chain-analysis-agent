@@ -1,0 +1,16 @@
+- case_id: gate_passed.constitution_v4.001
+  suite: schema_fixtures.gate_passed
+  inputs:
+    userQuestion: "who are you"
+    context:
+      focus:
+        wallet:
+          addr: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+    switches:
+      stayInRole: true
+  probes:
+    - probe_id: narrative-constitution-v4-approves
+      kind: gate_passed
+      args:
+        kind: narrative_constitution
+        version: "v4"

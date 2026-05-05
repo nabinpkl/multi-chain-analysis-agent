@@ -22,6 +22,14 @@ dependencies = [
     "opentelemetry-sdk>=1.29",
     "opentelemetry-exporter-otlp-proto-http>=1.29",
     "opentelemetry-instrumentation-fastapi>=0.50b0",
+    # Ship 2 of agent-observability (ADR 14). YAML loader for eval
+    # case suites (`evals/cases/*.yaml`) and test fixtures. ruamel.yaml
+    # passes the AGENTS.md library bar at v0.19.1 (released 2026-01-02,
+    # actively maintained by Anthon van der Neut for 10+ years, full
+    # YAML 1.2 spec). PyYAML's 6.0.3 release (2025-09-25, ~7.5 months
+    # old) borderline-fails the freshness check; ruamel.yaml is the
+    # idiomatic-current replacement.
+    "ruamel.yaml>=0.18,<0.20",
 ]
 
 [dependency-groups]

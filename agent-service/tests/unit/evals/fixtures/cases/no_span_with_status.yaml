@@ -1,0 +1,16 @@
+- case_id: no_span_with_status.no_primitive_errors.001
+  suite: schema_fixtures.no_span_with_status
+  inputs:
+    userQuestion: "Profile this wallet"
+    context:
+      focus:
+        wallet:
+          addr: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+  metadata:
+    note: "Catches the error=true attribute primitive_client sets on 4xx/5xx responses."
+  probes:
+    - probe_id: no-primitive-call-errored
+      kind: no_span_with_status
+      args:
+        span_name: mcae.primitive.wallet_profile
+        status: error

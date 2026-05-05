@@ -1,0 +1,13 @@
+- case_id: claim_grounded_in.primitive.001
+  suite: schema_fixtures.claim_grounded_in
+  inputs:
+    userQuestion: "Profile this wallet"
+    context:
+      focus:
+        wallet:
+          addr: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+  probes:
+    - probe_id: every-claim-is-primitive-grounded
+      kind: claim_grounded_in
+      args:
+        source_kind: primitive

@@ -1,0 +1,15 @@
+- case_id: has_matching_span.snapshot_lease.001
+  suite: schema_fixtures.has_matching_span
+  inputs:
+    userQuestion: "who are you"
+    context:
+      focus:
+        wallet:
+          addr: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+  metadata:
+    note: "Snapshot lease span fires on every turn regardless of tools."
+  probes:
+    - probe_id: snapshot-lease-span-present
+      kind: has_matching_span
+      args:
+        span_name: mcae.snapshot.lease
