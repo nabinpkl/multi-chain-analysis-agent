@@ -30,6 +30,15 @@ dependencies = [
     # old) borderline-fails the freshness check; ruamel.yaml is the
     # idiomatic-current replacement.
     "ruamel.yaml>=0.18,<0.20",
+    # Async ClickHouse driver for the eval-probe Layer 2. Used to query
+    # otel.otel_traces by trace_id from probe modules. Official
+    # ClickHouse company driver. Server-side parameterized queries via
+    # `{name:Type}` placeholders bound through `parameters=` keyword;
+    # values reach the server as `param_<name>` URL args, never
+    # interpolated client-side. See agent_service/evals/ch.py for the
+    # wrapper that enforces this contract. Pinned <1 because 1.0 is in
+    # release-candidate stage as of 2026-04-22; bump after stable.
+    "clickhouse-connect>=0.15,<1",
 ]
 
 [dependency-groups]
