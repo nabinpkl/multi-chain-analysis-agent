@@ -35,6 +35,11 @@ log = structlog.get_logger(__name__)
 
 _PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "policy_v4.txt"
 
+# Version pin for the gate.constitution span attribute. Derived from
+# the prompt filename so a prompt swap (policy_v4.txt → policy_v5.txt)
+# bumps this automatically; eval probes can pin to specific versions.
+VERSION: str = _PROMPT_PATH.stem.removeprefix("policy_")
+
 
 class _ExtractedNumberLLM(BaseModel):
     """Pydantic shape for one extracted number. Lenient on extra fields."""

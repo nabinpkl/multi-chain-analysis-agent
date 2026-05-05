@@ -90,6 +90,8 @@ from .agent import AgentDeps, EmitClaimInput, ToolCallRecord
 from .boundary import build_context_block
 from .diff import diff_outputs, spec_for
 from .policy.binding_store import PrimitiveBindingStore
+from .policy import constitution as constitution_module
+from .policy import structural as structural_module
 from .policy.constitution import (
     ConstitutionVerdict,
     judge_claim,
@@ -97,6 +99,14 @@ from .policy.constitution import (
 )
 from .policy.placeholder import validate_refs
 from .policy.structural import verify_chip_values
+
+# Gate version pinned at module load. The placeholder gate is purely
+# deterministic ref-validation with no version notion of its own;
+# v1 is a stable signal for eval probes that something other than
+# "the gate didn't run" happened. Constitution and structural read
+# their own VERSION constants so a prompt swap or algorithm bump
+# propagates without touching the loop driver.
+_PLACEHOLDER_VERSION = "v1"
 from .primitive_client import PrimitiveClient, PrimitiveError
 from .repeat_detector import RepeatDetectorOutcome, detect_repeat
 from .thread_state import (
@@ -590,6 +600,17 @@ async def run_turn(
                     claim_span.set_attribute(
                         spans.Attrs.CLAIM_BODY_CHARS, len(claim.body_markdown)
                     )
+                    # Today the only evidence-gathering tools are typed
+                    # primitives, so every claim is "primitive". When
+                    # sql_explore ships, the loop will inspect which
+                    # tools contributed evidence to this claim and pick
+                    # SOURCE_KIND_EXPLORATORY when any sql_explore row
+                    # was used. Defining the attr now means the eval
+                    # probe `claim_grounded_in(source_kind=...)` can be
+                    # written against today's traces.
+                    claim_span.set_attribute(
+                        spans.Attrs.CLAIM_SOURCE_KIND, spans.SOURCE_KIND_PRIMITIVE
+                    )
 
                     # Rule 1: empty provenance always retracts. No gate
                     # span emitted for this case; the claim-level verdict
@@ -602,6 +623,7 @@ async def run_turn(
 
                     # Deterministic placeholder validation.
                     with _tracer.start_as_current_span(spans.GATE_PLACEHOLDER) as g:
+                        g.set_attribute(spans.Attrs.GATE_VERSION, _PLACEHOLDER_VERSION)
                         ref_err = validate_refs(claim.body_markdown, len(claim.provenance))
                         if ref_err is not None:
                             g.set_attribute(spans.Attrs.GATE_VERDICT, spans.VERDICT_RETRACTED)
@@ -615,6 +637,7 @@ async def run_turn(
                     # Structural value compare (ship 5a). Always runs;
                     # only retracts when dont_fabricate is on.
                     with _tracer.start_as_current_span(spans.GATE_STRUCTURAL) as g:
+                        g.set_attribute(spans.Attrs.GATE_VERSION, structural_module.VERSION)
                         g.set_attribute(spans.Attrs.GATE_BINDING_SIZE, len(thread.bindings.all_numbers()))
                         struct_err = verify_chip_values(list(claim.provenance), thread.bindings)
                         if struct_err is not None and request.switches.dont_fabricate:
@@ -633,6 +656,7 @@ async def run_turn(
                     # under this gate.constitution span via OTel context.
                     if request.switches.stay_in_role:
                         with _tracer.start_as_current_span(spans.GATE_CONSTITUTION) as g:
+                            g.set_attribute(spans.Attrs.GATE_VERSION, constitution_module.VERSION)
                             verdict = await judge_claim(
                                 handles.constitution_agent,
                                 headline=claim.headline,
@@ -696,6 +720,7 @@ async def run_turn(
                 # SpanName='gate.placeholder' AND parent_span name
                 # discriminates which case it covered.
                 with _tracer.start_as_current_span(spans.GATE_PLACEHOLDER) as pg:
+                    pg.set_attribute(spans.Attrs.GATE_VERSION, _PLACEHOLDER_VERSION)
                     ref_err = validate_refs(narrative_text, len(assembled_provenance))
                     if ref_err is not None:
                         pg.set_attribute(spans.Attrs.GATE_VERDICT, spans.VERDICT_RETRACTED)
@@ -718,6 +743,7 @@ async def run_turn(
                     # Constitution gate on narrative. The constitution
                     # agent's gen_ai.chat span auto-nests under this.
                     with _tracer.start_as_current_span(spans.GATE_NARRATIVE_CONSTITUTION) as g:
+                        g.set_attribute(spans.Attrs.GATE_VERSION, constitution_module.VERSION)
                         verdict = await judge_narrative(
                             handles.constitution_agent,
                             text=narrative_text,

@@ -260,6 +260,10 @@ class PrimitiveClient:
         with _tracer.start_as_current_span(spans.PRIMITIVE_WALLET_PROFILE) as span:
             span.set_attribute(spans.Attrs.SNAPSHOT_ID, snapshot_id)
             span.set_attribute(spans.Attrs.PRIMITIVE_INPUT_ADDR, addr)
+            span.set_attribute(
+                spans.Attrs.PRIMITIVE_INPUT,
+                _proto_to_capped_json(req, cap=spans.PRIMITIVE_PAYLOAD_MAX_BYTES),
+            )
             t0 = time.monotonic()
             resp = await self._client.post(
                 "/primitive/wallet_profile",
@@ -272,6 +276,12 @@ class PrimitiveClient:
                 span.set_attribute("error", True)
                 _raise_from_error(resp)
             span.set_attribute(spans.Attrs.PRIMITIVE_OUTPUT_DIGEST, _digest12(resp.content))
+            out_env = env_pb.PrimitiveResponseEnvelope()
+            out_env.ParseFromString(resp.content)
+            span.set_attribute(
+                spans.Attrs.PRIMITIVE_OUTPUT,
+                _proto_to_capped_json(out_env, cap=spans.PRIMITIVE_PAYLOAD_MAX_BYTES),
+            )
             return _decode_envelope(resp.content)
 
     async def community_summary(
@@ -292,6 +302,10 @@ class PrimitiveClient:
         with _tracer.start_as_current_span(spans.PRIMITIVE_COMMUNITY_SUMMARY) as span:
             span.set_attribute(spans.Attrs.SNAPSHOT_ID, snapshot_id)
             span.set_attribute(spans.Attrs.PRIMITIVE_INPUT_COMMUNITY_ID, community_id)
+            span.set_attribute(
+                spans.Attrs.PRIMITIVE_INPUT,
+                _proto_to_capped_json(req, cap=spans.PRIMITIVE_PAYLOAD_MAX_BYTES),
+            )
             t0 = time.monotonic()
             resp = await self._client.post(
                 "/primitive/community_summary",
@@ -304,8 +318,29 @@ class PrimitiveClient:
                 span.set_attribute("error", True)
                 _raise_from_error(resp)
             span.set_attribute(spans.Attrs.PRIMITIVE_OUTPUT_DIGEST, _digest12(resp.content))
+            out_env = env_pb.PrimitiveResponseEnvelope()
+            out_env.ParseFromString(resp.content)
+            span.set_attribute(
+                spans.Attrs.PRIMITIVE_OUTPUT,
+                _proto_to_capped_json(out_env, cap=spans.PRIMITIVE_PAYLOAD_MAX_BYTES),
+            )
             return _decode_envelope(resp.content)
 
 
 def _encode(msg: Message) -> bytes:
     return msg.SerializeToString()
+
+
+def _proto_to_capped_json(msg: Message, *, cap: int) -> str:
+    """Canonical-JSON-encode a proto message and cap to `cap` bytes.
+    On overflow, append a literal truncation marker so probes can
+    detect partial payloads without re-parsing JSON."""
+    s = json_format.MessageToJson(
+        msg,
+        preserving_proto_field_name=False,  # canonical camelCase on the wire
+        indent=None,
+        sort_keys=True,
+    )
+    if len(s) <= cap:
+        return s
+    return s[:cap] + f" ...[truncated, total={len(s)}]"

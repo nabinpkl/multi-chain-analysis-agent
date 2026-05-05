@@ -85,9 +85,12 @@ class Attrs:
     TURN_NARRATIVE_CHARS: Final = "mcae.turn.narrative_chars"
     RUN_TYPE: Final = "mcae.run.type"  # "production" | "eval" | "dev"
 
-    # Gates (every mcae.gate.* span carries verdict + optional reason).
+    # Gates (every mcae.gate.* span carries verdict + optional reason
+    # and a version pin so eval probes can assert "constitution v4
+    # passed", not just "the constitution gate passed today").
     GATE_VERDICT: Final = "mcae.gate.verdict"  # "approved" | "retracted" | "reject"
     GATE_REASON: Final = "mcae.gate.reason"
+    GATE_VERSION: Final = "mcae.gate.version"
     GATE_BINDING_SIZE: Final = "mcae.gate.binding_size"  # structural only
     GATE_FAILED_CHIP: Final = "mcae.gate.failed_chip"  # structural only, if retract
 
@@ -98,6 +101,7 @@ class Attrs:
     CLAIM_PROVENANCE_COUNT: Final = "mcae.claim.provenance_count"
     CLAIM_BODY_CHARS: Final = "mcae.claim.body_chars"
     CLAIM_VERDICT: Final = "mcae.claim.verdict"  # final verdict after all gates
+    CLAIM_SOURCE_KIND: Final = "mcae.claim.source_kind"  # "primitive" | "exploratory"
 
     # Narrative emission.
     NARRATIVE_LENGTH_CHARS: Final = "mcae.narrative.length_chars"
@@ -111,6 +115,14 @@ class Attrs:
     PRIMITIVE_OUTPUT_DIGEST: Final = "mcae.primitive.output_digest"  # sha256-12 of body
     PRIMITIVE_INPUT_ADDR: Final = "mcae.primitive.input.addr"
     PRIMITIVE_INPUT_COMMUNITY_ID: Final = "mcae.primitive.input.community_id"
+    # Full JSON payloads on primitive spans. Typed input attrs above
+    # stay because they are cheap to query in SQL; these are the rich
+    # debug surface (Langfuse renders them inline) and the future eval
+    # probe target for `tool_returned_field(metric, value)`. Both are
+    # capped to PRIMITIVE_PAYLOAD_MAX_BYTES; on overflow the value
+    # ends with the literal " ...[truncated, total=N]".
+    PRIMITIVE_INPUT: Final = "mcae.primitive.input"
+    PRIMITIVE_OUTPUT: Final = "mcae.primitive.output"
 
     # Repeat detector + diff.
     REPEAT_IS_REPEAT: Final = "mcae.repeat.is_repeat"
@@ -120,6 +132,13 @@ class Attrs:
     DIFF_CHANGED_COUNT: Final = "mcae.diff.changed_count"
     DIFF_UNCHANGED_COUNT: Final = "mcae.diff.unchanged_count"
     DIFF_PRIMITIVES_REPLAYED: Final = "mcae.diff.primitives_replayed"
+
+
+# Per-attribute byte cap on the JSON payloads attached to primitive
+# spans. 8 KiB is large enough for the wallet_profile envelope (one
+# wallet, top counterparties) without bloating trace storage. Probes
+# that need full payloads can re-fetch via the snapshot id.
+PRIMITIVE_PAYLOAD_MAX_BYTES: Final = 8192
 
 
 # ---------------------------------------------------------------------------
@@ -134,3 +153,17 @@ VERDICT_REJECT: Final = "reject"
 RUN_TYPE_PRODUCTION: Final = "production"
 RUN_TYPE_EVAL: Final = "eval"
 RUN_TYPE_DEV: Final = "dev"
+
+# mcae.claim.source_kind values.
+#
+# Trust-model anchor for the structural value gate. Today every claim
+# is "primitive" because the only evidence-gathering tools are typed
+# primitives (wallet_profile, community_summary) whose envelopes feed
+# the PrimitiveBindingStore. When the planned sql_explore tool ships,
+# claims grounded in raw SQL rows will be marked "exploratory" and
+# the constitution gate hedges their prose; the structural gate will
+# refuse to anchor numbers from exploratory sources. Defining the
+# enum now lets the eval probe `claim_grounded_in(source_kind=...)`
+# exist before sql_explore does, avoiding a migration.
+SOURCE_KIND_PRIMITIVE: Final = "primitive"
+SOURCE_KIND_EXPLORATORY: Final = "exploratory"

@@ -14,6 +14,12 @@ from typing import Any
 from .binding_store import PrimitiveBindingStore
 from .crosscheck import CrosscheckConfig, UnitClass, classify_metric, within_tolerance
 
+# Version pin for the gate.structural span attribute. Bumps when the
+# verification algorithm itself changes (not when bindings change).
+# Eval probes use this to assert "structural-5a passed", not just
+# "the structural gate passed today".
+VERSION: str = "5a"
+
 
 @dataclass(frozen=True, slots=True)
 class MismatchError:
