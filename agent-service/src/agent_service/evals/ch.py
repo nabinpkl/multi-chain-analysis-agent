@@ -24,6 +24,7 @@ collector. We never write from this module.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from clickhouse_connect import get_async_client
@@ -42,21 +43,29 @@ class ClickHouseClient:
     async def connect(
         cls,
         *,
-        host: str = "localhost",
-        port: int = 8123,
-        username: str = "default",
-        password: str = "",
-        database: str = "otel",
+        host: str | None = None,
+        port: int | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        database: str | None = None,
     ) -> "ClickHouseClient":
-        """Open a connection. Defaults match the local compose stack
-        (multichain-clickhouse on port 8123, the `otel` database
-        where the collector lands traces)."""
+        """Open a connection. Each argument falls back to the
+        corresponding env var, then to a default that matches the
+        local compose stack (multichain-clickhouse on port 8123, the
+        `otel` database where the collector lands traces).
+
+        Env vars: CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER,
+        CLICKHOUSE_PASSWORD, CLICKHOUSE_DB. Same names compose uses
+        for the agent-service / api containers, so a `set -a; source
+        .env` before `just eval` from the host shell is enough.
+        """
         client = await get_async_client(
-            host=host,
-            port=port,
-            username=username,
-            password=password,
-            database=database,
+            host=host or os.environ.get("CLICKHOUSE_HOST", "localhost"),
+            port=port or int(os.environ.get("CLICKHOUSE_PORT", "8123")),
+            username=username or os.environ.get("CLICKHOUSE_USER", "default"),
+            password=password if password is not None
+                else os.environ.get("CLICKHOUSE_PASSWORD", ""),
+            database=database or os.environ.get("CLICKHOUSE_DB_OTEL", "otel"),
         )
         return cls(client)
 

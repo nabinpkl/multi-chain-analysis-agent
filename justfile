@@ -3,6 +3,11 @@
 # crosses a service boundary.
 #
 
+# Auto-load `.env` so recipes that need credentials (e.g. `just eval`
+# reading CLICKHOUSE_PASSWORD) work without a `set -a; source .env`
+# dance. .env is gitignored; .env.example is committed.
+set dotenv-load := true
+
 default:
     @just --list
 
@@ -41,4 +46,16 @@ regen-wire-types:
     mkdir -p backend/src/wire/generated agent-service/src/multichain frontend/src/lib/wire
     buf generate
     @echo ">> wire types regenerated"
+
+# Run an eval suite against the running agent service. Each case
+# POSTs to /agent/ask with runType=eval (so the resulting traces
+# carry mcae.run.type=eval and stay filterable in CH/Langfuse),
+# captures the trace id from the AgentDone SSE frame, then runs
+# every probe in the case against otel.otel_traces by trace id.
+# Per-probe ProbeResult JSON + a RunMetadata summary land under
+# evals/runs/<run_id>/. Exits non-zero if any probe failed.
+eval suite="evals/cases/wallet_profile_smoke.yaml":
+    uv --directory agent-service run python -m agent_service.evals \
+        "{{ absolute_path(suite) }}" \
+        --runs-root "{{ justfile_directory() }}/evals/runs"
 

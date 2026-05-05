@@ -1,0 +1,48 @@
+# Smoke suite for the eval substrate. Asserts only against turn-
+# scope spans that fire on every agent turn regardless of tool
+# usage, so this suite passes whenever the agent service is alive
+# and trace emission is healthy. Useful for verifying the eval
+# pipeline end-to-end (CLI -> runner -> agent invoker -> probes ->
+# persistence -> summary) without depending on live ingestion or
+# tool execution.
+
+- case_id: who_are_you_smoke.001
+  suite: who_are_you_smoke
+  inputs:
+    userQuestion: "who are you"
+    context:
+      focus:
+        wallet:
+          addr: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+    switches:
+      stayInRole: true
+  probes:
+    - probe_id: turn-root-span-present
+      kind: has_matching_span
+      span_name: mcae.turn
+
+    - probe_id: turn-tagged-as-eval
+      kind: has_matching_span
+      span_name: mcae.turn
+      attrs:
+        mcae.run.type: eval
+
+    - probe_id: snapshot-lease-span-present
+      kind: has_matching_span
+      span_name: mcae.snapshot.lease
+
+    - probe_id: narrative-emitted-approved
+      kind: has_matching_span
+      span_name: mcae.narrative.emitted
+      attrs:
+        mcae.narrative.verdict: approved
+
+    - probe_id: placeholder-gate-passes-v1
+      kind: gate_passed
+      gate_kind: placeholder
+      version: "v1"
+
+    - probe_id: narrative-constitution-gate-passes-v4
+      kind: gate_passed
+      gate_kind: narrative_constitution
+      version: "v4"
