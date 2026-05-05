@@ -47,20 +47,59 @@ class AgentRun:
     finished_at: datetime
 
 
+async def _consume_until_done(
+    stream_resp: httpx.Response, session_id: str
+) -> dict:
+    """Iterate the SSE stream until the AgentDone frame arrives.
+    Returns the frame dict. Caller is responsible for the timeout
+    bound around this coroutine."""
+    async for line in stream_resp.aiter_lines():
+        if not line.startswith("data:"):
+            continue
+        payload = line.removeprefix("data:").strip()
+        if not payload:
+            continue
+        try:
+            frame = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if "traceId" in frame and "elapsedMs" in frame:
+            return frame
+
+    raise RuntimeError(
+        f"agent stream for session {session_id} closed without "
+        "an AgentDone frame; no trace id captured"
+    )
+
+
 async def invoke_agent_get_trace_id(
     inputs: dict,
     *,
     base_url: str,
     http: httpx.AsyncClient,
+    stream_timeout_s: float = 180.0,
 ) -> AgentRun:
     """POST `inputs` to /agent/ask, follow the SSE stream until the
     AgentDone frame arrives, return the trace id.
 
-    `inputs` is mutated to set `runType=eval` if not already
-    present. Production traffic doesn't set runType; eval-driven
-    traffic does. The mutation is intentional; if a YAML case
-    happens to set its own runType (e.g. "dev" for a debugging
-    suite), the case wins.
+    `inputs` is shallow-copied with `runType=eval` set if not
+    already present. Production traffic doesn't set runType;
+    eval-driven traffic does. If a YAML case happens to set its own
+    runType (e.g. "dev" for a debugging suite), the case wins.
+
+    `stream_timeout_s` caps the wall-clock duration of a single
+    turn's SSE stream. httpx's `timeout` setting governs initial
+    connect/read; once bytes are flowing it does not enforce a
+    total stream duration. Without this cap a hung agent (e.g.
+    constitution gate stalled on a throttled provider, see
+    issue #16) would hang the eval CLI indefinitely. The default
+    180s is generous for a normal turn (~25s today) and tight
+    enough that a stuck turn fails loudly within minutes.
+
+    Raises RuntimeError on empty traceId (the agent ran without
+    OTel emission, e.g. `OTEL_SDK_DISABLED=true`); polling for a
+    nonexistent trace would waste 30s on the wait_for_trace_indexed
+    timeout and report the wrong root cause.
     """
     inputs = {**inputs}
     inputs.setdefault("runType", "eval")
@@ -73,29 +112,33 @@ async def invoke_agent_get_trace_id(
     stream_url = f"{base_url}/agent/stream/{session_id}"
     async with http.stream("GET", stream_url) as stream_resp:
         stream_resp.raise_for_status()
-        async for line in stream_resp.aiter_lines():
-            if not line.startswith("data:"):
-                continue
-            payload = line.removeprefix("data:").strip()
-            if not payload:
-                continue
-            try:
-                frame = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
-            # AgentDone is the only frame that carries traceId.
-            if "traceId" in frame and "elapsedMs" in frame:
-                return AgentRun(
-                    trace_id=frame["traceId"],
-                    session_id=session_id,
-                    elapsed_ms=int(frame["elapsedMs"]),
-                    started_at=started,
-                    finished_at=datetime.now(timezone.utc),
-                )
+        try:
+            frame = await asyncio.wait_for(
+                _consume_until_done(stream_resp, session_id),
+                timeout=stream_timeout_s,
+            )
+        except asyncio.TimeoutError as e:
+            raise TimeoutError(
+                f"agent stream for session {session_id} did not emit "
+                f"AgentDone within {stream_timeout_s:.0f}s; the agent "
+                "is likely stuck (provider throttling? gate hang?). "
+                "Increase stream_timeout_s if this is a known long turn."
+            ) from e
 
-    raise RuntimeError(
-        f"agent stream for session {session_id} closed without "
-        "an AgentDone frame; no trace id captured"
+    trace_id = frame["traceId"]
+    if not trace_id:
+        raise RuntimeError(
+            f"agent for session {session_id} returned an empty traceId; "
+            "OTel emission is disabled or broken. Eval cannot probe a "
+            "trace that does not exist; check OTEL_SDK_DISABLED and "
+            "the otel-collector connection."
+        )
+    return AgentRun(
+        trace_id=trace_id,
+        session_id=session_id,
+        elapsed_ms=int(frame["elapsedMs"]),
+        started_at=started,
+        finished_at=datetime.now(timezone.utc),
     )
 
 

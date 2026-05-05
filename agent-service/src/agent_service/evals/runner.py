@@ -75,8 +75,16 @@ def _select_adapter(name: FrameworkAdapter) -> AdapterRunCase:
 
 
 def _make_run_id() -> str:
-    """Sortable, URL-safe, collision-resistant. UUID4 hex truncated
-    to 16 chars is good enough for run dirs."""
+    """Random hex, URL-safe. UUID4 truncated to 16 chars (64 bits of
+    entropy) is enough to make collisions vanishingly unlikely
+    across the lifetime of a personal-scale eval workflow.
+
+    NOT sortable. Listing `evals/runs/` in name order does NOT
+    yield chronological order. Use file mtime (Path.stat().st_mtime)
+    or RunMetadata.started_at when ordering matters. Switching to
+    a sortable id (ULID) is fine if it ever does, but the library
+    must pass the AGENTS.md maintenance bar at the time of adoption.
+    """
     return uuid.uuid4().hex[:16]
 
 
@@ -105,7 +113,16 @@ async def run_suite(
 ) -> RunMetadata:
     """Run every case in the suite, persist results, return a
     RunMetadata summary. The summary is also persisted as
-    `<runs_root>/<run_id>/run.json`."""
+    `<runs_root>/<run_id>/run.json`.
+
+    The summary + run.json ALWAYS land, even if the case loop
+    raises mid-suite (agent service down, trace timeout, malformed
+    case, etc.). Partial runs report the cases that completed; the
+    error is re-raised after persistence so the caller still sees
+    it. This way `evals/runs/<run_id>/` is never silently
+    incomplete; a regression diff against a partial run shows
+    "got through 3 of 5" rather than "no run.json, mystery."
+    """
     cases = load_suite(suite_path)
     run_id = _make_run_id()
     run_root = runs_root / run_id
@@ -114,6 +131,7 @@ async def run_suite(
     started = datetime.now(timezone.utc)
     adapter = _select_adapter(framework_adapter)
 
+    case_loop_error: BaseException | None = None
     ch = await ClickHouseClient.connect()
     try:
         async with httpx.AsyncClient(timeout=120) as http:
@@ -131,6 +149,10 @@ async def run_suite(
                 )
                 for r in results:
                     persist_result(r, run_root)
+    except BaseException as e:
+        # Capture and continue to summarization so the partial run
+        # state is on disk; re-raise after persistence below.
+        case_loop_error = e
     finally:
         await ch.aclose()
 
@@ -145,4 +167,6 @@ async def run_suite(
         framework_adapter=framework_adapter,
     )
     persist_run_metadata(meta, run_root)
+    if case_loop_error is not None:
+        raise case_loop_error
     return meta
