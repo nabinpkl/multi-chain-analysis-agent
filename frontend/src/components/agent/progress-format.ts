@@ -82,12 +82,12 @@ function formatBuilderPhase(phase: string, detail: string): string {
       return `calling ${detail}…`;
     case "drafting":
       // Primary LLM call (~5s p50 on free-tier OpenRouter). Span:
-      // agent.turn → agent run → chat <primary model>.
+      // mcae.turn → agent run → chat <primary model>.
       return `drafting response… (${detail})`;
     case "judging":
       // Constitution gate (gpt-oss-20b policy LLM, issue #16, ~11s
-      // p50). Span: gate.narrative_constitution → agent run → chat
-      // <policy model>.
+      // p50). Span: mcae.gate.narrative_constitution → agent run →
+      // chat <policy model>.
       return `judging response… (${detail})`;
     case "synthesizing":
       return `synthesizing (${detail})`;

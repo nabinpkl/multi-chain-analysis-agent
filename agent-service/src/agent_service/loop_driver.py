@@ -450,11 +450,11 @@ async def run_turn(
             turn_span.set_attribute(spans.Attrs.THREAD_ID, thread_id)
             turn_span.set_attribute(spans.Attrs.TURN_INDEX, turn)
             turn_span.set_attribute(spans.Attrs.RUN_TYPE, _RUN_TYPE)
-            # The user question lives on the agent.turn span so traces
+            # The user question lives on the mcae.turn span so traces
             # are searchable by what was asked. Previously this also
             # went into the SESSION_STARTED ledger row; ledger deletion
             # consolidated it into the span attribute set.
-            turn_span.set_attribute("agent.user_question", request.user_question)
+            turn_span.set_attribute(spans.Attrs.TURN_USER_QUESTION, request.user_question)
 
             # ------ Repeat path (ship 4) ------
             if (
@@ -773,14 +773,14 @@ async def run_turn(
                         ),
                     )
 
-            # Final per-turn aggregates stamped on the agent.turn span
+            # Final per-turn aggregates stamped on the mcae.turn span
             # so SQL queries can answer "how many claims got approved
             # this turn" without scanning per-claim spans. Replaces the
             # prior TURN_COMPLETED ledger row.
-            turn_span.set_attribute("agent.claims_emitted", len(deps.emitted_claims))
-            turn_span.set_attribute("agent.claims_approved", len(approved_claims))
-            turn_span.set_attribute("agent.tool_calls", len(deps.tool_call_records))
-            turn_span.set_attribute("agent.narrative_chars", len(narrative_text))
+            turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_EMITTED, len(deps.emitted_claims))
+            turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_APPROVED, len(approved_claims))
+            turn_span.set_attribute(spans.Attrs.TURN_TOOL_CALLS, len(deps.tool_call_records))
+            turn_span.set_attribute(spans.Attrs.TURN_NARRATIVE_CHARS, len(narrative_text))
 
             yield _terminal_done(session_id, session_started_at_ms)
 
