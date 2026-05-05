@@ -40,6 +40,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from pydantic_ai.messages import ModelMessage
+
+from multichain.wire.agent.v1 import claim_pb2
+
 from .policy.binding_store import PrimitiveBindingStore
 
 # FIFO cap on `claims`. Matches Rust's `MAX_THREAD_CLAIMS = 20`. Covers
@@ -78,14 +82,14 @@ class AgentThread:
     turn_count: int = 0
     # Pydantic AI message history. Passed to `agent.run(message_history=...)`
     # on each follow-up turn.
-    message_history: list[Any] = field(default_factory=list)
-    # Approved Claims from prior turns. List of proto `Claim` messages.
-    claims: list[Any] = field(default_factory=list)
+    message_history: list[ModelMessage] = field(default_factory=list)
+    # Approved Claims from prior turns.
+    claims: list[claim_pb2.Claim] = field(default_factory=list)
     bindings: PrimitiveBindingStore = field(default_factory=PrimitiveBindingStore)
     tool_calls_per_turn: dict[int, list[TurnToolCallRecord]] = field(default_factory=dict)
     user_questions_per_turn: dict[int, str] = field(default_factory=dict)
 
-    def record_claim(self, claim: Any) -> None:
+    def record_claim(self, claim: claim_pb2.Claim) -> None:
         """Append an approved claim, dropping the oldest when the cap
         is exceeded."""
         self.claims.append(claim)

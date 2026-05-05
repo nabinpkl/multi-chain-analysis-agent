@@ -18,6 +18,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from multichain.wire.shared.v1 import provenance_pb2
+
 from .crosscheck import ExtractedNumber, UnitClass
 
 # FIFO cap on per-thread bindings. 64 covers tens of turns of typical
@@ -44,7 +46,7 @@ class PrimitiveBinding:
     call_id: str
     primitive: str
     captured_at_ms: int
-    provenance: list[Any]  # list of proto ProvenanceRef messages
+    provenance: list[provenance_pb2.ProvenanceRef]
     numbers: list[ExtractedNumber]
     entities: BindingEntities
 
@@ -107,7 +109,7 @@ def build_binding(
     call_id: str,
     captured_at_ms: int,
     value_json: dict | list | float | int | str | None,
-    provenance: list[Any],
+    provenance: list[provenance_pb2.ProvenanceRef],
 ) -> PrimitiveBinding:
     """Build a `PrimitiveBinding` from a primitive's dispatch output.
     `value_json` is walked for numbers; `provenance` is walked for
@@ -196,7 +198,7 @@ def _classify_field_name(name: str) -> UnitClass:
     return UnitClass.RAW
 
 
-def _collect_entities(provenance: list[Any]) -> BindingEntities:
+def _collect_entities(provenance: list[provenance_pb2.ProvenanceRef]) -> BindingEntities:
     e = BindingEntities()
     for r in provenance:
         case = r.WhichOneof("ref")

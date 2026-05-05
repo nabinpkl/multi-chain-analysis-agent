@@ -9,7 +9,8 @@ shortcut. Operates over proto `ProvenanceRef` messages directly.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+
+from multichain.wire.shared.v1 import provenance_pb2
 
 from .binding_store import PrimitiveBindingStore
 from .crosscheck import CrosscheckConfig, UnitClass, classify_metric, within_tolerance
@@ -64,7 +65,7 @@ class MismatchError:
 
 
 def verify_chip_values(
-    provenance: list[Any],
+    provenance: list[provenance_pb2.ProvenanceRef],
     binding: PrimitiveBindingStore,
 ) -> MismatchError | None:
     """Walk the provenance array and verify every entry traces. Returns
