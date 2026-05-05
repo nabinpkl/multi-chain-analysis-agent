@@ -10,6 +10,7 @@
 - No dead code. Removed = delete entirely (files, imports, types, all refs).
 - No backward compat layers. Iteration-based dev. Change code direct.
 - No hand-typed wire types. Single source of truth (proto/`*.proto` files), generated to Rust + Python + TS via approved generators. Hand-typed allowed only for UI-internal models that never cross a service boundary.
+- No relative imports in Python application code. Use absolute imports throughout (`from agent_service.policy.binding_store import X`, not `from ..binding_store import X` or `from .binding_store import X`). Application code lives in a fixed package; relative imports' main strength (surviving package-level renames during install) does not apply, while their cost (re-counting dots on every file move, copy-paste between files at different depths breaking silently, mid-file `from ..something` giving no clue what `something` is) IS real. Generated proto packages (`multichain.wire.*`) and third-party libraries naturally use absolute and stay that way.
 
 # Existing code is not authoritative
 
