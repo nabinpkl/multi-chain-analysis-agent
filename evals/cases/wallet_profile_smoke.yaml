@@ -23,7 +23,7 @@
     context:
       focus:
         wallet:
-          addr: "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC"
+          id: "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC"
     switches:
       stayInRole: true
       dontFabricate: true
@@ -79,7 +79,7 @@
     context:
       focus:
         wallet:
-          addr: "4Mh7GmBzFY6RqdR5Q8oqkGW7vZxjwkKfEcN7JYY9p1xA"
+          id: "4Mh7GmBzFY6RqdR5Q8oqkGW7vZxjwkKfEcN7JYY9p1xA"
     switches:
       stayInRole: true
       dontFabricate: true
@@ -124,7 +124,7 @@
     context:
       focus:
         wallet:
-          addr: "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC"
+          id: "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC"
     switches:
       stayInRole: true
       dontFabricate: true

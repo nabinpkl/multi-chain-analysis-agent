@@ -19,7 +19,7 @@
     context:
       focus:
         wallet:
-          addr: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+          id: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
     switches:
       stayInRole: true
   probes:
@@ -69,7 +69,7 @@
     context:
       focus:
         wallet:
-          addr: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+          id: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
     switches:
       stayInRole: true
   probes:
@@ -109,7 +109,7 @@
     context:
       focus:
         wallet:
-          addr: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+          id: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
     switches:
       stayInRole: true
   probes:
