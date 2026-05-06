@@ -1,0 +1,100 @@
+# Community-summary cases. Exercises the second primitive
+# (`community_summary`) which the existing wallet_profile_smoke
+# suite does not touch.
+#
+# Communities are derived from the live 60-second snapshot's
+# analytics labels at lease time; they are NOT pre-storable in CH.
+# That means we can't pin a specific community_id and trust it'll
+# exist across runs. Two case shapes work around this:
+#
+# - `community_summary.basic`: focus a community with a small id
+#   (1) that's likely to exist on most live snapshots once Louvain
+#   has assigned labels. If the live window happens to lack
+#   community 1, the case effectively becomes a second
+#   unknown-community variant  still meaningful.
+#
+# - `community_summary.unknown_community`: focus a community with
+#   an arbitrary id (uint32 max) almost certainly not in the
+#   snapshot. Philosophy-2: agent must call the primitive (not
+#   fabricate from parametric memory), get the NotInWindow error,
+#   and decline gracefully without inventing community details.
+#
+# Earlier draft tried a wallet → community two-tool chain (focus
+# a wallet, ask about its community). It worked logically but
+# burned 2x the free-tier LLM budget per run and timed out on
+# back-to-back attempts. Dropped in favor of single-primitive
+# turns that exercise the same probe vocabulary at a third of
+# the wall-clock cost. The chain pattern is worth revisiting once
+# we stop free-tier-throttling, or via a paid-tier eval profile.
+
+- case_id: community_summary.basic
+  suite: community_summary_smoke
+  inputs:
+    userQuestion: "Summarize this community."
+    context:
+      focus:
+        community:
+          id: 1
+    switches:
+      stayInRole: true
+      dontFabricate: true
+  probes:
+    - probe_id: turn-root-span-present
+      kind: has_matching_span
+      span_name: mcae.turn
+
+    - probe_id: turn-tagged-as-eval
+      kind: has_matching_span
+      span_name: mcae.turn
+      attrs:
+        mcae.run.type: eval
+
+    - probe_id: community-summary-primitive-called
+      kind: tool_called_with_args
+      tool_name: community_summary
+
+    - probe_id: claims-grounded-in-primitive
+      kind: claim_grounded_in
+      source_kind: primitive
+
+    - probe_id: no-error-on-turn-root
+      kind: no_span_with_status
+      span_name: mcae.turn
+      status: error
+
+- case_id: community_summary.unknown_community
+  suite: community_summary_smoke
+  inputs:
+    userQuestion: "Summarize this community."
+    context:
+      focus:
+        community:
+          id: 4294967295
+    switches:
+      stayInRole: true
+      dontFabricate: true
+  probes:
+    - probe_id: turn-root-span-present
+      kind: has_matching_span
+      span_name: mcae.turn
+
+    # Philosophy 2: agent MUST hit the primitive even on a
+    # community that's almost certainly not in the live window.
+    # Skipping the call and answering from parametric memory is
+    # the failure mode this probe catches.
+    - probe_id: community-summary-primitive-called
+      kind: tool_called_with_args
+      tool_name: community_summary
+
+    # Philosophy 2: any claim that does emit must be primitive-
+    # sourced. Vacuously true if zero claims emit (the ideal
+    # outcome for an unknown community); fails the moment a
+    # narrative-side fabricated claim appears.
+    - probe_id: claims-grounded-in-primitive
+      kind: claim_grounded_in
+      source_kind: primitive
+
+    - probe_id: no-error-on-turn-root
+      kind: no_span_with_status
+      span_name: mcae.turn
+      status: error

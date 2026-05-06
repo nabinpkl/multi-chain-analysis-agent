@@ -1,0 +1,24 @@
+{
+  "suite": "community_summary_smoke",
+  "captured_at": "2026-05-06T07:13:18.003570Z",
+  "git_sha": "24cfa9af00c5",
+  "agent_version": "0.1.0",
+  "agent_primary_model": "nvidia/nemotron-3-super-120b-a12b:free",
+  "agent_policy_model": "openai/gpt-oss-20b:free",
+  "eval_judge_model": "openrouter/owl-alpha",
+  "results": {
+    "community_summary.basic": {
+      "claims-grounded-in-primitive": "pass",
+      "community-summary-primitive-called": "pass",
+      "no-error-on-turn-root": "pass",
+      "turn-root-span-present": "pass",
+      "turn-tagged-as-eval": "pass"
+    },
+    "community_summary.unknown_community": {
+      "claims-grounded-in-primitive": "pass",
+      "community-summary-primitive-called": "pass",
+      "no-error-on-turn-root": "pass",
+      "turn-root-span-present": "pass"
+    }
+  }
+}
