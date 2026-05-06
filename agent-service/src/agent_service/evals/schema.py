@@ -308,6 +308,21 @@ class ProbeResult(BaseModel):
         ),
     )
     passed: bool
+    inconclusive: bool = Field(
+        default=False,
+        description=(
+            "True when the probe's pass/fail outcome cannot be "
+            "trusted because the trace had a terminal provider "
+            "failure that prevented the agent from completing the "
+            "code path the probe asserts on. Set by the runner after "
+            "probes finish, based on `infra_health.has_terminal_"
+            "provider_failure`. The baseline diff skips inconclusive "
+            "entries entirely (no comparison against baseline), so "
+            "transient OpenRouter / network blips do not register "
+            "as regressions. See evals/README.md `Inconclusive "
+            "results` for the full disposition."
+        ),
+    )
     score: float | None = Field(
         default=None,
         description=(
@@ -363,12 +378,22 @@ class RunMetadata(BaseModel):
     case_count: int = Field(ge=0)
     probe_count: int = Field(ge=0)
     pass_count: int = Field(ge=0)
+    inconclusive_count: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Probes whose outcome was suppressed by an infra-health "
+            "check (terminal provider failure on the trace). Excluded "
+            "from pass_count and from the baseline diff."
+        ),
+    )
 
     @model_validator(mode="after")
     def _pass_count_within_probe_count(self) -> "RunMetadata":
-        if self.pass_count > self.probe_count:
+        if self.pass_count + self.inconclusive_count > self.probe_count:
             raise ValueError(
-                f"pass_count ({self.pass_count}) > probe_count "
+                f"pass_count ({self.pass_count}) + inconclusive_count "
+                f"({self.inconclusive_count}) > probe_count "
                 f"({self.probe_count}); accounting bug upstream"
             )
         return self

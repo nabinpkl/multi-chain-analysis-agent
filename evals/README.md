@@ -111,9 +111,22 @@ just eval-baseline evals/cases/who_are_you.yaml --run-id <run_id>
 
 The diff intentionally does NOT compare numeric `observed` fields (`matched_call_count`, latency, etc.) or `score`. The probe spec carries the bound; the baseline tracks whether the probe passed against its bound. Day-to-day variance that stays under a bound never trips a regression alarm.
 
-## Runtime flakes
+## Provider errors and the `inconclusive` state
 
-Free-tier OpenRouter occasionally returns malformed `ChatCompletion` payloads (`UnexpectedModelBehavior: ... validation errors for ChatCompletion`). A run that hits this fails ~3 probes in `wallet_profile.basic` (no narrative, no claim, no structural gate). Diagnose by reading the trace's `agent run` span's `StatusMessage`; if the cause is provider flake, re-run. If it's deterministic across N runs, treat as a real regression.
+Free-tier OpenRouter occasionally returns malformed `ChatCompletion` payloads (`UnexpectedModelBehavior: ... validation errors for ChatCompletion`). The substrate handles this in two layers.
+
+**Layer 1: provider-call retry.** The agent service wraps every `agent.run(...)` call with [`with_provider_retry`](../agent-service/src/agent_service/llm_retry.py): one retry on `UnexpectedModelBehavior`, `httpx.HTTPError`, or `asyncio.TimeoutError`, with a 1s backoff. Most single-bad-response flakes are silently absorbed.
+
+**Layer 2: inconclusive probe state.** When a flake survives the retry (the provider returned garbage twice in a row), the agent's `agent run` span lands in CH with `StatusCode=ERROR`. The runner detects this via [`infra_health.has_terminal_provider_failure`](../agent-service/src/agent_service/evals/infra_health.py) after probes finish, and flips any *failing* probe's result to `inconclusive=True`. Probes that *passed* despite the failure stay as pass: their assertion held against whatever spans did emit. Only the failures need disambiguation, because we cannot tell whether they would have passed had the agent completed normally.
+
+The baseline diff treats `inconclusive` entries as "no comparison":
+- They do NOT register as `new_failures` (so a flake doesn't fire a regression alarm).
+- They do NOT register as `schema_deltas` (the probe IS in the YAML, just suppressed for this run).
+- They DO appear in the regression report under an `inconclusive` section so the operator sees them.
+
+`just eval-baseline` refuses to lock in a run with any inconclusive probes (so flakes don't shape the contract). Re-run until clean, then bake the baseline.
+
+Diagnostic path when probes do fail in a way the inconclusive flip doesn't catch: read the failing trace's `agent run` span `StatusMessage`. `UnexpectedModelBehavior: Invalid response from openrouter` means provider flake (re-run). Anything else is a genuine signal worth investigating.
 
 ## Out of scope today
 

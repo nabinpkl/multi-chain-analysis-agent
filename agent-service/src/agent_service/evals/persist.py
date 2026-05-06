@@ -62,11 +62,14 @@ def summarize_run(
     case_count = len(case_dirs)
     probe_count = 0
     pass_count = 0
+    inconclusive_count = 0
     for case_dir in case_dirs:
         for probe_file in case_dir.glob("*.json"):
             probe_count += 1
             r = ProbeResult.model_validate_json(probe_file.read_text())
-            if r.passed:
+            if r.inconclusive:
+                inconclusive_count += 1
+            elif r.passed:
                 pass_count += 1
     return RunMetadata(
         run_id=run_id,
@@ -78,4 +81,5 @@ def summarize_run(
         case_count=case_count,
         probe_count=probe_count,
         pass_count=pass_count,
+        inconclusive_count=inconclusive_count,
     )

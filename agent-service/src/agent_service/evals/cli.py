@@ -126,13 +126,20 @@ async def _run(args: argparse.Namespace) -> int:
         agent_version=agent_version,
     )
 
+    inconclusive_suffix = (
+        f", {meta.inconclusive_count} inconclusive"
+        if meta.inconclusive_count
+        else ""
+    )
+    decided = meta.probe_count - meta.inconclusive_count
     print(
-        f"{meta.run_id}: {meta.pass_count}/{meta.probe_count} probes pass "
-        f"across {meta.case_count} cases  ({args.runs_root}/{meta.run_id})"
+        f"{meta.run_id}: {meta.pass_count}/{decided} decided probes pass "
+        f"across {meta.case_count} cases{inconclusive_suffix}  "
+        f"({args.runs_root}/{meta.run_id})"
     )
 
     if args.no_baseline:
-        return 0 if meta.pass_count == meta.probe_count else 1
+        return 0 if meta.pass_count == decided else 1
 
     baseline_path = _resolve_baseline_path(args)
     baseline = load_baseline(baseline_path)
@@ -141,14 +148,20 @@ async def _run(args: argparse.Namespace) -> int:
             f"no baseline at {baseline_path}; mint one with "
             f"`just eval-baseline {args.suite}` once the run looks right."
         )
-        return 0 if meta.pass_count == meta.probe_count else 1
+        return 0 if meta.pass_count == decided else 1
 
     run_root = args.runs_root / meta.run_id
     report = diff_against_baseline(baseline, run_root)
+    rendered = render_report(report)
+    if rendered:
+        print(rendered)
     if report.is_clean:
-        print(f"baseline diff clean against {baseline_path}.")
+        # Print the explicit "clean" line only when there are no
+        # inconclusive entries to surface; otherwise the report
+        # body has already covered the operator-facing detail.
+        if not report.inconclusive:
+            print(f"baseline diff clean against {baseline_path}.")
         return 0
-    print(render_report(report))
     print(
         f"\nbaseline drift detected. If intended, refresh with "
         f"`just eval-baseline {args.suite}`."

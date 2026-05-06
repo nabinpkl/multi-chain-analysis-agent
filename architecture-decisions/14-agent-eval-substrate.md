@@ -431,6 +431,76 @@ A `gate_did_not_retract` probe kind would close the second; a
 JSON-path-walking variant of `tool_called_with_args` would close
 the first. Both are candidate follow-ons after #27.
 
+## 2026-05-05 addendum 2: provider-error vs model-regression
+disambiguation (two layers)
+
+Discovered during #26 baseline minting: free-tier OpenRouter
+occasionally returns malformed `ChatCompletion` payloads
+(`UnexpectedModelBehavior: 4 validation errors for ChatCompletion`).
+Without explicit handling, every such flake registered as a
+multi-probe regression in the baseline diff. The mitigation is
+two layers, mirroring the industry pattern (verified 2026-05
+against Anthropic's 2026-01-09 evals post, pydantic_evals's
+Tenacity-based retry strategies, DeepEval's default-1-retry,
+openai/evals's exponential backoff with provider-specific
+exception types, promptfoo's distinct ERROR state with
+`--retry-errors`).
+
+**Layer 1: provider-call retry at the agent service.**
+[`agent_service/llm_retry.py`](../agent-service/src/agent_service/llm_retry.py)
+wraps every `agent.run(...)` call with a single retry on
+`UnexpectedModelBehavior`, `httpx.HTTPError`, or
+`asyncio.TimeoutError`, 1s backoff. Conservative on purpose:
+free-tier OpenRouter is rate-limited; N retries during a flake
+make the rate limit worse. Single retry catches the common
+single-bad-response case and fails fast otherwise. Applied at
+four sites: `loop_driver.py` (primary agent), `policy/constitution.py`
+(judge_claim + judge_narrative), `repeat_detector.py`. Lives in the
+agent service, not the eval substrate, because the benefit is real
+in production too.
+
+**Layer 2: `inconclusive` probe state in the eval substrate.**
+When a flake survives the retry (provider returned garbage
+twice), pydantic_ai's `agent run` span lands with `StatusCode=
+ERROR`. The runner detects this via
+[`infra_health.has_terminal_provider_failure`](../agent-service/src/agent_service/evals/infra_health.py)
+after probes finish, and flips any *failing* probe to
+`inconclusive=True`. Probes that *passed* despite the failure
+stay pass: their assertion held against whatever spans did emit.
+Only failures need disambiguation, because we cannot tell whether
+they would have passed had the agent completed normally.
+
+The baseline diff treats inconclusive entries as "no comparison":
+not a new failure, not a schema delta, surfaced under a separate
+`inconclusive` section in the regression report. `eval-baseline`
+refuses to lock in a run with any inconclusive probes so flakes
+don't shape the contract.
+
+Layers are deliberately split:
+- Layer 1 in production code so end users benefit too.
+- Layer 2 in eval code because it is eval-specific: production
+  doesn't need to flag inconclusive runs separately; users see the
+  agent's actual error message and the operator decides what to do.
+
+Things this design deliberately does NOT do:
+- **N-of-M majority retries at the case level.** Burning 3x the
+  free-tier budget per case to vote out flakes was the alternative;
+  rejected because at our scale operator-driven re-run is cheaper
+  and avoids hiding real intermittent regressions.
+- **Per-probe infra-error detection.** Each probe could query for
+  errors on its specific target spans, gaining precision. Rejected
+  for now: case-level "did the agent complete normally?" is the
+  right granularity for the failure modes we have observed; per-
+  probe adds query cost without much added signal until probe
+  vocabulary grows further.
+- **An `ERROR` state distinct from `inconclusive` (per promptfoo).**
+  Promptfoo's `ERROR` covers ANY exception during the eval,
+  including programmatic ones in custom evaluators. Our probes
+  already have an `error` field for that and a `passed=False`
+  outcome. `inconclusive` specifically means "agent had a terminal
+  provider failure", which is narrower and has cleaner diff
+  semantics than a generic ERROR.
+
 ## References
 
 - ADR 13: Agent observability foundation (OpenTelemetry + Langfuse).

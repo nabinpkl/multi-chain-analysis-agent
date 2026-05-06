@@ -33,6 +33,7 @@ from agent_service.evals.agent_runner import (
     wait_for_trace_indexed,
 )
 from agent_service.evals.ch import ClickHouseClient
+from agent_service.evals.infra_health import has_terminal_provider_failure
 from agent_service.evals.persist import (
     persist_result,
     persist_run_metadata,
@@ -149,6 +150,35 @@ async def run_suite(
                 results = await adapter(
                     case, ch, run_id=run_id, agent_run=agent_run
                 )
+                # If the trace had a terminal provider failure (the
+                # agent loop itself errored mid-turn, not a normal
+                # completion the probes evaluate), flip any failing
+                # probe to inconclusive=True. Probes that passed
+                # despite the failure stay as pass: their assertion
+                # held against whatever spans did emit, so the signal
+                # is real. Only the failures need disambiguation,
+                # because we cannot tell whether they would have
+                # passed had the agent completed normally.
+                terminal, summary = await has_terminal_provider_failure(
+                    agent_run.trace_id, ch
+                )
+                if terminal:
+                    suffix = (
+                        f" (suppressed by infra-health: {summary})"
+                        if summary
+                        else " (suppressed by infra-health)"
+                    )
+                    results = [
+                        r.model_copy(
+                            update={
+                                "inconclusive": True,
+                                "error": (r.error or "") + suffix,
+                            }
+                        )
+                        if not r.passed
+                        else r
+                        for r in results
+                    ]
                 for r in results:
                     persist_result(r, run_root)
     except BaseException as e:

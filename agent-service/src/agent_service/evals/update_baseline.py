@@ -111,14 +111,17 @@ def _latest_run_for_suite(runs_root: Path, expected_case_ids: set[str]) -> Path:
 
 def _has_failures(run_root: Path) -> bool:
     """Check `run.json` for the cheapest failure signal. Avoids re-
-    walking every probe file."""
+    walking every probe file. Counts inconclusive probes as
+    failures for baseline-mint purposes: locking in an inconclusive
+    outcome would let infrastructure flakes shape the contract."""
     from agent_service.evals.schema import RunMetadata
 
     meta_path = run_root / "run.json"
     if not meta_path.exists():
         return True  # treat missing summary as conservative fail
     meta = RunMetadata.model_validate_json(meta_path.read_text())
-    return meta.pass_count < meta.probe_count
+    decided = meta.probe_count - meta.inconclusive_count
+    return meta.pass_count < decided or meta.inconclusive_count > 0
 
 
 def main(argv: list[str] | None = None) -> int:

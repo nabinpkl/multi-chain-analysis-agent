@@ -95,10 +95,22 @@ class RegressionReport(BaseModel):
     new_failures: list[tuple[str, str]] = Field(default_factory=list)
     newly_passing: list[tuple[str, str]] = Field(default_factory=list)
     schema_deltas: list[tuple[str, str, str]] = Field(default_factory=list)
+    inconclusive: list[tuple[str, str, str]] = Field(default_factory=list)
     # schema_deltas tuple shape: (case_id, probe_id, "added"|"removed")
+    # inconclusive tuple shape:  (case_id, probe_id, error_summary)
+    # Inconclusive entries are NOT a regression event; they are
+    # surfaced so the operator knows which probes were suppressed
+    # and can re-run if the suppression looks wrong (e.g. the trace
+    # shows a non-transient terminal failure that infra_health
+    # mis-classified).
 
     @property
     def is_clean(self) -> bool:
+        """Inconclusive entries are NOT counted toward `is_clean`.
+        A run with all-passing-or-inconclusive results is clean,
+        because no probe disagreed with its baseline. The operator
+        sees the inconclusive list separately and decides whether
+        to re-run."""
         return not (self.new_failures or self.newly_passing or self.schema_deltas)
 
 
@@ -111,21 +123,39 @@ def load_baseline(path: Path) -> Baseline | None:
     return Baseline.model_validate_json(path.read_text())
 
 
-def _walk_run_results(run_root: Path) -> dict[str, dict[str, ProbeOutcome]]:
-    """Walk `<run_root>/<case>/<probe>.json` and reduce to the
-    pass/fail map. Skips `run.json` (the RunMetadata summary file
-    sits at run_root, not under a case dir)."""
+def _walk_run_results(
+    run_root: Path,
+) -> tuple[dict[str, dict[str, ProbeOutcome]], list[tuple[str, str, str]]]:
+    """Walk `<run_root>/<case>/<probe>.json` and split into:
+      - the pass/fail map for the diff (excludes inconclusive)
+      - the inconclusive list, with each entry `(case_id, probe_id,
+        error_summary)` for surfacing in the regression report.
+
+    Inconclusive results are excluded from the pass/fail map by
+    design: their outcome was suppressed by an infra-health check,
+    so comparing them against the baseline would either flip a
+    false regression (if baseline=pass and we now report fail) or
+    silently drop the data (if treated as a missing key). The
+    inconclusive list keeps them visible to the operator.
+
+    Skips `run.json` (the RunMetadata summary file sits at
+    run_root, not under a case dir).
+    """
     results: dict[str, dict[str, ProbeOutcome]] = {}
+    inconclusive: list[tuple[str, str, str]] = []
     for case_dir in run_root.iterdir():
         if not case_dir.is_dir():
             continue
         case_map: dict[str, ProbeOutcome] = {}
         for probe_file in case_dir.glob("*.json"):
             r = ProbeResult.model_validate_json(probe_file.read_text())
+            if r.inconclusive:
+                inconclusive.append((r.case_id, r.probe_id, r.error or ""))
+                continue
             case_map[r.probe_id] = "pass" if r.passed else "fail"
         if case_map:
             results[case_dir.name] = case_map
-    return results
+    return results, inconclusive
 
 
 def build_baseline_from_run(
@@ -151,14 +181,25 @@ def build_baseline_from_run(
 def diff_against_baseline(baseline: Baseline, run_root: Path) -> RegressionReport:
     """Pure pass/fail diff of a completed run against the committed
     baseline. Returns a RegressionReport with three orthogonal
-    delta sets. Numeric `observed` fields and `score` are
-    intentionally not part of the diff; see module docstring."""
-    current = _walk_run_results(run_root)
+    delta sets plus an inconclusive list. Numeric `observed`
+    fields and `score` are intentionally not part of the diff;
+    see module docstring.
+
+    Inconclusive probes are excluded from the pass/fail diff
+    entirely. They are NOT counted as schema deltas (because the
+    probe IS in the YAML, just suppressed for this run); they are
+    surfaced in `report.inconclusive` so the operator sees them.
+    A baseline that contained pass for a probe that ran
+    inconclusive in this run produces neither a `new_failures` nor
+    a `newly_passing` entry: the diff has no signal to compare.
+    """
+    current, inconclusive = _walk_run_results(run_root)
 
     new_failures: list[tuple[str, str]] = []
     newly_passing: list[tuple[str, str]] = []
     schema_deltas: list[tuple[str, str, str]] = []
 
+    inconclusive_keys = {(c, p) for (c, p, _) in inconclusive}
     baseline_keys = {
         (case, probe)
         for case, probes in baseline.results.items()
@@ -180,9 +221,12 @@ def diff_against_baseline(baseline: Baseline, run_root: Path) -> RegressionRepor
         else:
             newly_passing.append((case, probe))
 
+    # A probe that is inconclusive this run but exists in the
+    # baseline is NOT a schema delta; subtract those out before
+    # computing added/removed.
     for case, probe in sorted(current_keys - baseline_keys):
         schema_deltas.append((case, probe, "added"))
-    for case, probe in sorted(baseline_keys - current_keys):
+    for case, probe in sorted(baseline_keys - current_keys - inconclusive_keys):
         schema_deltas.append((case, probe, "removed"))
 
     return RegressionReport(
@@ -190,6 +234,7 @@ def diff_against_baseline(baseline: Baseline, run_root: Path) -> RegressionRepor
         new_failures=new_failures,
         newly_passing=newly_passing,
         schema_deltas=schema_deltas,
+        inconclusive=inconclusive,
     )
 
 
@@ -206,9 +251,11 @@ def persist_baseline(baseline: Baseline, path: Path) -> None:
 
 
 def render_report(report: RegressionReport) -> str:
-    """Plain-text report renderer for the CLI. Empty string when
-    the diff is clean (caller can skip printing)."""
-    if report.is_clean:
+    """Plain-text report renderer for the CLI. Returns the empty
+    string only when the diff is clean AND there are no
+    inconclusive probes (clean + inconclusive prints the
+    inconclusive list so the operator decides whether to re-run)."""
+    if report.is_clean and not report.inconclusive:
         return ""
     lines: list[str] = [f"regression report for suite '{report.suite}':"]
     if report.new_failures:
@@ -223,4 +270,11 @@ def render_report(report: RegressionReport) -> str:
         lines.append("  schema deltas (probe added or removed without baseline bump):")
         for case, probe, kind in report.schema_deltas:
             lines.append(f"    {kind.upper():<7} {case} / {probe}")
+    if report.inconclusive:
+        lines.append(
+            "  inconclusive (suppressed by infra-health; not a regression, "
+            "re-run if surprising):"
+        )
+        for case, probe, summary in report.inconclusive:
+            lines.append(f"    SKIP  {case} / {probe}   {summary}")
     return "\n".join(lines)
