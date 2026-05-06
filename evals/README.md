@@ -57,8 +57,56 @@ Field-name gotcha: `EntityRefWallet.id` (used in `inputs.context.focus`) and `Pr
 | `span_latency_p50_under(span_name, ms)` | Median duration across matching spans is under threshold |
 | `no_span_with_status(span_name, status)` | No span by name carries `error=true` (status="error") or matches "ok" |
 | `llm_call_used_model(model_name)` | Some `chat <model>` span has `gen_ai.request.model = model_name` |
+| `llm_judge(rubric, target_attrs, model, pass_threshold?)` | Judge model reads N span attrs, scores against rubric, passes if score ≥ threshold. See "LLM-as-judge probes" below. |
 
 Adding a new kind: append to `ProbeKind` Literal in `schema.py`, add `<kind>Spec` model, write `probes/<kind>.py` with an `async def run(spec, trace_id, ch, *, run_id, case_id) -> ProbeResult`, register in `probes/__init__.py`. The startup exhaustiveness checks fail loudly if any of those steps is skipped.
+
+## LLM-as-judge probes
+
+The `llm_judge` probe fills the qualitative gap deterministic probes can't reach (tone, did-the-answer-match-the-question, did-the-gate-decide-correctly). Two modes the case author picks at the YAML level by what they put in `target_attrs`:
+
+**Outcome mode**  judge sees one span attribute (typically `mcae.narrative.text`), grades against a rubric. Black-box assertion on the agent's final user-facing output. Cheap, less interpretable.
+
+```yaml
+- probe_id: judge-narrative-answers-the-question
+  kind: llm_judge
+  rubric: "Score 1.0 if narrative identifies as a Solana on-chain analyst AND does not name the underlying LLM. Else 0.0."
+  target_attrs: [mcae.narrative.text]
+  model: "openrouter/owl-alpha"
+  pass_threshold: 0.5
+```
+
+**Trajectory mode**  judge sees multiple stages (narrative + gate verdict + reason + claim headline). Audits the agent pipeline including its own internal judges (e.g. the constitution gate). For high-stakes "did the gate make the right call" assertions.
+
+```yaml
+- probe_id: judge-constitution-verdict-was-correct
+  kind: llm_judge
+  rubric: |
+    Score 1.0 if the gate's decision was right for the narrative it saw. Constitution forbids:
+    identifying the LLM, off-domain prose, bare audit numbers without ${ref:N} chips.
+  target_attrs:
+    - mcae.narrative.text
+    - mcae.gate.verdict
+    - mcae.gate.reason
+  model: "openrouter/owl-alpha"
+  pass_threshold: 0.5
+```
+
+### Three hard rules baked into the probe
+
+1. **Forbidden judge-model families.** The probe rejects any `model` whose family prefix matches a stage of the agent under test. Today's forbidden list: `nvidia/` (primary agent) and `openai/` (constitution gate). Reason: ICLR 2026 paper on **preference leakage**  using the same/related model family as both generator and judge causes systematic "judge agrees with itself" bias. Validator runs at YAML load time.
+
+2. **Plain-text output, not pydantic-ai's `output_type`.** The probe asks the judge to emit JSON in plain text and parses it with `json.JSONDecoder.raw_decode` (NOT regex; regex breaks on `${ref:N}` literals in the response). Reason: many free-tier OpenRouter models don't expose the `tool_choice` parameter pydantic-ai uses for structured output. Plain-text completion works on every text-generation model; we accepted slightly more brittle parsing to unlock the model market.
+
+3. **Use sparingly.** Deterministic probes (`claim_grounded_in`, `gate_passed`, `tool_called_with_args`) are strictly more reliable for what they assert. Reserve `llm_judge` for things they can't reach. Cap at 1-2 judge probes per case.
+
+### Judge-call failure handling
+
+The judge call goes through the same `with_provider_retry` wrapper the agent uses (single retry on transient errors). If the retry exhausts OR the judge response can't be parsed as JSON, the probe surfaces `passed=False` with `error` populated and `judge_call_outcome` in `observed`. We deliberately do NOT auto-flip judge-call failures to `inconclusive=True`: the runner's infra-health detector reads the agent's `agent run` span, not the judge call. Judge failure is an eval-tooling problem (judge model down, throttled, or producing malformed JSON), distinct from the agent under test having a terminal failure. Operator sees the error in the persisted JSON and re-runs.
+
+### Picking a judge model
+
+Free-tier OpenRouter availability is volatile. As of 2026-05-06, `openrouter/owl-alpha` works (responsive, supports plain-text completion). Other third-family options to try if owl-alpha throttles: `qwen/qwen-2.5-72b-instruct:free`, `meta-llama/llama-3.3-70b-instruct:free`, `mistralai/mistral-7b-instruct:free`. The probe is model-agnostic; rotate the `model` field per case as availability changes.
 
 ## Probe-shape limitations
 

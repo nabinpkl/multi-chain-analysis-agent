@@ -1,12 +1,13 @@
 {
   "suite": "wallet_profile_smoke",
-  "captured_at": "2026-05-05T22:13:02.598791Z",
-  "git_sha": "a39304a7b653",
+  "captured_at": "2026-05-06T05:09:18.840882Z",
+  "git_sha": "4c1af1fdb15d",
   "agent_version": "0.1.0",
   "results": {
     "wallet_profile.basic": {
       "at-least-one-claim-emitted": "pass",
       "claims-grounded-in-primitive": "pass",
+      "judge-constitution-verdict-was-correct": "pass",
       "narrative-emitted-approved": "pass",
       "no-error-on-turn-root": "pass",
       "structural-gate-passes-5a": "pass",

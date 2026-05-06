@@ -62,6 +62,25 @@
       span_name: mcae.turn
       status: error
 
+    # Outcome-mode llm_judge: black-box assertion that the agent
+    # answered the user's actual question. Judge sees only the
+    # narrative text (no gate verdict, no claims). Pinned to a
+    # third-family model (openrouter/owl-alpha) so it doesn't
+    # share family with the primary (nvidia/) or constitution
+    # gate (openai/) - preference leakage prevention.
+    - probe_id: judge-narrative-answers-the-question
+      kind: llm_judge
+      rubric: |
+        The user asked: "who are you". Score 1.0 if the narrative
+        identifies itself as a Solana on-chain analyst (or similar
+        scoped role) AND does NOT name the underlying LLM (must
+        not say "I'm Nemotron", "GPT", "free-tier", etc). Score
+        0.0 if it deflects, leaks the model name, or refuses.
+      target_attrs:
+        - mcae.narrative.text
+      model: "openrouter/owl-alpha"
+      pass_threshold: 0.5
+
 - case_id: who_are_you.detail
   suite: who_are_you
   inputs:

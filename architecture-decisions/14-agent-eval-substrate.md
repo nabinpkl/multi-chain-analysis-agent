@@ -501,6 +501,75 @@ Things this design deliberately does NOT do:
   provider failure", which is narrower and has cleaner diff
   semantics than a generic ERROR.
 
+## 2026-05-06 addendum 3: llm_judge probe (#27, trajectory-mode)
+
+Added the `llm_judge` probe kind. Two modes the case author picks
+at YAML level via `target_attrs`:
+
+- **Outcome mode** (single attr, typically `mcae.narrative.text`):
+  black-box assertion on the agent's final user-facing output.
+- **Trajectory mode** (multiple attrs including gate verdict +
+  reason): judge-of-judges, audits the agent pipeline including
+  its own internal constitution gate. Verified end-to-end on a
+  retracted-narrative case where the trajectory judge correctly
+  scored the gate's retraction as right (1.0) with reason
+  "Gate correctly retracted violating narrative; the text contained
+  bare audit numbers without required ${ref:N} citation chips".
+
+### Three design rules baked in
+
+1. **Forbidden judge-model families.** `_LLM_JUDGE_FORBIDDEN_FAMILIES`
+   = `("nvidia/", "openai/")`. The validator runs at YAML load time
+   and rejects any judge model whose family matches a stage of the
+   agent under test. Rationale: ICLR 2026 paper on **preference
+   leakage**  same/related model families used as both generator
+   and judge produce systematic "judge agrees with itself" bias.
+   When `agent_service/llm.py` swaps in new stage models, this
+   list moves with them.
+
+2. **Plain-text output, not pydantic_ai's `output_type`.** Verified
+   empirically 2026-05-06: of 4 free-tier models tried as judge
+   (gemma, baidu/cobuddy, poolside, owl-alpha), only one supported
+   the `tool_choice` parameter pydantic_ai uses for structured
+   output. Plain-text completion + manual JSON parse via
+   `json.JSONDecoder.raw_decode` works on every text-generation
+   model. The `raw_decode` choice over regex is load-bearing: a
+   non-greedy regex breaks on `${ref:N}` literals in the judge's
+   reason field (one closing `}` confuses the matcher). Catching
+   that bug took one live-eval run; the regression test is in
+   `test_llm_judge.py::test_probe_handles_json_with_braces_in_string_value`.
+
+3. **Use sparingly.** Deterministic probes are strictly more
+   reliable for what they assert; reserve `llm_judge` for tone,
+   off-topic-ness, and qualitative-verdict-correctness assertions
+   the deterministic probes can't reach. Cap at 1-2 judge probes
+   per case so deterministic probes stay load-bearing.
+
+### Things this design deliberately does NOT do
+
+- **No multi-agent ensemble (Scorer/Critic/Commander).** Right
+  shape for production-scale judge infra; over-engineered for ours.
+  One model, one prompt, one score.
+- **No automatic judge-model rotation.** Free-tier OpenRouter
+  availability is volatile (4 models, 4 different failure modes
+  while shipping #27); operator rotates the `model` field in the
+  YAML when a model goes throttled. Building rotation infra is its
+  own ticket if the manual swap starts hurting.
+- **No human-validation loop for judge outputs.** We accept the
+  meta-eval paradox. The baseline-diff catches drift between runs
+  of the same judge; spot-check by hand periodically. Cap on judge
+  probes per case keeps deterministic probes load-bearing.
+
+### Industry pattern reference
+
+Per the trajectory-vs-outcome research review (Anthropic 2026-01-09,
+LangChain trajectory-evals docs, TianPan 2026-02-07, agent-as-a-judge
+arxiv 2508.02994, meta-judging arxiv 2504.17087): trajectory eval is
+the higher-signal mode for high-stakes decisions; outcome eval is
+the cheaper continuous-monitoring mode. Both shapes have prior art;
+both are now reachable from a single probe spec by `target_attrs`
+list length.
+
 ## References
 
 - ADR 13: Agent observability foundation (OpenTelemetry + Langfuse).

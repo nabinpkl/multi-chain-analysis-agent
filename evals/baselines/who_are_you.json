@@ -1,10 +1,11 @@
 {
   "suite": "who_are_you",
-  "captured_at": "2026-05-05T22:09:41.232768Z",
-  "git_sha": "a39304a7b653",
+  "captured_at": "2026-05-06T05:09:17.730505Z",
+  "git_sha": "4c1af1fdb15d",
   "agent_version": "0.1.0",
   "results": {
     "who_are_you.basic": {
+      "judge-narrative-answers-the-question": "pass",
       "narrative-constitution-gate-passes-v4": "pass",
       "narrative-emitted-approved": "pass",
       "no-error-on-turn-root": "pass",

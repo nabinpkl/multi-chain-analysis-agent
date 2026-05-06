@@ -76,6 +76,7 @@ _PROBE_KIND_FIXTURES = [
     ("span_latency_p50_under.yaml", "span_latency_p50_under"),
     ("no_span_with_status.yaml", "no_span_with_status"),
     ("llm_call_used_model.yaml", "llm_call_used_model"),
+    ("llm_judge.yaml", "llm_judge"),
 ]
 
 

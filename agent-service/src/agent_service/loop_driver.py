@@ -722,6 +722,19 @@ async def run_turn(
                     spans.Attrs.NARRATIVE_ASSEMBLED_PROVENANCE_COUNT,
                     len(assembled_provenance),
                 )
+                # Full narrative text capped to NARRATIVE_TEXT_MAX_BYTES;
+                # overflow marker matches the primitive-payload convention
+                # so eval probes (and Langfuse) can detect truncation.
+                if len(narrative_text) <= spans.NARRATIVE_TEXT_MAX_BYTES:
+                    _capped_narrative = narrative_text
+                else:
+                    _capped_narrative = (
+                        narrative_text[: spans.NARRATIVE_TEXT_MAX_BYTES]
+                        + f" ...[truncated, total={len(narrative_text)}]"
+                    )
+                nar_span.set_attribute(
+                    spans.Attrs.NARRATIVE_TEXT, _capped_narrative
+                )
 
                 # Placeholder validation against assembled provenance.
                 # Reuses the gate.placeholder span name for symmetry with

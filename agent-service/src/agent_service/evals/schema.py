@@ -74,7 +74,23 @@ ProbeKind = Literal[
     "span_latency_p50_under",
     "no_span_with_status",
     "llm_call_used_model",
+    "llm_judge",
 ]
+
+
+# Model-family prefixes that are NOT allowed for the eval-judge.
+# These cover the families used by stages of the agent under test
+# (primary narrative, in-agent constitution gate, repeat detector).
+# Reusing the same family for the eval judge causes preference
+# leakage (ICLR 2026: same/related model families used as
+# generator + judge produce systematic 'judge agrees with itself'
+# bias). The validator catches this at YAML load time so cases
+# can't accidentally regress into the same-family case.
+#
+# When the agent's stage models change (`agent_service/llm.py`),
+# this list moves with them. Today: primary uses nvidia/, in-agent
+# judge uses openai/. Pick a third family for evals.
+_LLM_JUDGE_FORBIDDEN_FAMILIES: tuple[str, ...] = ("nvidia/", "openai/")
 
 # Recorded on every run so cross-run comparisons can detect a swap
 # that might have shifted what passes. Only `framework_free` is
@@ -184,6 +200,106 @@ class LlmCallUsedModelSpec(_ProbeSpecBase):
     model_name: str
 
 
+class LlmJudgeSpec(_ProbeSpecBase):
+    """LLM-as-judge probe. Reads N span attributes from the trace,
+    sends them to a judge model along with the rubric, parses the
+    judge's structured response into a score and reason, passes if
+    the score meets `pass_threshold`.
+
+    Two design rules baked into the spec:
+
+    1. **Forbidden judge model families.** `model` must NOT begin
+       with any prefix in `_LLM_JUDGE_FORBIDDEN_FAMILIES`. Using the
+       same family as any stage of the agent under test causes
+       preference leakage (the judge biases toward agreeing with
+       its own family). The agent currently uses nvidia/ for the
+       primary and openai/ for the in-agent constitution gate, so
+       the eval judge MUST use a third family
+       (e.g. `openrouter/owl-alpha`,
+       `qwen/qwen-2.5-72b-instruct:free`,
+       `deepseek/deepseek-r1-distill-llama-70b:free`).
+
+    2. **Multiple span attrs in one probe.** `target_attrs` is a
+       list, not a single attr. Outcome-mode cases pass one entry
+       (e.g. `[mcae.narrative.text]`); trajectory-mode cases pass
+       several (narrative + gate verdict + claim headline) so the
+       judge can audit the agent's full pipeline including its own
+       internal judges. The rubric references attribute names
+       directly so the case author controls what the judge weighs.
+
+    Use sparingly. Deterministic probes (claim_grounded_in,
+    structural gate_passed) are strictly more reliable for what
+    they assert; this probe fills the qualitative gap they cannot
+    reach (tone, off-topic-ness, did-the-answer-match-the-question,
+    is-the-explanation-coherent-given-claims, did-the-gate-decide-
+    correctly)."""
+
+    kind: Literal["llm_judge"] = "llm_judge"
+    rubric: str = Field(
+        description=(
+            "Free-form English describing what the judge should "
+            "score. Reference span attributes by name. Make the "
+            "scoring rule explicit (e.g. 'score 1.0 if X else 0.0' "
+            "for binary, or 'score 0.0-1.0 based on Y' for graded)."
+        ),
+    )
+    target_attrs: list[str] = Field(
+        min_length=1,
+        description=(
+            "Span attribute names the judge will see, e.g. "
+            "['mcae.narrative.text'] for outcome-mode or "
+            "['mcae.narrative.text', 'mcae.gate.constitution.verdict'] "
+            "for trajectory-mode."
+        ),
+    )
+    model: str = Field(
+        description=(
+            "OpenRouter model id for the judge call. MUST NOT use a "
+            "family that the agent under test uses (forbidden: "
+            "nvidia/, openai/). Recommended: google/gemma-4-31b-it"
+            ":free, qwen/qwen-2.5-72b-instruct:free, or any other "
+            "third-family free-tier model."
+        ),
+    )
+    pass_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "passed=True iff the judge's score >= this. Binary "
+            "rubrics tend to use 0.5 (any positive score passes); "
+            "graded rubrics tend to use 0.6-0.8 depending on how "
+            "strict the case author wants to be."
+        ),
+    )
+
+    @field_validator("model")
+    @classmethod
+    def _model_not_in_forbidden_family(cls, v: str) -> str:
+        for prefix in _LLM_JUDGE_FORBIDDEN_FAMILIES:
+            if v.startswith(prefix):
+                raise ValueError(
+                    f"judge model {v!r} is in forbidden family "
+                    f"{prefix!r}: the agent under test already uses "
+                    f"this family for one of its stages, and reusing "
+                    f"the same family for the eval judge causes "
+                    f"preference leakage. Pick a different family "
+                    f"(e.g. google/, qwen/, deepseek/)."
+                )
+        return v
+
+    @field_validator("target_attrs")
+    @classmethod
+    def _target_attrs_unique(cls, v: list[str]) -> list[str]:
+        if len(v) != len(set(v)):
+            raise ValueError(
+                "target_attrs must be unique; duplicates would send "
+                "the same value twice to the judge under different "
+                "prompt slots, which is wasted tokens."
+            )
+        return v
+
+
 # Discriminated union: pydantic dispatches on `kind` at parse time,
 # so a YAML case with `kind: claim_grounded_in` and a missing
 # `source_kind` fails immediately with a precise error pointing to
@@ -197,6 +313,7 @@ ProbeSpec = Annotated[
         SpanLatencyP50UnderSpec,
         NoSpanWithStatusSpec,
         LlmCallUsedModelSpec,
+        LlmJudgeSpec,
     ],
     Field(discriminator="kind"),
 ]

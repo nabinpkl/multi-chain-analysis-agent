@@ -1,0 +1,39 @@
+- case_id: llm_judge.outcome.001
+  suite: schema_fixtures.llm_judge
+  inputs:
+    userQuestion: "who are you"
+    context:
+      focus:
+        wallet:
+          id: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+  probes:
+    - probe_id: answer-on-topic
+      kind: llm_judge
+      rubric: "Score 1.0 if the narrative directly answers the user's question; else 0.0."
+      target_attrs:
+        - mcae.narrative.text
+      model: "openrouter/owl-alpha"
+      pass_threshold: 0.5
+
+- case_id: llm_judge.trajectory.001
+  suite: schema_fixtures.llm_judge
+  inputs:
+    userQuestion: "profile this wallet"
+    context:
+      focus:
+        wallet:
+          id: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+  probes:
+    - probe_id: gate-verdict-was-correct
+      kind: llm_judge
+      rubric: |
+        Given the narrative AND the constitution gate's verdict + reason:
+        score 1.0 if the gate's decision (approved or retracted) matches
+        what an unbiased reviewer would decide for that narrative; 0.0
+        otherwise.
+      target_attrs:
+        - mcae.narrative.text
+        - mcae.gate.narrative_constitution.verdict
+        - mcae.gate.narrative_constitution.reason
+      model: "openrouter/owl-alpha"
+      pass_threshold: 0.5

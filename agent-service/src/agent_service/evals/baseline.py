@@ -168,13 +168,22 @@ def build_baseline_from_run(
     """Construct a baseline from the artifacts of a completed run.
     The walk is the same one `summarize_run` does; we keep them
     separate because RunMetadata persists eagerly during the run
-    and would force a circular-dependency on baselines."""
+    and would force a circular-dependency on baselines.
+
+    Inconclusive entries from `_walk_run_results` are intentionally
+    discarded here: a baseline records the contract, and an
+    inconclusive run has no contract for those probes. The
+    `update_baseline` CLI's `_has_failures` check refuses to mint a
+    baseline from a run with any inconclusive probes (without
+    --force), so by the time we reach this function the inconclusive
+    list is expected to be empty in normal use."""
+    results, _inconclusive = _walk_run_results(run_root)
     return Baseline(
         suite=suite,
         captured_at=datetime.now(timezone.utc),
         git_sha=git_sha,
         agent_version=agent_version,
-        results=_walk_run_results(run_root),
+        results=results,
     )
 
 

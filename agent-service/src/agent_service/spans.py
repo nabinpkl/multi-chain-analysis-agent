@@ -107,6 +107,12 @@ class Attrs:
     NARRATIVE_LENGTH_CHARS: Final = "mcae.narrative.length_chars"
     NARRATIVE_VERDICT: Final = "mcae.narrative.verdict"
     NARRATIVE_ASSEMBLED_PROVENANCE_COUNT: Final = "mcae.narrative.assembled_provenance_count"
+    # Full narrative text. Capped to NARRATIVE_TEXT_MAX_BYTES so
+    # OTel attribute storage stays bounded; on overflow the value
+    # ends with " ...[truncated, total=N]" matching the convention
+    # used by the primitive payload caps. Lets eval-judge probes
+    # (and Langfuse) read the actual prose without an extra fetch.
+    NARRATIVE_TEXT: Final = "mcae.narrative.text"
 
     # Snapshot lease + primitives.
     SNAPSHOT_ID: Final = "mcae.snapshot.id"
@@ -139,6 +145,11 @@ class Attrs:
 # wallet, top counterparties) without bloating trace storage. Probes
 # that need full payloads can re-fetch via the snapshot id.
 PRIMITIVE_PAYLOAD_MAX_BYTES: Final = 8192
+
+# Per-attribute byte cap on the narrative text attached to
+# `mcae.narrative.emitted`. Same 8 KiB shape as the primitive cap;
+# narratives under our agent's USAGE_LIMITS rarely exceed 4-5 KiB.
+NARRATIVE_TEXT_MAX_BYTES: Final = 8192
 
 
 # ---------------------------------------------------------------------------

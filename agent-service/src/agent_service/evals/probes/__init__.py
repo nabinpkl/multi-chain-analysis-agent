@@ -32,6 +32,7 @@ from agent_service.evals.probes import (
     gate_passed,
     has_matching_span,
     llm_call_used_model,
+    llm_judge,
     no_span_with_status,
     span_latency_p50_under,
     tool_called_with_args,
@@ -50,6 +51,7 @@ _REGISTRY: dict[str, ProbeRunner] = {
     "span_latency_p50_under": span_latency_p50_under.run,
     "no_span_with_status": no_span_with_status.run,
     "llm_call_used_model": llm_call_used_model.run,
+    "llm_judge": llm_judge.run,
 }
 
 
