@@ -94,7 +94,7 @@ The `llm_judge` probe fills the qualitative gap deterministic probes can't reach
 
 ### Three hard rules baked into the probe
 
-1. **Forbidden judge-model families.** The probe rejects any `model` whose family prefix matches a stage of the agent under test. Today's forbidden list: `nvidia/` (primary agent) and `openai/` (constitution gate). Reason: ICLR 2026 paper on **preference leakage**  using the same/related model family as both generator and judge causes systematic "judge agrees with itself" bias. Validator runs at YAML load time.
+1. **Forbidden judge-model families, env-derived.** The probe rejects any `model` whose family prefix matches a stage of the agent under test. The forbidden list comes from the `AGENT_PRIMARY_MODEL` and `AGENT_POLICY_MODEL` env vars (the same vars `agent_service/llm.py` reads at runtime). Swap a stage model in `.env`, the validator picks up the new family on the next process start; no manual sync between production wiring and eval-validator. Reason: ICLR 2026 paper on **preference leakage** using the same/related model family as both generator and judge causes systematic "judge agrees with itself" bias. Validator runs at YAML load time.
 
 2. **Plain-text output, not pydantic-ai's `output_type`.** The probe asks the judge to emit JSON in plain text and parses it with `json.JSONDecoder.raw_decode` (NOT regex; regex breaks on `${ref:N}` literals in the response). Reason: many free-tier OpenRouter models don't expose the `tool_choice` parameter pydantic-ai uses for structured output. Plain-text completion works on every text-generation model; we accepted slightly more brittle parsing to unlock the model market.
 
@@ -106,7 +106,27 @@ The judge call goes through the same `with_provider_retry` wrapper the agent use
 
 ### Picking a judge model
 
-Free-tier OpenRouter availability is volatile. As of 2026-05-06, `openrouter/owl-alpha` works (responsive, supports plain-text completion). Other third-family options to try if owl-alpha throttles: `qwen/qwen-2.5-72b-instruct:free`, `meta-llama/llama-3.3-70b-instruct:free`, `mistralai/mistral-7b-instruct:free`. The probe is model-agnostic; rotate the `model` field per case as availability changes.
+Set `EVAL_JUDGE_MODEL` in `.env`. Cases inherit it by default; set `model:` per-probe only when overriding (e.g. A/B comparing two judges in one suite).
+
+Free-tier OpenRouter availability is volatile. As of 2026-05-06, `openrouter/owl-alpha` works (responsive, supports plain-text completion). Other third-family options to try if owl-alpha throttles: `qwen/qwen-2.5-72b-instruct:free`, `meta-llama/llama-3.3-70b-instruct:free`, `mistralai/mistral-7b-instruct:free`. The probe is model-agnostic; rotate `EVAL_JUDGE_MODEL` in `.env` as availability changes.
+
+### Model provenance in baselines
+
+Baselines record which models were used at mint time (`agent_primary_model`, `agent_policy_model`, `eval_judge_model`). When a future run's `.env` differs from what's in the baseline, the regression report surfaces a **model deltas** section:
+
+```
+regression report for suite 'who_are_you':
+  model deltas since baseline mint (may explain probe flips):
+    eval_judge_model: openrouter/owl-alpha -> qwen/qwen-2.5-72b-instruct:free
+  newly passing (was failing, now passes; bump baseline if intended):
+    PASS  who_are_you.basic / judge-narrative-answers-the-question
+```
+
+Model deltas are **not** regression events; they are explanatory signal. Probe flips that coincide with a model swap are most likely caused by the swap; the operator decides whether to refresh the baseline (intentional swap, accept the new contract) or investigate (genuine regression that happened to coincide with a swap). This is the industry-current pattern as of May 2026; per-model baseline files were considered and rejected as over-engineered for our scale.
+
+### Spot-check discipline
+
+Industry guidance (DeepEval 2026, Hamel 2026-01-15, multiple LLMOps observability stacks) is to spot-check ~5-10% of judge verdicts by hand periodically and document drift. We don't enforce this in code; it's an operator practice. When `llm_judge` probe count grows past ~30, the recommended calibration step is a 200-example pass against human verdicts targeting 85-90% agreement. Today we have 2 probes; calibration isn't load-bearing yet.
 
 ## Probe-shape limitations
 

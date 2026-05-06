@@ -1,8 +1,11 @@
 {
   "suite": "wallet_profile_smoke",
-  "captured_at": "2026-05-06T05:09:18.840882Z",
-  "git_sha": "4c1af1fdb15d",
+  "captured_at": "2026-05-06T06:09:04.483978Z",
+  "git_sha": "1575390b2529",
   "agent_version": "0.1.0",
+  "agent_primary_model": "nvidia/nemotron-3-super-120b-a12b:free",
+  "agent_policy_model": "openai/gpt-oss-20b:free",
+  "eval_judge_model": "openrouter/owl-alpha",
   "results": {
     "wallet_profile.basic": {
       "at-least-one-claim-emitted": "pass",

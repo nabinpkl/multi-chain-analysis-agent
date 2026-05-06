@@ -95,6 +95,66 @@ def test_pass_threshold_must_be_in_unit_interval() -> None:
         )
 
 
+def test_model_falls_back_to_eval_judge_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When `model:` is omitted in the YAML, the validator resolves
+    EVAL_JUDGE_MODEL at parse time. Pin the resolved value into
+    spec.model so probe code stays as-is at runtime."""
+    monkeypatch.setenv("EVAL_JUDGE_MODEL", "deepseek/deepseek-r1-distill:free")
+    spec = LlmJudgeSpec(
+        probe_id="p",
+        rubric="r",
+        target_attrs=["x"],
+        # model omitted on purpose
+    )
+    assert spec.model == "deepseek/deepseek-r1-distill:free"
+
+
+def test_model_unset_and_env_unset_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No per-probe model AND no env default = error at YAML parse
+    time, not later at probe-call time. Catches misconfigured
+    suites before they consume any LLM calls."""
+    monkeypatch.delenv("EVAL_JUDGE_MODEL", raising=False)
+    with pytest.raises(ValidationError, match="EVAL_JUDGE_MODEL"):
+        LlmJudgeSpec(
+            probe_id="p",
+            rubric="r",
+            target_attrs=["x"],
+        )
+
+
+def test_forbidden_family_check_uses_env_derived_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The forbidden-family list reads AGENT_PRIMARY_MODEL and
+    AGENT_POLICY_MODEL at validator time. Swap the env, the
+    forbidden list moves with it. This test confirms the env-
+    driven derivation: with anthropic/ as the primary, anthropic/
+    becomes forbidden; with openai/ NOT in either env var, openai/
+    is now allowed."""
+    monkeypatch.setenv("AGENT_PRIMARY_MODEL", "anthropic/claude-sonnet:free")
+    monkeypatch.setenv("AGENT_POLICY_MODEL", "anthropic/claude-haiku:free")
+    # anthropic/ should now be forbidden
+    with pytest.raises(ValidationError, match="forbidden family"):
+        LlmJudgeSpec(
+            probe_id="p",
+            rubric="r",
+            target_attrs=["x"],
+            model="anthropic/claude-opus:free",
+        )
+    # openai/ is no longer matched by either env var, so it's accepted
+    spec = LlmJudgeSpec(
+        probe_id="p",
+        rubric="r",
+        target_attrs=["x"],
+        model="openai/gpt-4-turbo",
+    )
+    assert spec.model == "openai/gpt-4-turbo"
+
+
 # ---------------------------------------------------------------------------
 # Probe behavior
 # ---------------------------------------------------------------------------

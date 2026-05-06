@@ -53,6 +53,7 @@ leaf; framework swap touches Layer 4 only).
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Annotated, Any, Literal, Union, get_args
 
@@ -78,19 +79,40 @@ ProbeKind = Literal[
 ]
 
 
-# Model-family prefixes that are NOT allowed for the eval-judge.
-# These cover the families used by stages of the agent under test
-# (primary narrative, in-agent constitution gate, repeat detector).
-# Reusing the same family for the eval judge causes preference
-# leakage (ICLR 2026: same/related model families used as
-# generator + judge produce systematic 'judge agrees with itself'
-# bias). The validator catches this at YAML load time so cases
-# can't accidentally regress into the same-family case.
-#
-# When the agent's stage models change (`agent_service/llm.py`),
-# this list moves with them. Today: primary uses nvidia/, in-agent
-# judge uses openai/. Pick a third family for evals.
-_LLM_JUDGE_FORBIDDEN_FAMILIES: tuple[str, ...] = ("nvidia/", "openai/")
+# Env vars that drive the agent's stage models. The eval-judge
+# forbidden-family list is derived from these at validation time
+# so production and the validator share one source of truth: swap
+# AGENT_PRIMARY_MODEL or AGENT_POLICY_MODEL in .env, the validator
+# picks up the new family on the next process start. No manual
+# sync between llm.py and schema.py.
+_AGENT_STAGE_MODEL_ENV_VARS: tuple[str, ...] = (
+    "AGENT_PRIMARY_MODEL",
+    "AGENT_POLICY_MODEL",
+)
+
+
+def _judge_forbidden_families() -> tuple[str, ...]:
+    """Family prefixes that the eval-judge MUST NOT use, derived
+    from the env vars naming the agent's stage models.
+
+    Reusing the same family for the eval judge causes preference
+    leakage (ICLR 2026: same/related model families used as
+    generator + judge produce systematic 'judge agrees with
+    itself' bias). The validator below uses this list to reject
+    any judge model whose family-prefix matches.
+
+    Reads env on every call rather than caching at import time so
+    a process started before .env loaded (e.g. a stray subprocess)
+    still picks up the right list once env is available. The cost
+    is one os.environ lookup per validator invocation, which is
+    negligible compared to anything else the validator does.
+    """
+    families: set[str] = set()
+    for var in _AGENT_STAGE_MODEL_ENV_VARS:
+        model_id = os.environ.get(var, "")
+        if "/" in model_id:
+            families.add(model_id.split("/", 1)[0] + "/")
+    return tuple(sorted(families))
 
 # Recorded on every run so cross-run comparisons can detect a swap
 # that might have shifted what passes. Only `framework_free` is
@@ -208,16 +230,15 @@ class LlmJudgeSpec(_ProbeSpecBase):
 
     Two design rules baked into the spec:
 
-    1. **Forbidden judge model families.** `model` must NOT begin
-       with any prefix in `_LLM_JUDGE_FORBIDDEN_FAMILIES`. Using the
-       same family as any stage of the agent under test causes
-       preference leakage (the judge biases toward agreeing with
-       its own family). The agent currently uses nvidia/ for the
-       primary and openai/ for the in-agent constitution gate, so
-       the eval judge MUST use a third family
-       (e.g. `openrouter/owl-alpha`,
-       `qwen/qwen-2.5-72b-instruct:free`,
-       `deepseek/deepseek-r1-distill-llama-70b:free`).
+    1. **Forbidden judge model families, env-derived.** `model`
+       must NOT begin with any family-prefix returned by
+       `_judge_forbidden_families()`, which reads the same env
+       vars (AGENT_PRIMARY_MODEL, AGENT_POLICY_MODEL) that drive
+       the agent's stage models in `agent_service/llm.py`. Using
+       the same family as any stage of the agent under test
+       causes preference leakage (judge biases toward agreeing
+       with its own family). Swap a stage model in .env, the
+       forbidden list updates automatically; no manual sync.
 
     2. **Multiple span attrs in one probe.** `target_attrs` is a
        list, not a single attr. Outcome-mode cases pass one entry
@@ -226,6 +247,14 @@ class LlmJudgeSpec(_ProbeSpecBase):
        judge can audit the agent's full pipeline including its own
        internal judges. The rubric references attribute names
        directly so the case author controls what the judge weighs.
+
+    3. **`model` is optional; falls back to EVAL_JUDGE_MODEL.**
+       Most cases inherit the suite-level default from .env so
+       there's no per-probe repetition. Set `model:` explicitly
+       only when the case needs to override (e.g. A/B comparing
+       two judges in one suite). The validator resolves the env
+       var at parse time and stores the resolved string, so
+       `spec.model` is always concrete at runtime.
 
     Use sparingly. Deterministic probes (claim_grounded_in,
     structural gate_passed) are strictly more reliable for what
@@ -252,13 +281,22 @@ class LlmJudgeSpec(_ProbeSpecBase):
             "for trajectory-mode."
         ),
     )
-    model: str = Field(
+    model: str | None = Field(
+        default=None,
+        # validate_default=True makes the resolve-and-check validator
+        # below run even when the YAML omits `model:` and pydantic
+        # uses the default. Without it, default-None fields skip
+        # validators in pydantic v2; the env-fallback path would
+        # never fire.
+        validate_default=True,
         description=(
-            "OpenRouter model id for the judge call. MUST NOT use a "
-            "family that the agent under test uses (forbidden: "
-            "nvidia/, openai/). Recommended: google/gemma-4-31b-it"
-            ":free, qwen/qwen-2.5-72b-instruct:free, or any other "
-            "third-family free-tier model."
+            "OpenRouter model id for the judge call. Defaults to the "
+            "EVAL_JUDGE_MODEL env var when omitted (the common case). "
+            "Set explicitly only to override the suite default for "
+            "this specific probe. MUST NOT use a family that any "
+            "stage of the agent under test uses; the validator "
+            "derives the forbidden list from AGENT_PRIMARY_MODEL "
+            "and AGENT_POLICY_MODEL at parse time and rejects matches."
         ),
     )
     pass_threshold: float = Field(
@@ -273,18 +311,37 @@ class LlmJudgeSpec(_ProbeSpecBase):
         ),
     )
 
-    @field_validator("model")
+    @field_validator("model", mode="after")
     @classmethod
-    def _model_not_in_forbidden_family(cls, v: str) -> str:
-        for prefix in _LLM_JUDGE_FORBIDDEN_FAMILIES:
+    def _resolve_and_check_model(cls, v: str | None) -> str:
+        """Resolve `model` to a concrete id (env-default if None)
+        and reject if its family-prefix matches any stage of the
+        agent under test (preference leakage prevention).
+
+        Returning a string from a `str | None` field is intentional
+        and pydantic-allowed: after this validator the field's
+        runtime value is always concrete, even though the YAML
+        type permits omission. This keeps probe code simple
+        (`spec.model` is always a usable id).
+        """
+        if v is None:
+            v = os.environ.get("EVAL_JUDGE_MODEL", "")
+            if not v:
+                raise ValueError(
+                    "llm_judge probe has no `model` set and "
+                    "EVAL_JUDGE_MODEL env var is unset; either set "
+                    "the env var (the common case) or pass `model:` "
+                    "explicitly in the YAML."
+                )
+        for prefix in _judge_forbidden_families():
             if v.startswith(prefix):
                 raise ValueError(
                     f"judge model {v!r} is in forbidden family "
-                    f"{prefix!r}: the agent under test already uses "
-                    f"this family for one of its stages, and reusing "
-                    f"the same family for the eval judge causes "
-                    f"preference leakage. Pick a different family "
-                    f"(e.g. google/, qwen/, deepseek/)."
+                    f"{prefix!r}: the agent under test uses this "
+                    f"family for one of its stages (per "
+                    f"AGENT_PRIMARY_MODEL / AGENT_POLICY_MODEL). "
+                    f"Reusing it for the eval judge causes "
+                    f"preference leakage; pick a different family."
                 )
         return v
 

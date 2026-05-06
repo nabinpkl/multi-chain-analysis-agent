@@ -142,6 +142,91 @@ def test_clean_run_with_no_inconclusive_renders_nothing(tmp_path: Path) -> None:
     assert render_report(report) == ""
 
 
+def test_model_delta_surfaces_when_judge_swap_changes_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the eval-judge model in env differs from what the
+    baseline recorded, the diff surfaces it as a model_delta. Not a
+    regression event; explanatory signal that helps the operator
+    attribute probe flips below to a model swap."""
+    _write_probe(tmp_path, case_id="c1", probe_id="p1", passed=True)
+    baseline = Baseline(
+        suite="s",
+        captured_at=datetime.now(timezone.utc),
+        git_sha="sha",
+        agent_version="0.1.0",
+        agent_primary_model="nvidia/nemotron-3-super-120b-a12b:free",
+        agent_policy_model="openai/gpt-oss-20b:free",
+        eval_judge_model="openrouter/owl-alpha",
+        results={"c1": {"p1": "pass"}},
+    )
+
+    # Operator swaps the judge in .env between mint and run.
+    monkeypatch.setenv("EVAL_JUDGE_MODEL", "qwen/qwen-2.5-72b-instruct:free")
+    monkeypatch.setenv("AGENT_PRIMARY_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+    monkeypatch.setenv("AGENT_POLICY_MODEL", "openai/gpt-oss-20b:free")
+
+    report = diff_against_baseline(baseline, tmp_path)
+    assert report.is_clean is True  # probes match; no regression
+    assert report.model_deltas == [
+        ("eval_judge_model", "openrouter/owl-alpha", "qwen/qwen-2.5-72b-instruct:free")
+    ]
+    rendered = render_report(report)
+    assert "model deltas" in rendered.lower()
+    assert "owl-alpha" in rendered
+    assert "qwen-2.5-72b" in rendered
+
+
+def test_no_model_delta_when_envs_match_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sanity: when env matches what the baseline recorded, no
+    model_deltas. Otherwise every clean run would surface a noise
+    delta."""
+    _write_probe(tmp_path, case_id="c1", probe_id="p1", passed=True)
+    baseline = Baseline(
+        suite="s",
+        captured_at=datetime.now(timezone.utc),
+        git_sha="sha",
+        agent_version="0.1.0",
+        agent_primary_model="nvidia/nemotron-3-super-120b-a12b:free",
+        agent_policy_model="openai/gpt-oss-20b:free",
+        eval_judge_model="openrouter/owl-alpha",
+        results={"c1": {"p1": "pass"}},
+    )
+    monkeypatch.setenv("AGENT_PRIMARY_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+    monkeypatch.setenv("AGENT_POLICY_MODEL", "openai/gpt-oss-20b:free")
+    monkeypatch.setenv("EVAL_JUDGE_MODEL", "openrouter/owl-alpha")
+
+    report = diff_against_baseline(baseline, tmp_path)
+    assert report.is_clean is True
+    assert report.model_deltas == []
+    assert render_report(report) == ""
+
+
+def test_old_baseline_without_model_provenance_does_not_false_alarm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Baselines minted before the model-provenance fields existed
+    have empty strings for those fields. The diff must NOT report
+    a model_delta in that case (it has no prior value to compare).
+    Backward-compat for already-committed baselines."""
+    _write_probe(tmp_path, case_id="c1", probe_id="p1", passed=True)
+    baseline = Baseline(
+        suite="s",
+        captured_at=datetime.now(timezone.utc),
+        git_sha="sha",
+        agent_version="0.1.0",
+        # Old baseline: model-provenance fields default to empty strings
+        results={"c1": {"p1": "pass"}},
+    )
+    monkeypatch.setenv("EVAL_JUDGE_MODEL", "qwen/qwen-2.5-72b-instruct:free")
+
+    report = diff_against_baseline(baseline, tmp_path)
+    assert report.model_deltas == []  # no comparison possible
+    assert report.is_clean is True
+
+
 def test_persist_baseline_round_trip(tmp_path: Path) -> None:
     """persist_baseline + load via Baseline.model_validate_json
     should round-trip cleanly. Catches regressions where the JSON

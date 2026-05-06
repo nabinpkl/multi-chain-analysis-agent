@@ -57,6 +57,18 @@ class Baseline(BaseModel):
     `results` is a nested dict: `case_id -> probe_id -> outcome`.
     Stable JSON shape (sorted keys, one line per (case, probe) once
     re-serialized) makes git diffs easy to read.
+
+    Model-provenance fields (`agent_primary_model`,
+    `agent_policy_model`, `eval_judge_model`) record which models
+    produced this baseline. The diff surfaces deltas between
+    baseline and current models so the operator can attribute
+    probe flips to model swaps vs genuine agent regressions. This
+    is the industry-current pattern (verified May 2026 against
+    LLMOps observability guides); per-model baseline files were
+    considered and rejected as over-engineered for our scale.
+    Defaults are empty strings for backward-compat with baselines
+    minted before this field existed; `eval-baseline` always
+    populates them on fresh mints.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -65,6 +77,9 @@ class Baseline(BaseModel):
     captured_at: datetime
     git_sha: str
     agent_version: str
+    agent_primary_model: str = ""
+    agent_policy_model: str = ""
+    eval_judge_model: str = ""
     results: dict[str, dict[str, ProbeOutcome]]
 
 
@@ -96,13 +111,23 @@ class RegressionReport(BaseModel):
     newly_passing: list[tuple[str, str]] = Field(default_factory=list)
     schema_deltas: list[tuple[str, str, str]] = Field(default_factory=list)
     inconclusive: list[tuple[str, str, str]] = Field(default_factory=list)
-    # schema_deltas tuple shape: (case_id, probe_id, "added"|"removed")
-    # inconclusive tuple shape:  (case_id, probe_id, error_summary)
+    model_deltas: list[tuple[str, str, str]] = Field(default_factory=list)
+    # schema_deltas tuple shape:  (case_id, probe_id, "added"|"removed")
+    # inconclusive tuple shape:   (case_id, probe_id, error_summary)
+    # model_deltas tuple shape:   (model_role, baseline_value, current_value)
+    #
     # Inconclusive entries are NOT a regression event; they are
     # surfaced so the operator knows which probes were suppressed
     # and can re-run if the suppression looks wrong (e.g. the trace
     # shows a non-transient terminal failure that infra_health
     # mis-classified).
+    #
+    # Model deltas are NOT a regression event either; they are an
+    # explanatory signal. When a probe flipped AND the relevant
+    # model changed since baseline mint, the operator sees both
+    # facts and decides whether the flip is "swap-induced, expected"
+    # or "real regression that happens to coincide with a swap".
+    # Render output groups them so the relationship is visible.
 
     @property
     def is_clean(self) -> bool:
@@ -170,6 +195,11 @@ def build_baseline_from_run(
     separate because RunMetadata persists eagerly during the run
     and would force a circular-dependency on baselines.
 
+    Model-provenance fields are populated from the same env vars
+    `agent_service/llm.py` reads at run time. Empty strings if any
+    var is unset; the baseline diff will treat empty-on-baseline
+    as "no comparison" rather than firing a model-delta alarm.
+
     Inconclusive entries from `_walk_run_results` are intentionally
     discarded here: a baseline records the contract, and an
     inconclusive run has no contract for those probes. The
@@ -177,12 +207,17 @@ def build_baseline_from_run(
     baseline from a run with any inconclusive probes (without
     --force), so by the time we reach this function the inconclusive
     list is expected to be empty in normal use."""
+    import os
+
     results, _inconclusive = _walk_run_results(run_root)
     return Baseline(
         suite=suite,
         captured_at=datetime.now(timezone.utc),
         git_sha=git_sha,
         agent_version=agent_version,
+        agent_primary_model=os.environ.get("AGENT_PRIMARY_MODEL", ""),
+        agent_policy_model=os.environ.get("AGENT_POLICY_MODEL", ""),
+        eval_judge_model=os.environ.get("EVAL_JUDGE_MODEL", ""),
         results=results,
     )
 
@@ -190,9 +225,9 @@ def build_baseline_from_run(
 def diff_against_baseline(baseline: Baseline, run_root: Path) -> RegressionReport:
     """Pure pass/fail diff of a completed run against the committed
     baseline. Returns a RegressionReport with three orthogonal
-    delta sets plus an inconclusive list. Numeric `observed`
-    fields and `score` are intentionally not part of the diff;
-    see module docstring.
+    delta sets plus an inconclusive list and a model-deltas list.
+    Numeric `observed` fields and `score` are intentionally not
+    part of the diff; see module docstring.
 
     Inconclusive probes are excluded from the pass/fail diff
     entirely. They are NOT counted as schema deltas (because the
@@ -201,8 +236,31 @@ def diff_against_baseline(baseline: Baseline, run_root: Path) -> RegressionRepor
     A baseline that contained pass for a probe that ran
     inconclusive in this run produces neither a `new_failures` nor
     a `newly_passing` entry: the diff has no signal to compare.
+
+    Model deltas are computed by comparing the baseline's recorded
+    model identities (agent_primary_model, agent_policy_model,
+    eval_judge_model) against the current process's env vars.
+    They are NOT regression events; they are explanatory signal
+    for attributing probe flips. An empty string on either side
+    (typically an old baseline minted before model-provenance
+    fields existed) suppresses the comparison for that role.
     """
+    import os
+
     current, inconclusive = _walk_run_results(run_root)
+    model_deltas: list[tuple[str, str, str]] = []
+    for role, env_var, baseline_value in (
+        ("agent_primary_model", "AGENT_PRIMARY_MODEL", baseline.agent_primary_model),
+        ("agent_policy_model", "AGENT_POLICY_MODEL", baseline.agent_policy_model),
+        ("eval_judge_model", "EVAL_JUDGE_MODEL", baseline.eval_judge_model),
+    ):
+        current_value = os.environ.get(env_var, "")
+        if (
+            baseline_value
+            and current_value
+            and baseline_value != current_value
+        ):
+            model_deltas.append((role, baseline_value, current_value))
 
     new_failures: list[tuple[str, str]] = []
     newly_passing: list[tuple[str, str]] = []
@@ -244,6 +302,7 @@ def diff_against_baseline(baseline: Baseline, run_root: Path) -> RegressionRepor
         newly_passing=newly_passing,
         schema_deltas=schema_deltas,
         inconclusive=inconclusive,
+        model_deltas=model_deltas,
     )
 
 
@@ -262,11 +321,19 @@ def persist_baseline(baseline: Baseline, path: Path) -> None:
 def render_report(report: RegressionReport) -> str:
     """Plain-text report renderer for the CLI. Returns the empty
     string only when the diff is clean AND there are no
-    inconclusive probes (clean + inconclusive prints the
-    inconclusive list so the operator decides whether to re-run)."""
-    if report.is_clean and not report.inconclusive:
+    inconclusive probes AND no model deltas (any of the three
+    means there's something the operator should see)."""
+    if report.is_clean and not report.inconclusive and not report.model_deltas:
         return ""
     lines: list[str] = [f"regression report for suite '{report.suite}':"]
+    if report.model_deltas:
+        # Surface model deltas first because they explain probe
+        # flips below: if you swap the eval judge, expect llm_judge
+        # probes to flip; the operator should see the swap before
+        # they see the flips.
+        lines.append("  model deltas since baseline mint (may explain probe flips):")
+        for role, baseline_value, current_value in report.model_deltas:
+            lines.append(f"    {role}: {baseline_value} -> {current_value}")
     if report.new_failures:
         lines.append("  new failures (probe was passing, now fails):")
         for case, probe in report.new_failures:

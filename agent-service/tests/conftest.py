@@ -26,9 +26,15 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from pydantic_ai import Agent
 
-# Set a dummy AGENT_API_KEY before any agent_service module imports,
-# because `llm.py`'s module-level constructor errors if it's missing.
+# Set a dummy AGENT_API_KEY + the model-id env vars that
+# `llm.py` reads strict-mode. `setdefault` so a real .env (loaded
+# via `set dotenv-load := true` in the justfile for integration
+# scenarios) wins. Tests that need to assert on specific env
+# values can still monkeypatch.setenv(...) inside the test.
 os.environ.setdefault("AGENT_API_KEY", "test-dummy-key")
+os.environ.setdefault("AGENT_PRIMARY_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+os.environ.setdefault("AGENT_POLICY_MODEL", "openai/gpt-oss-20b:free")
+os.environ.setdefault("EVAL_JUDGE_MODEL", "openrouter/owl-alpha")
 
 # Disable OTel SDK before any agent_service module imports. The lifespan
 # handler calls init_otel(), which would otherwise spin up a real

@@ -570,6 +570,98 @@ the cheaper continuous-monitoring mode. Both shapes have prior art;
 both are now reachable from a single probe spec by `target_attrs`
 list length.
 
+## 2026-05-06 addendum 4: env-driven model config + baseline model
+provenance
+
+Rolls up two related concerns surfaced after addendum 3:
+
+1. **Model ids were repeated across files.** Pre-refactor: agent
+   stage model literals lived in `agent_service/llm.py`'s factory
+   functions; eval-judge forbidden-family list lived as a hardcoded
+   constant in `agent_service/evals/schema.py`; live case YAMLs
+   pinned the judge model id per-probe (5 places total counting
+   tests and fixtures). Manual sync was required when stage models
+   changed.
+
+2. **Baseline-vs-judge drift was unattributed.** A judge swap that
+   shifted llm_judge probe scores would register as a flat
+   regression in the baseline diff, indistinguishable from a real
+   agent regression. Industry research review (May 2026) confirmed
+   no mature solution exists; the closest pattern is "record model
+   identity in baseline records, surface mismatches in reports"
+   (LXT LLMOps 2026, Portkey observability 2026). Per-model baseline
+   files (the alternative) are not an established pattern.
+
+### Env-driven config
+
+Three env vars now drive the model wiring across production AND
+the eval substrate:
+
+| Env var | Read by | Purpose |
+|---|---|---|
+| AGENT_PRIMARY_MODEL | `llm.primary_model()` + `schema._judge_forbidden_families()` | Primary agent model; family added to eval-judge forbidden list |
+| AGENT_POLICY_MODEL | `llm.policy_model()` + `schema._judge_forbidden_families()` | Constitution + repeat-detector model; family added to eval-judge forbidden list |
+| EVAL_JUDGE_MODEL | `llm.judge_model()` + `LlmJudgeSpec._resolve_and_check_model()` | Default eval-judge model; case YAMLs inherit unless they override |
+
+The validator on `LlmJudgeSpec.model` is `mode="after"` with
+`validate_default=True` (load-bearing: pydantic v2 skips validators
+on default-None fields without it; we'd silently lose the env-
+fallback path). It resolves the env at YAML parse time and pins
+the resolved string into `spec.model` so probe code reads a
+concrete id at runtime.
+
+`schema.py` reads `os.environ` directly and does NOT import from
+`agent_service`. Layer 1 stays a leaf module per the original ADR.
+
+### Model provenance in Baseline + RegressionReport.model_deltas
+
+`Baseline` gains three fields (`agent_primary_model`,
+`agent_policy_model`, `eval_judge_model`) populated at mint time
+from the same env vars. `RegressionReport.model_deltas` is a list
+of `(role, baseline_value, current_value)` tuples computed when
+the diff runs; rendered first in the regression report so probe
+flips below can be attributed to the swap when both occur.
+
+Backward-compat: old baselines minted before these fields existed
+have empty strings as defaults. The diff treats empty-on-baseline
+as "no comparison" and suppresses model_delta entries for that
+role. Documented in `test_old_baseline_without_model_provenance_does_not_false_alarm`.
+
+### Three industry-pattern additions baked in
+
+Research review (2026-05-06) of:
+- Anthropic Engineering 2026-01-09 (Demystifying evals for AI agents)
+- Hamel Husain 2026-01-15 (Eval FAQ)
+- Braintrust 2026-01-25 (Best AI evaluation tools 2026)
+- TianPan 2026-02-07 (Evaluating AI Agents trajectories)
+- LangChain trajectory-evals docs
+- Promptfoo 2026-05-06 docs (--retry-errors flag)
+- arxiv 2604.15302 (Diagnosing LLM Judge Reliability)
+- arxiv 2504.17087 (Meta-judging multi-agent framework)
+- arxiv 2508.02994 (Agent-as-a-Judge)
+
+Three patterns the industry converges on, all baked in:
+
+1. **Boolean pass/fail with thresholds beats gradient scoring**
+   for stability. We already had `pass_threshold` per spec.
+2. **Record model identity with each evaluation.** Now in
+   `Baseline` + surfaced in regression report.
+3. **5-10% human spot-check** is the calibration floor when judge
+   probe count grows. Documented as operator discipline in
+   `evals/README.md` (no code enforcement; not load-bearing at our
+   2-probe scale).
+
+### What we deliberately did NOT add
+
+- **Per-model baseline files.** No industry precedent; over-
+  engineered at our scale. Single-baseline-with-provenance is the
+  pattern.
+- **Drift-tolerance scoring (gradient comparison with epsilon).**
+  Tolerance values would be arbitrary and themselves drift-prone.
+  Pass/fail with `pass_threshold` is the stable floor.
+- **Automated judge-model rotation.** Operator-driven via .env when
+  free-tier availability changes.
+
 ## References
 
 - ADR 13: Agent observability foundation (OpenTelemetry + Langfuse).

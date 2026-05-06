@@ -95,7 +95,6 @@
         - mcae.narrative.text
         - mcae.gate.verdict
         - mcae.gate.reason
-      model: "openrouter/owl-alpha"
       pass_threshold: 0.5
 
 - case_id: wallet_profile.unknown_wallet
