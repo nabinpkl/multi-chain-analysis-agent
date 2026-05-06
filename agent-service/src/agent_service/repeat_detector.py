@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent
 
 from agent_service.llm import policy_model
+from agent_service.llm_retry import with_provider_retry
 
 log = structlog.get_logger(__name__)
 
@@ -116,7 +117,10 @@ async def detect_repeat(
     user_prompt = _format_user_prompt(prior_questions, new_user_msg)
 
     try:
-        result = await agent.run(user_prompt)
+        result = await with_provider_retry(
+            lambda: agent.run(user_prompt),
+            label="repeat_detector",
+        )
     except Exception as e:  # noqa: BLE001
         log.warning("repeat_detector_call_failed", error=str(e))
         return RepeatDetectorOutcome.no_repeat("detector call failed")

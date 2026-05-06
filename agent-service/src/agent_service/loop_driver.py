@@ -92,6 +92,7 @@ from multichain.wire.shared.v1 import provenance_pb2
 from agent_service.agent import AgentDeps, EmitClaimInput, ToolCallRecord
 from agent_service.boundary import build_context_block
 from agent_service.diff import diff_outputs, spec_for
+from agent_service.llm_retry import with_provider_retry
 from agent_service.policy.binding_store import PrimitiveBindingStore
 from agent_service.policy import constitution as constitution_module
 from agent_service.policy import structural as structural_module
@@ -568,7 +569,10 @@ async def run_turn(
                     "Progress",
                     sse_pb2.Progress(phase="drafting", detail="primary model"),
                 )
-                result = await handles.primary_agent.run(user_msg, **run_kwargs)
+                result = await with_provider_retry(
+                    lambda: handles.primary_agent.run(user_msg, **run_kwargs),
+                    label="primary_agent",
+                )
             except Exception as e:  # noqa: BLE001
                 log.exception("primary_agent_run_failed", session_id=session_id)
                 yield _emit_error(e, debug_public=handles.debug_public)

@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent
 
 from agent_service.llm import policy_model
+from agent_service.llm_retry import with_provider_retry
 
 log = structlog.get_logger(__name__)
 
@@ -124,7 +125,10 @@ async def judge_claim(
     }
     user_prompt = json.dumps(payload, separators=(",", ":"))
     try:
-        result = await agent.run(user_prompt, deps=_Deps())
+        result = await with_provider_retry(
+            lambda: agent.run(user_prompt, deps=_Deps()),
+            label="constitution_claim",
+        )
         return result.output
     except Exception as e:  # noqa: BLE001
         log.warning("constitution_claim_call_failed", error=str(e))
@@ -152,7 +156,10 @@ async def judge_narrative(
     }
     user_prompt = json.dumps(payload, separators=(",", ":"))
     try:
-        result = await agent.run(user_prompt, deps=_Deps())
+        result = await with_provider_retry(
+            lambda: agent.run(user_prompt, deps=_Deps()),
+            label="constitution_narrative",
+        )
         return result.output
     except Exception as e:  # noqa: BLE001
         log.warning("constitution_narrative_call_failed", error=str(e))
