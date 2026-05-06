@@ -128,6 +128,7 @@ async def judge_claim(
         result = await with_provider_retry(
             lambda: agent.run(user_prompt, deps=_Deps()),
             label="constitution_claim",
+            per_attempt_timeout_s=30.0,
         )
         return result.output
     except Exception as e:  # noqa: BLE001
@@ -159,6 +160,7 @@ async def judge_narrative(
         result = await with_provider_retry(
             lambda: agent.run(user_prompt, deps=_Deps()),
             label="constitution_narrative",
+            per_attempt_timeout_s=30.0,
         )
         return result.output
     except Exception as e:  # noqa: BLE001

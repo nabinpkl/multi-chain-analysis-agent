@@ -1,0 +1,23 @@
+- case_id: no_matching_span.constitution_skipped.001
+  suite: schema_fixtures.no_matching_span
+  inputs:
+    userQuestion: "who are you"
+    context:
+      focus:
+        wallet:
+          id: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+    switches:
+      stayInRole: false
+  metadata:
+    note: |-
+      With stayInRole=false, the loop driver short-circuits the
+      narrative-constitution gate; the span should not exist in the
+      trace at all. Pins that the switch actually does something.
+  probes:
+    - probe_id: narrative-constitution-gate-absent
+      kind: no_matching_span
+      span_name: mcae.gate.narrative_constitution
+
+    - probe_id: constitution-claim-gate-absent
+      kind: no_matching_span
+      span_name: mcae.gate.constitution

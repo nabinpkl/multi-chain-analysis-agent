@@ -1,0 +1,16 @@
+{
+  "run_id": "120350aab5684822",
+  "case_id": "community_summary.basic",
+  "probe_id": "no-error-on-turn-root",
+  "trace_id": "faa3c4285d64d557c04026f4e0479a0c",
+  "passed": true,
+  "inconclusive": false,
+  "score": null,
+  "observed": {
+    "matched_span_count": 0,
+    "status_filter": "error"
+  },
+  "error": null,
+  "started_at": "2026-05-06T07:32:57.621114Z",
+  "finished_at": "2026-05-06T07:32:57.634426Z"
+}

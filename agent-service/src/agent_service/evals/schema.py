@@ -77,6 +77,8 @@ ProbeKind = Literal[
     "llm_call_used_model",
     "llm_judge",
     "turn_attribute_equals",
+    "slowest_call_under_ms",
+    "no_matching_span",
 ]
 
 
@@ -398,6 +400,78 @@ class TurnAttributeEqualsSpec(_ProbeSpecBase):
     )
 
 
+class NoMatchingSpanSpec(_ProbeSpecBase):
+    """Pass if NO span by `span_name` exists in the trace (and, if
+    `attrs` is set, no span with both the name AND all listed
+    attribute matches). Direct mirror of `has_matching_span`,
+    inverted assertion.
+
+    Lights up the negative path that switches-off cases need: e.g.
+    `stayInRole=false` should mean no `mcae.gate.constitution` span
+    is emitted on the turn. `has_matching_span` cannot express that;
+    `no_span_with_status` requires a status filter and so doesn't
+    cover plain absence. Without this probe, switches-off cases
+    can't prove the switch actually does something.
+    """
+
+    kind: Literal["no_matching_span"] = "no_matching_span"
+    span_name: str
+    attrs: dict[str, str] = Field(default_factory=dict)
+
+
+class SlowestCallUnderMsSpec(_ProbeSpecBase):
+    """Pass if the slowest LLM call or tool call in the trace is under
+    `ms` milliseconds. The probe surfaces the offender's identity in
+    `observed` so a failure tells you *which* model or tool stalled,
+    not just that something stalled.
+
+    Picks one of two span shapes via `call_kind`:
+
+    - `llm`: pydantic_ai-emitted `chat <model>` spans. The
+      `gen_ai.request.model` attribute identifies the offending
+      model when the probe fails.
+    - `tool`: pydantic_ai-emitted `running tool` spans. The
+      `gen_ai.tool.name` attribute identifies the offending tool.
+
+    The diagnostic angle is the load-bearing piece. Existing
+    `span_latency_p50_under` answers "is the median fine"; this
+    probe answers "is the worst one fine, and which one was it".
+    Useful gate against free-tier provider stalls (one slow LLM
+    hop is what the per-attempt timeout in `with_provider_retry`
+    is meant to catch; this probe pins the threshold so a silent
+    regression doesn't slip past the SSE-stream cap).
+
+    Vacuously-passes pitfall: a trace with zero matching spans
+    fails with `error='no matching <kind> spans found'`. A turn
+    that legitimately calls no tools (refusal case) should not
+    use `call_kind=tool`; use `turn_attribute_equals` against
+    `mcae.turn.tool_calls` instead.
+    """
+
+    kind: Literal["slowest_call_under_ms"] = "slowest_call_under_ms"
+    call_kind: Literal["llm", "tool"] = Field(
+        description=(
+            "Which span family to scan. `llm` matches `chat %` spans "
+            "via SpanName LIKE pattern; `tool` matches `running tool%` "
+            "spans. The two families have different attribute keys "
+            "for the offender's identity (gen_ai.request.model vs "
+            "gen_ai.tool.name), so the probe handles them separately."
+        ),
+    )
+    ms: int = Field(
+        gt=0,
+        description=(
+            "Threshold the slowest matching span must come in under. "
+            "For LLM calls on free-tier OpenRouter, ~60000 (60s) is "
+            "the practical ceiling before the per-attempt timeout in "
+            "`with_provider_retry` would have aborted the call. For "
+            "tool calls, ~10000 (10s) is generous; primitive HTTP "
+            "round-trips to the Rust service should complete in tens "
+            "of ms when warm."
+        ),
+    )
+
+
 # Discriminated union: pydantic dispatches on `kind` at parse time,
 # so a YAML case with `kind: claim_grounded_in` and a missing
 # `source_kind` fails immediately with a precise error pointing to
@@ -413,6 +487,8 @@ ProbeSpec = Annotated[
         LlmCallUsedModelSpec,
         LlmJudgeSpec,
         TurnAttributeEqualsSpec,
+        SlowestCallUnderMsSpec,
+        NoMatchingSpanSpec,
     ],
     Field(discriminator="kind"),
 ]

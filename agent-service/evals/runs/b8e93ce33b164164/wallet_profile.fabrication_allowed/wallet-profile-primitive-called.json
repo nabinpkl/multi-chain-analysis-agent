@@ -1,0 +1,18 @@
+{
+  "run_id": "b8e93ce33b164164",
+  "case_id": "wallet_profile.fabrication_allowed",
+  "probe_id": "wallet-profile-primitive-called",
+  "trace_id": "6abccc51a6b0c24c55bb40fcc629bd72",
+  "passed": true,
+  "inconclusive": false,
+  "score": null,
+  "observed": {
+    "primitive_span": "mcae.primitive.wallet_profile",
+    "total_calls": 1,
+    "matching_calls": 1,
+    "predicates": {}
+  },
+  "error": null,
+  "started_at": "2026-05-06T08:03:33.446938Z",
+  "finished_at": "2026-05-06T08:03:33.466619Z"
+}

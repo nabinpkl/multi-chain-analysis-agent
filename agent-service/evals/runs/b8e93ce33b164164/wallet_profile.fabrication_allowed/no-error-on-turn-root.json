@@ -1,0 +1,16 @@
+{
+  "run_id": "b8e93ce33b164164",
+  "case_id": "wallet_profile.fabrication_allowed",
+  "probe_id": "no-error-on-turn-root",
+  "trace_id": "6abccc51a6b0c24c55bb40fcc629bd72",
+  "passed": true,
+  "inconclusive": false,
+  "score": null,
+  "observed": {
+    "matched_span_count": 0,
+    "status_filter": "error"
+  },
+  "error": null,
+  "started_at": "2026-05-06T08:03:33.481417Z",
+  "finished_at": "2026-05-06T08:03:33.491717Z"
+}

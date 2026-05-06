@@ -120,6 +120,7 @@ async def detect_repeat(
         result = await with_provider_retry(
             lambda: agent.run(user_prompt),
             label="repeat_detector",
+            per_attempt_timeout_s=20.0,
         )
     except Exception as e:  # noqa: BLE001
         log.warning("repeat_detector_call_failed", error=str(e))

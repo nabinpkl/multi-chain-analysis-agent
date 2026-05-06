@@ -1,0 +1,16 @@
+{
+  "run_id": "120350aab5684822",
+  "case_id": "community_summary.unknown_community",
+  "probe_id": "claims-grounded-in-primitive",
+  "trace_id": "2123a7748dbda3e80a5d647e6aebcb13",
+  "passed": true,
+  "inconclusive": false,
+  "score": null,
+  "observed": {
+    "claim_count": 0,
+    "note": "zero claims to check; pair with has_matching_span if a claim is required"
+  },
+  "error": null,
+  "started_at": "2026-05-06T07:34:07.539329Z",
+  "finished_at": "2026-05-06T07:34:07.555865Z"
+}

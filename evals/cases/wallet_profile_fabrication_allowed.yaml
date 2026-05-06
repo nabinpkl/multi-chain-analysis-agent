@@ -1,0 +1,60 @@
+# Switches-off case for `dontFabricate`. The structural gate runs
+# every turn (line 654 in loop_driver.py); it's the *retraction*
+# that's gated on dont_fabricate. With dontFabricate=false, even a
+# claim with mismatched chip values must not be retracted by the
+# structural gate; the gate's job is to observe, not to enforce.
+#
+# Wallet pick: the empty-data wallet (4Mh7Gm... 0 edges) is the
+# input most likely to tempt the LLM into fabricating chip values
+# (community memberships, token activity, etc.) since there's no
+# real data to ground them. With dontFabricate=true (the
+# wallet_profile.unknown_wallet case), structural retracts these.
+# With dontFabricate=false (this case), retraction must NOT fire,
+# even if struct_err returns non-None internally.
+#
+# This pins the documented switch behavior. If a future refactor
+# accidentally couples the structural gate's retract path to a
+# different switch, or always-retracts on chip mismatch regardless,
+# this probe surfaces it.
+
+- case_id: wallet_profile.fabrication_allowed
+  suite: wallet_profile_fabrication_allowed
+  inputs:
+    userQuestion: "Profile this wallet."
+    context:
+      focus:
+        wallet:
+          id: "4Mh7GmBzFY6RqdR5Q8oqkGW7vZxjwkKfEcN7JYY9p1xA"
+    switches:
+      stayInRole: true
+      dontFabricate: false
+  probes:
+    - probe_id: turn-root-span-present
+      kind: has_matching_span
+      span_name: mcae.turn
+
+    - probe_id: turn-tagged-as-eval
+      kind: has_matching_span
+      span_name: mcae.turn
+      attrs:
+        mcae.run.type: eval
+
+    - probe_id: wallet-profile-primitive-called
+      kind: tool_called_with_args
+      tool_name: wallet_profile
+
+    # Load-bearing assertion. The structural gate may emit (when
+    # claims are emitted), but with dontFabricate=false it must NOT
+    # carry verdict=retracted on any span. Vacuous if zero claims
+    # were emitted; meaningful if the agent did emit something on
+    # empty-data input.
+    - probe_id: structural-gate-never-retracts
+      kind: no_matching_span
+      span_name: mcae.gate.structural
+      attrs:
+        mcae.gate.verdict: retracted
+
+    - probe_id: no-error-on-turn-root
+      kind: no_span_with_status
+      span_name: mcae.turn
+      status: error

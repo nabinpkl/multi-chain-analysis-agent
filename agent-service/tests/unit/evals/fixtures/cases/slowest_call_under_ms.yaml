@@ -1,0 +1,24 @@
+- case_id: slowest_call_under_ms.llm.001
+  suite: schema_fixtures.slowest_call_under_ms
+  inputs:
+    userQuestion: "who are you"
+    context:
+      focus:
+        wallet:
+          id: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+  metadata:
+    note: |-
+      The 60s threshold is the per-attempt timeout configured in
+      with_provider_retry for primary_agent. A failure here means a
+      single LLM hop crossed the timeout and the retry kicked in;
+      observed.slowest_identity names the offending model.
+  probes:
+    - probe_id: no-llm-hop-stalled-past-timeout
+      kind: slowest_call_under_ms
+      call_kind: llm
+      ms: 60000
+
+    - probe_id: no-tool-call-stalled
+      kind: slowest_call_under_ms
+      call_kind: tool
+      ms: 10000

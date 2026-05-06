@@ -1,0 +1,12 @@
+{
+  "run_id": "b8e93ce33b164164",
+  "started_at": "2026-05-06T08:03:08.909472Z",
+  "finished_at": "2026-05-06T08:03:33.503694Z",
+  "git_sha": "1b3de41a158e",
+  "agent_version": "0.1.0",
+  "framework_adapter": "framework_free",
+  "case_count": 1,
+  "probe_count": 5,
+  "pass_count": 5,
+  "inconclusive_count": 0
+}

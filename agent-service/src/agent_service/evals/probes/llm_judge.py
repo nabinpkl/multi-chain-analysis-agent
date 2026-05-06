@@ -238,6 +238,7 @@ async def run(
             result = await with_provider_retry(
                 lambda: agent.run(user_prompt),
                 label=f"llm_judge:{spec.probe_id}",
+                per_attempt_timeout_s=45.0,
             )
         except Exception as e:  # noqa: BLE001
             log.warning(

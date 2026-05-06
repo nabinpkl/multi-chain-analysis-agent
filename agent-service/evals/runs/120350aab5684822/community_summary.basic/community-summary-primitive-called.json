@@ -1,0 +1,18 @@
+{
+  "run_id": "120350aab5684822",
+  "case_id": "community_summary.basic",
+  "probe_id": "community-summary-primitive-called",
+  "trace_id": "faa3c4285d64d557c04026f4e0479a0c",
+  "passed": true,
+  "inconclusive": false,
+  "score": null,
+  "observed": {
+    "primitive_span": "mcae.primitive.community_summary",
+    "total_calls": 1,
+    "matching_calls": 1,
+    "predicates": {}
+  },
+  "error": null,
+  "started_at": "2026-05-06T07:32:57.593304Z",
+  "finished_at": "2026-05-06T07:32:57.604467Z"
+}

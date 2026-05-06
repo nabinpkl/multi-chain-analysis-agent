@@ -96,6 +96,64 @@ async def test_non_retryable_propagates_immediately() -> None:
 
 
 @pytest.mark.asyncio
+async def test_per_attempt_timeout_triggers_retry() -> None:
+    """A first-attempt hang past `per_attempt_timeout_s` raises
+    `asyncio.TimeoutError` (in `_RETRYABLE`), which trips the retry.
+    Second attempt completes fast; final result is the success value.
+    Pins the documented "stuck call gets a second chance" behavior."""
+    calls = 0
+
+    async def factory() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await asyncio.sleep(10)  # blow past the timeout
+            return "never"
+        return "ok"
+
+    result = await with_provider_retry(
+        factory, label="t", backoff_s=0, per_attempt_timeout_s=0.05
+    )
+    assert result == "ok"
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_per_attempt_timeout_raises_after_two_timeouts() -> None:
+    """If both attempts time out, the final asyncio.TimeoutError
+    propagates. Caller sees a clean failure, not a hang."""
+    calls = 0
+
+    async def factory() -> str:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(10)
+        return "never"
+
+    with pytest.raises(asyncio.TimeoutError):
+        await with_provider_retry(
+            factory, label="t", backoff_s=0, per_attempt_timeout_s=0.05
+        )
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_no_timeout_when_per_attempt_timeout_s_is_none() -> None:
+    """Backward compat: callers that don't pass `per_attempt_timeout_s`
+    get the un-timed-out behavior (a long sleep completes normally).
+    Catches the regression where the default flips to a finite value
+    and silently breaks existing call sites."""
+    async def factory() -> str:
+        # 0.1s is fine; the test would hang only if a default timeout
+        # were ALSO 0.1s, which it isn't (None).
+        await asyncio.sleep(0.1)
+        return "ok"
+
+    result = await with_provider_retry(factory, label="t", backoff_s=0)
+    assert result == "ok"
+
+
+@pytest.mark.asyncio
 async def test_factory_pattern_supports_re_invocation() -> None:
     """Confirms we accept a callable factory not a pre-built coroutine.
     A pre-built coroutine could not be re-awaited; this test catches

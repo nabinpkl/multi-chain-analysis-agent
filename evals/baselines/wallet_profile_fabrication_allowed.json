@@ -1,0 +1,18 @@
+{
+  "suite": "wallet_profile_fabrication_allowed",
+  "captured_at": "2026-05-06T08:04:48.585969Z",
+  "git_sha": "1b3de41a158e",
+  "agent_version": "0.1.0",
+  "agent_primary_model": "nvidia/nemotron-3-super-120b-a12b:free",
+  "agent_policy_model": "openai/gpt-oss-20b:free",
+  "eval_judge_model": "openrouter/owl-alpha",
+  "results": {
+    "wallet_profile.fabrication_allowed": {
+      "no-error-on-turn-root": "pass",
+      "structural-gate-never-retracts": "pass",
+      "turn-root-span-present": "pass",
+      "turn-tagged-as-eval": "pass",
+      "wallet-profile-primitive-called": "pass"
+    }
+  }
+}

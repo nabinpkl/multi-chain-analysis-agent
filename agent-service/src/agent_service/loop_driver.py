@@ -569,9 +569,15 @@ async def run_turn(
                     "Progress",
                     sse_pb2.Progress(phase="drafting", detail="primary model"),
                 )
+                # 75s per attempt covers a normal multi-tool turn
+                # (~25s today) with headroom for slow free-tier hops,
+                # while still failing fast enough that one stuck call
+                # gets a retry within the 180s SSE stream cap. Total
+                # worst-case budget: 75 + 1s backoff + 75 = 151s.
                 result = await with_provider_retry(
                     lambda: handles.primary_agent.run(user_msg, **run_kwargs),
                     label="primary_agent",
+                    per_attempt_timeout_s=75.0,
                 )
             except Exception as e:  # noqa: BLE001
                 log.exception("primary_agent_run_failed", session_id=session_id)

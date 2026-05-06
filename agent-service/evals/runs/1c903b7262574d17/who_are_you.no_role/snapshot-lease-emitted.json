@@ -1,0 +1,15 @@
+{
+  "run_id": "1c903b7262574d17",
+  "case_id": "who_are_you.no_role",
+  "probe_id": "snapshot-lease-emitted",
+  "trace_id": "48446a3426d0db68b37d39e81b259ba1",
+  "passed": true,
+  "inconclusive": false,
+  "score": null,
+  "observed": {
+    "matched_span_count": 1
+  },
+  "error": null,
+  "started_at": "2026-05-06T08:03:03.336406Z",
+  "finished_at": "2026-05-06T08:03:03.362934Z"
+}

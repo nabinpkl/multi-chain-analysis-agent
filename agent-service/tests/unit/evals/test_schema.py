@@ -78,6 +78,8 @@ _PROBE_KIND_FIXTURES = [
     ("llm_call_used_model.yaml", "llm_call_used_model"),
     ("llm_judge.yaml", "llm_judge"),
     ("turn_attribute_equals.yaml", "turn_attribute_equals"),
+    ("slowest_call_under_ms.yaml", "slowest_call_under_ms"),
+    ("no_matching_span.yaml", "no_matching_span"),
 ]
 
 
