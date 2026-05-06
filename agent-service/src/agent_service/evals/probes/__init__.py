@@ -36,6 +36,7 @@ from agent_service.evals.probes import (
     no_span_with_status,
     span_latency_p50_under,
     tool_called_with_args,
+    turn_attribute_equals,
 )
 
 # `Any` for spec because the dispatched function takes one of seven
@@ -52,6 +53,7 @@ _REGISTRY: dict[str, ProbeRunner] = {
     "no_span_with_status": no_span_with_status.run,
     "llm_call_used_model": llm_call_used_model.run,
     "llm_judge": llm_judge.run,
+    "turn_attribute_equals": turn_attribute_equals.run,
 }
 
 

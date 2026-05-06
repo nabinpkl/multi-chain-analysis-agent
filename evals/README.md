@@ -58,6 +58,7 @@ Field-name gotcha: `EntityRefWallet.id` (used in `inputs.context.focus`) and `Pr
 | `no_span_with_status(span_name, status)` | No span by name carries `error=true` (status="error") or matches "ok" |
 | `llm_call_used_model(model_name)` | Some `chat <model>` span has `gen_ai.request.model = model_name` |
 | `llm_judge(rubric, target_attrs, model, pass_threshold?)` | Judge model reads N span attrs, scores against rubric, passes if score ≥ threshold. See "LLM-as-judge probes" below. |
+| `turn_attribute_equals(attr, expected)` | Reads one attribute from the `mcae.turn` root span and asserts equality. Useful for turn-scope counts: `mcae.turn.tool_calls=0` for refusal cases, `mcae.turn.claims_emitted=1` when a case must emit exactly one claim. All values are strings on the wire (CH `Map(String, String)`); write integers as `"0"`, `"3"`. |
 
 Adding a new kind: append to `ProbeKind` Literal in `schema.py`, add `<kind>Spec` model, write `probes/<kind>.py` with an `async def run(spec, trace_id, ch, *, run_id, case_id) -> ProbeResult`, register in `probes/__init__.py`. The startup exhaustiveness checks fail loudly if any of those steps is skipped.
 

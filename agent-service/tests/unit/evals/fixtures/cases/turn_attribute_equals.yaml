@@ -1,0 +1,18 @@
+- case_id: turn_attribute_equals.tool_calls_zero.001
+  suite: schema_fixtures.turn_attribute_equals
+  inputs:
+    userQuestion: "who are you"
+    context:
+      focus:
+        wallet:
+          id: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+  probes:
+    - probe_id: zero-tool-calls-on-narrative-only-turn
+      kind: turn_attribute_equals
+      attr: mcae.turn.tool_calls
+      expected: "0"
+
+    - probe_id: run-type-marked-eval
+      kind: turn_attribute_equals
+      attr: mcae.run.type
+      expected: eval

@@ -76,6 +76,7 @@ ProbeKind = Literal[
     "no_span_with_status",
     "llm_call_used_model",
     "llm_judge",
+    "turn_attribute_equals",
 ]
 
 
@@ -357,6 +358,46 @@ class LlmJudgeSpec(_ProbeSpecBase):
         return v
 
 
+class TurnAttributeEqualsSpec(_ProbeSpecBase):
+    """Pass if the `mcae.turn` root span's named attribute equals
+    the expected value.
+
+    The `mcae.turn` span carries per-turn counts (tool_calls,
+    claims_emitted, claims_approved, narrative_chars, run.type,
+    user_question) that are useful invariants without being
+    implementation-detail-tight. Examples:
+
+      - turn_attribute_equals(attr=mcae.turn.tool_calls, expected="0")
+        for refusal cases that should not call any tool
+      - turn_attribute_equals(attr=mcae.turn.claims_emitted, expected="1")
+        when a case must emit exactly one claim
+      - turn_attribute_equals(attr=mcae.run.type, expected="eval")
+        equivalent to has_matching_span+attrs but reads more naturally
+
+    `expected` is a string because OTel SpanAttributes are stored
+    as `Map(LowCardinality(String), String)` in ClickHouse: integer
+    counts come back as their string representation (e.g. "0", "3").
+    Case authors write the string form they expect to see in CH.
+    """
+
+    kind: Literal["turn_attribute_equals"] = "turn_attribute_equals"
+    attr: str = Field(
+        description=(
+            "Span attribute key on `mcae.turn`, e.g. "
+            "`mcae.turn.tool_calls`, `mcae.turn.claims_emitted`, "
+            "`mcae.run.type`."
+        ),
+    )
+    expected: str = Field(
+        description=(
+            "Expected value as it appears in CH "
+            "`SpanAttributes[attr]`. All values are strings on the "
+            "wire (Map(LowCardinality(String), String)), so write "
+            "integers as their string form: '0', '1', '3'."
+        ),
+    )
+
+
 # Discriminated union: pydantic dispatches on `kind` at parse time,
 # so a YAML case with `kind: claim_grounded_in` and a missing
 # `source_kind` fails immediately with a precise error pointing to
@@ -371,6 +412,7 @@ ProbeSpec = Annotated[
         NoSpanWithStatusSpec,
         LlmCallUsedModelSpec,
         LlmJudgeSpec,
+        TurnAttributeEqualsSpec,
     ],
     Field(discriminator="kind"),
 ]
