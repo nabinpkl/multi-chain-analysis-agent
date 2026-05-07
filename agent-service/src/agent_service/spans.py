@@ -85,6 +85,14 @@ class Attrs:
     TURN_NARRATIVE_CHARS: Final = "mcae.turn.narrative_chars"
     RUN_TYPE: Final = "mcae.run.type"  # "production" | "eval" | "dev"
 
+    # Topical-rail rejection (set when a turn short-circuits before
+    # agent.run() because the user question hit `reject_if_unsafe_user
+    # _question`). Probes can assert `unsafe_input_rejected = "true"`
+    # to gate-test the boundary defense without needing to query
+    # narrative content. See boundary.py and #33 for context.
+    TURN_UNSAFE_INPUT_REJECTED: Final = "mcae.turn.unsafe_input_rejected"
+    TURN_UNSAFE_INPUT_PATTERN: Final = "mcae.turn.unsafe_input_pattern"
+
     # Gates (every mcae.gate.* span carries verdict + optional reason
     # and a version pin so eval probes can assert "constitution v4
     # passed", not just "the constitution gate passed today").

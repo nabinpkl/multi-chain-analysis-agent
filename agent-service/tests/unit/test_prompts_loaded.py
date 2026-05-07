@@ -63,3 +63,27 @@ def test_system_prompt_documents_emit_claim_tool():
     prompt. Catches accidental rename / removal."""
     sys = load_prompt("system_v4")
     assert "emit_claim" in sys
+
+
+def test_system_prompt_documents_user_question_topical_rail():
+    """#33 contract: the prompt teaches the model that the user's
+    free-text question is itself untrusted, that persona-swap and
+    fictional-game framings are out-of-domain, and that chat-
+    template tokens in user input are rejected at the boundary
+    before the model sees them. If any of these substrings
+    disappear, the boundary defense in `boundary.py`
+    (`reject_if_unsafe_user_question`) loses its paired model-side
+    guidance and the layered defense degrades to single-layer."""
+    sys = load_prompt("system_v4")
+    # Persona-swap rule is present.
+    assert "persona-swap" in sys or "persona swap" in sys, (
+        "Prompt no longer covers persona-swap framings; the "
+        "Layer-2 model-side defense for #33 is missing."
+    )
+    # Boundary-rejection rule is present (paired with the
+    # boundary.py `reject_if_unsafe_user_question` helper).
+    assert "rejected at the boundary" in sys, (
+        "Prompt no longer documents the boundary-rejection contract; "
+        "the model has no explicit rule to refuse the turn if the "
+        "boundary check ever has a hole."
+    )

@@ -90,7 +90,11 @@ from multichain.wire.agent.v1 import (
 from multichain.wire.shared.v1 import provenance_pb2
 
 from agent_service.agent import AgentDeps, EmitClaimInput, ToolCallRecord
-from agent_service.boundary import build_context_block
+from agent_service.boundary import (
+    UnsafeUserInputError,
+    build_context_block,
+    reject_if_unsafe_user_question,
+)
 from agent_service.diff import diff_outputs, spec_for
 from agent_service.llm_retry import with_provider_retry
 from agent_service.policy.binding_store import PrimitiveBindingStore
@@ -471,6 +475,73 @@ async def run_turn(
             # went into the SESSION_STARTED ledger row; ledger deletion
             # consolidated it into the span attribute set.
             turn_span.set_attribute(spans.Attrs.TURN_USER_QUESTION, request.user_question)
+
+            # ------ Topical rail: reject unsafe user input ------
+            # The user question is one of two untrusted-input slots
+            # (the other is `<external_data>` blocks from primitive
+            # outputs). Chat-template control tokens, closing
+            # pseudo-tags, and HTML script tags have zero legitimate
+            # use in the analyst-tool chat field, so we hard-reject
+            # at the boundary before agent.run() is ever invoked.
+            # Tool dispatch is impossible by construction on a
+            # rejected turn; the model never sees the malicious
+            # tokens. See boundary.py and #33 for the threat model
+            # this defends.
+            try:
+                reject_if_unsafe_user_question(request.user_question)
+            except UnsafeUserInputError as e:
+                rejection_text = (
+                    "Your message contained chat-template-style tokens "
+                    "or other non-natural-language patterns that aren't "
+                    "supported in this conversation. Please rephrase in "
+                    "plain English. I'm a read-only analyst agent for "
+                    "the Solana transaction graph; I can profile wallets, "
+                    "summarize communities, and look at on-chain transfers."
+                )
+                with _tracer.start_as_current_span(spans.NARRATIVE_EMITTED) as nar_span:
+                    nar_span.set_attribute(
+                        spans.Attrs.NARRATIVE_LENGTH_CHARS, len(rejection_text)
+                    )
+                    nar_span.set_attribute(
+                        spans.Attrs.NARRATIVE_ASSEMBLED_PROVENANCE_COUNT, 0
+                    )
+                    nar_span.set_attribute(spans.Attrs.NARRATIVE_TEXT, rejection_text)
+                    nar_span.set_attribute(
+                        spans.Attrs.NARRATIVE_VERDICT, spans.VERDICT_APPROVED
+                    )
+                    # Stamp the rejection reason on the turn span so
+                    # traces and probes can attribute the short-circuit
+                    # to a specific token shape rather than guessing
+                    # from the narrative text.
+                    turn_span.set_attribute(
+                        spans.Attrs.TURN_UNSAFE_INPUT_REJECTED, "true"
+                    )
+                    turn_span.set_attribute(
+                        spans.Attrs.TURN_UNSAFE_INPUT_PATTERN, e.pattern
+                    )
+                yield _frame(
+                    "Narrative",
+                    narrative_pb2.NarrativeWithRefs(
+                        text=rejection_text, provenance=[]
+                    ),
+                )
+                # Mirror the end-of-turn aggregate stamping at the
+                # bottom of the normal path so downstream eval probes
+                # see consistent turn-root attributes regardless of
+                # whether the turn was rejected or completed.
+                turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_EMITTED, 0)
+                turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_APPROVED, 0)
+                turn_span.set_attribute(spans.Attrs.TURN_TOOL_CALLS, 0)
+                turn_span.set_attribute(
+                    spans.Attrs.TURN_NARRATIVE_CHARS, len(rejection_text)
+                )
+                log.info(
+                    "user_input_rejected_at_boundary",
+                    session_id=session_id,
+                    pattern=e.pattern,
+                )
+                yield _terminal_done(session_id, session_started_at_ms)
+                return
 
             # ------ Repeat path (ship 4) ------
             if (
