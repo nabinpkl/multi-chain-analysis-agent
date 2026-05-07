@@ -73,10 +73,21 @@ impl RpcClient {
             return Err(RpcError::Fatal(format!("http {}", status)));
         }
 
-        let parsed: JsonRpcResponse<T> = resp
-            .json()
+        // Read the body as bytes (instead of resp.json::<T>) so we can
+        // surface the wire-size of each response. RPC-cost telemetry
+        // and a sanity check for "are getBlock responses still in the
+        // multi-MB range we measured". One allocation per call is the
+        // same cost `resp.json()` already paid internally; this just
+        // exposes the byte count.
+        let raw = resp
+            .bytes()
             .await
-            .map_err(|e| RpcError::Fatal(format!("decode: {}", e.without_url())))?;
+            .map_err(|e| RpcError::Transient(e.without_url().to_string()))?;
+        let bytes = raw.len();
+        info!(method = method, bytes = bytes, kb = bytes as f32 / 1024.0, "rpc response size");
+
+        let parsed: JsonRpcResponse<T> = serde_json::from_slice(&raw)
+            .map_err(|e| RpcError::Fatal(format!("decode: {}", e)))?;
 
         if let Some(err) = parsed.error {
             return Err(map_jsonrpc_error(err.code, err.message));
