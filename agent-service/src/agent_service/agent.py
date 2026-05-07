@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import structlog
@@ -29,14 +29,9 @@ from agent_service.boundary import wrap_external_data
 from agent_service.llm import primary_model
 from agent_service.policy.binding_store import PrimitiveBindingStore, build_binding
 from agent_service.primitive_client import PrimitiveClient, PrimitiveError
+from agent_service.prompts.composer import compose_system_prompt
 
 log = structlog.get_logger(__name__)
-
-_PROMPT_PATH = Path(__file__).parent / "prompts" / "system_v4.txt"
-
-
-def _system_prompt() -> str:
-    return _PROMPT_PATH.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -136,16 +131,29 @@ class ToolCallRecord:
 # ---------------------------------------------------------------------------
 
 
-def build_agent() -> Agent[AgentDeps, str]:
+def build_agent(
+    *,
+    drop_rule_ids: Iterable[str] = (),
+) -> Agent[AgentDeps, str]:
     """Construct the production agent. Three tools, free-form-string
-    output (the narrative), system prompt v4 verbatim from the Rust
-    repo. UsageLimits cap turns + tokens to keep the free-tier
-    OpenRouter contract honest."""
+    output (the narrative), system prompt composed from `system_v4.txt`
+    via the tagged-rule composer. UsageLimits cap turns + tokens to
+    keep the free-tier OpenRouter contract honest.
+
+    Args:
+        drop_rule_ids: optional set of rule ids to elide from the
+            system prompt before agent construction. Production
+            preset is the empty set; the loop driver populates this
+            from per-defense switches so the article-side ablation
+            surface can disable individual defenses without touching
+            the .txt file. See `prompts/composer.py` for the
+            rule-id namespace.
+    """
     agent: Agent[AgentDeps, str] = Agent(
         model=primary_model(),
         deps_type=AgentDeps,
         output_type=str,
-        system_prompt=_system_prompt(),
+        system_prompt=compose_system_prompt(drop_rule_ids=drop_rule_ids),
     )
 
     @agent.tool

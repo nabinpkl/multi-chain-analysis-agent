@@ -65,6 +65,37 @@ def test_system_prompt_documents_emit_claim_tool():
     assert "emit_claim" in sys
 
 
+def test_system_prompt_uses_tagged_rule_structure():
+    """#36 contract: the system prompt is structured as XML-tagged
+    rules with stable ids, not free-form markdown. The composer in
+    `prompts/composer.py` parses these tags to build per-switch
+    prompt variants. If the tagged structure is removed (or rule
+    ids drift), the composer's drop-by-id surface stops working
+    and the article-side ablation switches silently no-op. Lock
+    the major id namespace here."""
+    sys = load_prompt("system_v4")
+    # Top-level scaffolding tags.
+    assert "<role>" in sys and "</role>" in sys
+    assert "<rules>" in sys and "</rules>" in sys
+    assert "<output_format>" in sys and "</output_format>" in sys
+    # Defense rules in the per-defense ablation namespace. Each
+    # `defense:*` id is wired to a per-defense switch in the loop
+    # driver; renaming or removing one needs an aligned switch
+    # update.
+    for rid in (
+        "defense:memo_injection",
+        "defense:user_question_untrusted",
+        "defense:chat_template_rejection",
+        "defense:off_domain",
+        "defense:identity",
+    ):
+        assert f'<rule id="{rid}">' in sys, (
+            f"Defense rule id {rid!r} missing from system_v4.txt; "
+            "the per-defense ablation surface in `composer.py` "
+            "depends on it."
+        )
+
+
 def test_system_prompt_documents_user_question_topical_rail():
     """#33 contract: the prompt teaches the model that the user's
     free-text question is itself untrusted, that persona-swap and
