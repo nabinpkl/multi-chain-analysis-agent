@@ -34,7 +34,7 @@
         wallet:
           id: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
     switches:
-      stayInRole: true
+      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true }
       dontFabricate: true
   probes:
     - probe_id: turn-root-span-present

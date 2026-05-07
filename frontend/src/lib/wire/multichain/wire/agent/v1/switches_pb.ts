@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file multichain/wire/agent/v1/switches.proto.
  */
 export const file_multichain_wire_agent_v1_switches: GenFile = /*@__PURE__*/
-  fileDesc("CidtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc3dpdGNoZXMucHJvdG8SGG11bHRpY2hhaW4ud2lyZS5hZ2VudC52MSKeAQoNQWdlbnRTd2l0Y2hlcxIUCgxzdGF5X2luX3JvbGUYASABKAgSFgoOZG9udF9mYWJyaWNhdGUYAiABKAgSQQoLY3Jvc3NfY2hlY2sYAyABKAsyLC5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuQ3Jvc3NDaGVja1N3aXRjaGVzEhwKFGRvbnRfcmVwZWF0X3lvdXJzZWxmGAQgASgIIlAKEkNyb3NzQ2hlY2tTd2l0Y2hlcxIeChZwYXJhcGhyYXNlX2F3YXJlX21hdGNoGAEgASgIEhoKEmdyb3VuZF90cnV0aF9tYXRjaBgCIAEoCGIGcHJvdG8z");
+  fileDesc("CidtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc3dpdGNoZXMucHJvdG8SGG11bHRpY2hhaW4ud2lyZS5hZ2VudC52MSLMAQoNQWdlbnRTd2l0Y2hlcxJCCgxzdGF5X2luX3JvbGUYASABKAsyLC5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuU3RheUluUm9sZVN3aXRjaGVzEhYKDmRvbnRfZmFicmljYXRlGAIgASgIEkEKC2Nyb3NzX2NoZWNrGAMgASgLMiwubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkNyb3NzQ2hlY2tTd2l0Y2hlcxIcChRkb250X3JlcGVhdF95b3Vyc2VsZhgEIAEoCCJeChJTdGF5SW5Sb2xlU3dpdGNoZXMSJQodZGVmZW5kX2NoYXRfdGVtcGxhdGVfc3Bvb2ZpbmcYASABKAgSIQoZZGVmZW5kX2NvbnN0aXR1dGlvbl9qdWRnZRgCIAEoCCJQChJDcm9zc0NoZWNrU3dpdGNoZXMSHgoWcGFyYXBocmFzZV9hd2FyZV9tYXRjaBgBIAEoCBIaChJncm91bmRfdHJ1dGhfbWF0Y2gYAiABKAhiBnByb3RvMw");
 
 /**
  * Ship 3.5 ablation switches. Each field is a behavior contract;
@@ -26,12 +26,15 @@ export const file_multichain_wire_agent_v1_switches: GenFile = /*@__PURE__*/
  */
 export type AgentSwitches = Message<"multichain.wire.agent.v1.AgentSwitches"> & {
   /**
-   * Identity, scope, conduct rules. With this off, the model is
-   * whatever the underlying LLM is.
+   * Identity, scope, conduct rules. Sub-message so each defense
+   * surface can be ablated independently for the article-path
+   * comparison work; the legacy single-bool meaning is preserved
+   * by `defend_constitution_judge` (the LLM-side gate that the old
+   * bool gated). See #35.
    *
-   * @generated from field: bool stay_in_role = 1;
+   * @generated from field: multichain.wire.agent.v1.StayInRoleSwitches stay_in_role = 1;
    */
-  stayInRole: boolean;
+  stayInRole?: StayInRoleSwitches | undefined;
 
   /**
    * Numbers and entities in claims must come from real tool output.
@@ -66,6 +69,47 @@ export const AgentSwitchesSchema: GenMessage<AgentSwitches> = /*@__PURE__*/
   messageDesc(file_multichain_wire_agent_v1_switches, 0);
 
 /**
+ * Per-defense ablation surface for the "stay in role" family.
+ * Each field is a defense the article toggles to measure which
+ * vectors the underlying model resists without our enforcement.
+ *
+ * Defaults: caller MUST set every field explicitly (proto3 false
+ * default is deliberately the unsafe state so a caller forgetting
+ * a field reports raw model behavior, not an accidental "all
+ * defenses on by silent default").
+ *
+ * @generated from message multichain.wire.agent.v1.StayInRoleSwitches
+ */
+export type StayInRoleSwitches = Message<"multichain.wire.agent.v1.StayInRoleSwitches"> & {
+  /**
+   * Boundary rejection of chat-template tokens, closing pseudo-tags,
+   * HTML script tags. Deterministic input rail; when off, unsafe
+   * input flows to agent.run() unchanged. See `boundary.py` and #33.
+   *
+   * @generated from field: bool defend_chat_template_spoofing = 1;
+   */
+  defendChatTemplateSpoofing: boolean;
+
+  /**
+   * LLM-side constitution gate that judges Claim + Narrative against
+   * policy_v4 rules. This preserves the legacy semantic of the
+   * bool stay_in_role: when off, the constitution gate spans
+   * (mcae.gate.constitution, mcae.gate.narrative_constitution) are
+   * not emitted and gate verdicts default to approved.
+   *
+   * @generated from field: bool defend_constitution_judge = 2;
+   */
+  defendConstitutionJudge: boolean;
+};
+
+/**
+ * Describes the message multichain.wire.agent.v1.StayInRoleSwitches.
+ * Use `create(StayInRoleSwitchesSchema)` to create a new message.
+ */
+export const StayInRoleSwitchesSchema: GenMessage<StayInRoleSwitches> = /*@__PURE__*/
+  messageDesc(file_multichain_wire_agent_v1_switches, 1);
+
+/**
  * Sub-modes of cross_check. Two independent toggles after ship 5a
  * retired text_match. Both advisory in the strict merge.
  *
@@ -95,5 +139,5 @@ export type CrossCheckSwitches = Message<"multichain.wire.agent.v1.CrossCheckSwi
  * Use `create(CrossCheckSwitchesSchema)` to create a new message.
  */
 export const CrossCheckSwitchesSchema: GenMessage<CrossCheckSwitches> = /*@__PURE__*/
-  messageDesc(file_multichain_wire_agent_v1_switches, 1);
+  messageDesc(file_multichain_wire_agent_v1_switches, 2);
 

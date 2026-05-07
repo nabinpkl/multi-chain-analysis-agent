@@ -487,8 +487,14 @@ async def run_turn(
             # rejected turn; the model never sees the malicious
             # tokens. See boundary.py and #33 for the threat model
             # this defends.
+            #
+            # Gated by `defend_chat_template_spoofing` (#35) so the
+            # article-side ablation surface can disable the rail and
+            # observe raw model behavior under chat-template-shape
+            # injection.
             try:
-                reject_if_unsafe_user_question(request.user_question)
+                if request.switches.stay_in_role.defend_chat_template_spoofing:
+                    reject_if_unsafe_user_question(request.user_question)
             except UnsafeUserInputError as e:
                 rejection_text = (
                     "Your message contained chat-template-style tokens "
@@ -736,11 +742,12 @@ async def run_turn(
                             continue
                         g.set_attribute(spans.Attrs.GATE_VERDICT, spans.VERDICT_APPROVED)
 
-                    # Constitution gate (only when stay_in_role is on; the
-                    # constitution covers domain + identity + citation).
-                    # The constitution agent's gen_ai.chat span auto-nests
-                    # under this gate.constitution span via OTel context.
-                    if request.switches.stay_in_role:
+                    # Constitution gate (only when defend_constitution_judge
+                    # is on; the constitution covers domain + identity +
+                    # citation). The constitution agent's gen_ai.chat span
+                    # auto-nests under this gate.constitution span via OTel
+                    # context.
+                    if request.switches.stay_in_role.defend_constitution_judge:
                         with _tracer.start_as_current_span(spans.GATE_CONSTITUTION) as g:
                             g.set_attribute(spans.Attrs.GATE_VERSION, constitution_module.VERSION)
                             verdict = await judge_claim(
@@ -785,7 +792,7 @@ async def run_turn(
             # of a turn (~11s p50 per issue #16). Without this Progress
             # frame the UI sits silent between the primary LLM finishing
             # and the gated narrative arriving.
-            if request.switches.stay_in_role:
+            if request.switches.stay_in_role.defend_constitution_judge:
                 yield _frame(
                     "Progress",
                     sse_pb2.Progress(phase="judging", detail="constitution gate"),
@@ -838,7 +845,7 @@ async def run_turn(
 
                 if ref_err is not None:
                     pass  # Already yielded; fall through to thread-state
-                elif request.switches.stay_in_role:
+                elif request.switches.stay_in_role.defend_constitution_judge:
                     # Constitution gate on narrative. The constitution
                     # agent's gen_ai.chat span auto-nests under this.
                     with _tracer.start_as_current_span(spans.GATE_NARRATIVE_CONSTITUTION) as g:

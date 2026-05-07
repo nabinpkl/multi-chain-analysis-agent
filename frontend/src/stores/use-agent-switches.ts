@@ -4,6 +4,7 @@ import { create } from "@bufbuild/protobuf";
 import {
   AgentSwitchesSchema,
   CrossCheckSwitchesSchema,
+  StayInRoleSwitchesSchema,
   type AgentSwitches,
 } from "@/lib/wire/multichain/wire/agent/v1/switches_pb";
 
@@ -50,8 +51,16 @@ function makeSwitches(opts: {
   groundTruthMatch: boolean;
   dontRepeatYourself: boolean;
 }): AgentSwitches {
+  // The single `stayInRole` UI toggle drives both sub-defenses
+  // (boundary chat-template rejection + constitution judge gate).
+  // Stage C (#36 phase 4) adds finer-grained fields; until then the
+  // UI continues to expose one composite toggle and we keep the
+  // sub-fields in lockstep here.
   return create(AgentSwitchesSchema, {
-    stayInRole: opts.stayInRole,
+    stayInRole: create(StayInRoleSwitchesSchema, {
+      defendChatTemplateSpoofing: opts.stayInRole,
+      defendConstitutionJudge: opts.stayInRole,
+    }),
     dontFabricate: opts.dontFabricate,
     crossCheck: create(CrossCheckSwitchesSchema, {
       paraphraseAwareMatch: opts.paraphraseAwareMatch,
@@ -181,10 +190,14 @@ function applySwitchKey(
 ): AgentSwitches {
   // Reconstruct from explicit fields rather than spreading `s` (which
   // would carry the `$typeName` literal type and conflict with create's
-  // init shape on the cross_check sub-message).
+  // init shape on sub-messages).
   const cross = s.crossCheck;
+  const role = s.stayInRole;
   const base = {
-    stayInRole: s.stayInRole,
+    stayInRole: create(StayInRoleSwitchesSchema, {
+      defendChatTemplateSpoofing: role?.defendChatTemplateSpoofing ?? false,
+      defendConstitutionJudge: role?.defendConstitutionJudge ?? false,
+    }),
     dontFabricate: s.dontFabricate,
     dontRepeatYourself: s.dontRepeatYourself,
     crossCheck: create(CrossCheckSwitchesSchema, {
@@ -194,7 +207,15 @@ function applySwitchKey(
   };
   switch (key) {
     case "stayInRole":
-      return create(AgentSwitchesSchema, { ...base, stayInRole: on });
+      // Composite toggle: both sub-defenses move in lockstep until
+      // the UI gains per-defense rows in Stage C (#36 phase 4).
+      return create(AgentSwitchesSchema, {
+        ...base,
+        stayInRole: create(StayInRoleSwitchesSchema, {
+          defendChatTemplateSpoofing: on,
+          defendConstitutionJudge: on,
+        }),
+      });
     case "dontFabricate":
       return create(AgentSwitchesSchema, { ...base, dontFabricate: on });
     case "crossCheck.paraphraseAwareMatch":

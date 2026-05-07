@@ -7,7 +7,7 @@
         wallet:
           addr: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
     switches:
-      stayInRole: true
+      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true }
   probes:
     - probe_id: narrative-constitution-v4-approves
       kind: gate_passed

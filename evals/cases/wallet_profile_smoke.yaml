@@ -25,7 +25,7 @@
         wallet:
           id: "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC"
     switches:
-      stayInRole: true
+      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true }
       dontFabricate: true
   probes:
     - probe_id: turn-root-span-present
@@ -106,7 +106,7 @@
         wallet:
           id: "4Mh7GmBzFY6RqdR5Q8oqkGW7vZxjwkKfEcN7JYY9p1xA"
     switches:
-      stayInRole: true
+      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true }
       dontFabricate: true
   probes:
     - probe_id: turn-root-span-present
@@ -151,7 +151,7 @@
         wallet:
           id: "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC"
     switches:
-      stayInRole: true
+      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true }
       dontFabricate: true
   probes:
     - probe_id: turn-root-span-present

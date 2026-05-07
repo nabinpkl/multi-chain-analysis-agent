@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\'multichain/wire/agent/v1/switches.proto\x12\x18multichain.wire.agent.v1\"\xd9\x01\n\rAgentSwitches\x12 \n\x0cstay_in_role\x18\x01 \x01(\x08R\nstayInRole\x12%\n\x0e\x64ont_fabricate\x18\x02 \x01(\x08R\rdontFabricate\x12M\n\x0b\x63ross_check\x18\x03 \x01(\x0b\x32,.multichain.wire.agent.v1.CrossCheckSwitchesR\ncrossCheck\x12\x30\n\x14\x64ont_repeat_yourself\x18\x04 \x01(\x08R\x12\x64ontRepeatYourself\"x\n\x12\x43rossCheckSwitches\x12\x34\n\x16paraphrase_aware_match\x18\x01 \x01(\x08R\x14paraphraseAwareMatch\x12,\n\x12ground_truth_match\x18\x02 \x01(\x08R\x10groundTruthMatchb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\'multichain/wire/agent/v1/switches.proto\x12\x18multichain.wire.agent.v1\"\x87\x02\n\rAgentSwitches\x12N\n\x0cstay_in_role\x18\x01 \x01(\x0b\x32,.multichain.wire.agent.v1.StayInRoleSwitchesR\nstayInRole\x12%\n\x0e\x64ont_fabricate\x18\x02 \x01(\x08R\rdontFabricate\x12M\n\x0b\x63ross_check\x18\x03 \x01(\x0b\x32,.multichain.wire.agent.v1.CrossCheckSwitchesR\ncrossCheck\x12\x30\n\x14\x64ont_repeat_yourself\x18\x04 \x01(\x08R\x12\x64ontRepeatYourself\"\x93\x01\n\x12StayInRoleSwitches\x12\x41\n\x1d\x64\x65\x66\x65nd_chat_template_spoofing\x18\x01 \x01(\x08R\x1a\x64\x65\x66\x65ndChatTemplateSpoofing\x12:\n\x19\x64\x65\x66\x65nd_constitution_judge\x18\x02 \x01(\x08R\x17\x64\x65\x66\x65ndConstitutionJudge\"x\n\x12\x43rossCheckSwitches\x12\x34\n\x16paraphrase_aware_match\x18\x01 \x01(\x08R\x14paraphraseAwareMatch\x12,\n\x12ground_truth_match\x18\x02 \x01(\x08R\x10groundTruthMatchb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,7 +32,9 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'multichain.wire.agent.v1.sw
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_AGENTSWITCHES']._serialized_start=70
-  _globals['_AGENTSWITCHES']._serialized_end=287
-  _globals['_CROSSCHECKSWITCHES']._serialized_start=289
-  _globals['_CROSSCHECKSWITCHES']._serialized_end=409
+  _globals['_AGENTSWITCHES']._serialized_end=333
+  _globals['_STAYINROLESWITCHES']._serialized_start=336
+  _globals['_STAYINROLESWITCHES']._serialized_end=483
+  _globals['_CROSSCHECKSWITCHES']._serialized_start=485
+  _globals['_CROSSCHECKSWITCHES']._serialized_end=605
 # @@protoc_insertion_point(module_scope)

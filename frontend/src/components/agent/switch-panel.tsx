@@ -27,7 +27,13 @@ export function SwitchPanel() {
         <ToggleRow
           label="stay in role"
           tooltip="Keeps the agent focused on chain analysis. With this on it declines off-topic questions, won't write code, won't give financial advice, and won't pretend to be a different model. Turn it off to talk to the underlying LLM directly."
-          on={switches.stayInRole}
+          on={
+            // Composite toggle: both sub-defenses (boundary
+            // chat-template rejection + constitution judge) drive
+            // off the same UI bit until per-defense rows ship.
+            (switches.stayInRole?.defendConstitutionJudge ?? false) ||
+            (switches.stayInRole?.defendChatTemplateSpoofing ?? false)
+          }
           onChange={(on) => setSwitch("stayInRole", on)}
         />
         <ToggleRow

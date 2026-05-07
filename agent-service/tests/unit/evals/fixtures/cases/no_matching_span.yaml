@@ -7,7 +7,7 @@
         wallet:
           id: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
     switches:
-      stayInRole: false
+      stayInRole: { defendChatTemplateSpoofing: false, defendConstitutionJudge: false }
   metadata:
     note: |-
       With stayInRole=false, the loop driver short-circuits the

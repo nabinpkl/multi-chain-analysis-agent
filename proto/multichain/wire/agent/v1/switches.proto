@@ -11,9 +11,12 @@ package multichain.wire.agent.v1;
 // If this code ever serves real end-user traffic, lock the switch
 // surface server-side.
 message AgentSwitches {
-  // Identity, scope, conduct rules. With this off, the model is
-  // whatever the underlying LLM is.
-  bool stay_in_role = 1;
+  // Identity, scope, conduct rules. Sub-message so each defense
+  // surface can be ablated independently for the article-path
+  // comparison work; the legacy single-bool meaning is preserved
+  // by `defend_constitution_judge` (the LLM-side gate that the old
+  // bool gated). See #35.
+  StayInRoleSwitches stay_in_role = 1;
   // Numbers and entities in claims must come from real tool output.
   // With this off, the model can invent values that no tool returned.
   bool dont_fabricate = 2;
@@ -23,6 +26,27 @@ message AgentSwitches {
   // re-fetches the prior turn's primitives, deterministically diffs
   // against the prior outputs, and surfaces only what changed.
   bool dont_repeat_yourself = 4;
+}
+
+// Per-defense ablation surface for the "stay in role" family.
+// Each field is a defense the article toggles to measure which
+// vectors the underlying model resists without our enforcement.
+//
+// Defaults: caller MUST set every field explicitly (proto3 false
+// default is deliberately the unsafe state so a caller forgetting
+// a field reports raw model behavior, not an accidental "all
+// defenses on by silent default").
+message StayInRoleSwitches {
+  // Boundary rejection of chat-template tokens, closing pseudo-tags,
+  // HTML script tags. Deterministic input rail; when off, unsafe
+  // input flows to agent.run() unchanged. See `boundary.py` and #33.
+  bool defend_chat_template_spoofing = 1;
+  // LLM-side constitution gate that judges Claim + Narrative against
+  // policy_v4 rules. This preserves the legacy semantic of the
+  // bool stay_in_role: when off, the constitution gate spans
+  // (mcae.gate.constitution, mcae.gate.narrative_constitution) are
+  // not emitted and gate verdicts default to approved.
+  bool defend_constitution_judge = 2;
 }
 
 // Sub-modes of cross_check. Two independent toggles after ship 5a

@@ -11,11 +11,16 @@
 /// surface server-side.
 #[derive(Clone, Debug, Default)]
 pub struct AgentSwitchesView<'a> {
-    /// Identity, scope, conduct rules. With this off, the model is
-    /// whatever the underlying LLM is.
+    /// Identity, scope, conduct rules. Sub-message so each defense
+    /// surface can be ablated independently for the article-path
+    /// comparison work; the legacy single-bool meaning is preserved
+    /// by `defend_constitution_judge` (the LLM-side gate that the old
+    /// bool gated). See #35.
     ///
     /// Field 1: `stay_in_role`
-    pub stay_in_role: bool,
+    pub stay_in_role: ::buffa::MessageFieldView<
+        super::super::__buffa::view::StayInRoleSwitchesView<'a>,
+    >,
     /// Numbers and entities in claims must come from real tool output.
     /// With this off, the model can invent values that no tool returned.
     ///
@@ -74,14 +79,28 @@ impl<'a> AgentSwitchesView<'a> {
             let tag = ::buffa::encoding::Tag::decode(&mut cur)?;
             match tag.field_number() {
                 1u32 => {
-                    if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                    if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
                         return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
                             field_number: 1u32,
-                            expected: 0u8,
+                            expected: 2u8,
                             actual: tag.wire_type() as u8,
                         });
                     }
-                    view.stay_in_role = ::buffa::types::decode_bool(&mut cur)?;
+                    if depth == 0 {
+                        return Err(::buffa::DecodeError::RecursionLimitExceeded);
+                    }
+                    let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                    match view.stay_in_role.as_mut() {
+                        Some(existing) => existing._merge_into_view(sub, depth - 1)?,
+                        None => {
+                            view.stay_in_role = ::buffa::MessageFieldView::set(
+                                super::super::__buffa::view::StayInRoleSwitchesView::_decode_depth(
+                                    sub,
+                                    depth - 1,
+                                )?,
+                            );
+                        }
+                    }
                 }
                 2u32 => {
                     if tag.wire_type() != ::buffa::encoding::WireType::Varint {
@@ -155,7 +174,14 @@ impl<'a> ::buffa::MessageView<'a> for AgentSwitchesView<'a> {
         #[allow(unused_imports)]
         use ::buffa::alloc::string::ToString as _;
         super::super::AgentSwitches {
-            stay_in_role: self.stay_in_role,
+            stay_in_role: match self.stay_in_role.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::StayInRoleSwitches,
+                    >::some(v.to_owned_message())
+                }
+                None => ::buffa::MessageField::none(),
+            },
             dont_fabricate: self.dont_fabricate,
             cross_check: match self.cross_check.as_option() {
                 Some(v) => {
@@ -181,8 +207,13 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentSwitchesView<'a> {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
-        if self.stay_in_role {
-            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        if self.stay_in_role.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.stay_in_role.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
         }
         if self.dont_fabricate {
             size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
@@ -209,10 +240,14 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentSwitchesView<'a> {
     ) {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
-        if self.stay_in_role {
-            ::buffa::encoding::Tag::new(1u32, ::buffa::encoding::WireType::Varint)
+        if self.stay_in_role.is_set() {
+            ::buffa::encoding::Tag::new(
+                    1u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
                 .encode(buf);
-            ::buffa::types::encode_bool(self.stay_in_role, buf);
+            ::buffa::encoding::encode_varint(__cache.consume_next() as u64, buf);
+            self.stay_in_role.write_to(__cache, buf);
         }
         if self.dont_fabricate {
             ::buffa::encoding::Tag::new(2u32, ::buffa::encoding::WireType::Varint)
@@ -245,6 +280,181 @@ impl<'v> ::buffa::DefaultViewInstance for AgentSwitchesView<'v> {
         VALUE
             .get_or_init(|| ::buffa::alloc::boxed::Box::new(
                 <AgentSwitchesView<'static>>::default(),
+            ))
+    }
+}
+/// Per-defense ablation surface for the "stay in role" family.
+/// Each field is a defense the article toggles to measure which
+/// vectors the underlying model resists without our enforcement.
+///
+/// Defaults: caller MUST set every field explicitly (proto3 false
+/// default is deliberately the unsafe state so a caller forgetting
+/// a field reports raw model behavior, not an accidental "all
+/// defenses on by silent default").
+#[derive(Clone, Debug, Default)]
+pub struct StayInRoleSwitchesView<'a> {
+    /// Boundary rejection of chat-template tokens, closing pseudo-tags,
+    /// HTML script tags. Deterministic input rail; when off, unsafe
+    /// input flows to agent.run() unchanged. See `boundary.py` and #33.
+    ///
+    /// Field 1: `defend_chat_template_spoofing`
+    pub defend_chat_template_spoofing: bool,
+    /// LLM-side constitution gate that judges Claim + Narrative against
+    /// policy_v4 rules. This preserves the legacy semantic of the
+    /// bool stay_in_role: when off, the constitution gate spans
+    /// (mcae.gate.constitution, mcae.gate.narrative_constitution) are
+    /// not emitted and gate verdicts default to approved.
+    ///
+    /// Field 2: `defend_constitution_judge`
+    pub defend_constitution_judge: bool,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> StayInRoleSwitchesView<'a> {
+    /// Decode from `buf`, enforcing a recursion depth limit for nested messages.
+    ///
+    /// Called by [`::buffa::MessageView::decode_view`] with [`::buffa::RECURSION_LIMIT`]
+    /// and by generated sub-message decode arms with `depth - 1`.
+    ///
+    /// **Not part of the public API.** Named with a leading underscore to
+    /// signal that it is for generated-code use only.
+    #[doc(hidden)]
+    pub fn _decode_depth(
+        buf: &'a [u8],
+        depth: u32,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let mut view = Self::default();
+        view._merge_into_view(buf, depth)?;
+        ::core::result::Result::Ok(view)
+    }
+    /// Merge fields from `buf` into this view (proto merge semantics).
+    ///
+    /// Repeated fields append; singular fields last-wins; singular
+    /// MESSAGE fields merge recursively. Used by sub-message decode
+    /// arms when the same field appears multiple times on the wire.
+    ///
+    /// **Not part of the public API.**
+    #[doc(hidden)]
+    pub fn _merge_into_view(
+        &mut self,
+        buf: &'a [u8],
+        depth: u32,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        let _ = depth;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur: &'a [u8] = buf;
+        while !cur.is_empty() {
+            let before_tag = cur;
+            let tag = ::buffa::encoding::Tag::decode(&mut cur)?;
+            match tag.field_number() {
+                1u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 1u32,
+                            expected: 0u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    view.defend_chat_template_spoofing = ::buffa::types::decode_bool(
+                        &mut cur,
+                    )?;
+                }
+                2u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 2u32,
+                            expected: 0u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    view.defend_constitution_judge = ::buffa::types::decode_bool(
+                        &mut cur,
+                    )?;
+                }
+                _ => {
+                    ::buffa::encoding::skip_field_depth(tag, &mut cur, depth)?;
+                    let span_len = before_tag.len() - cur.len();
+                    view.__buffa_unknown_fields.push_raw(&before_tag[..span_len]);
+                }
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+}
+impl<'a> ::buffa::MessageView<'a> for StayInRoleSwitchesView<'a> {
+    type Owned = super::super::StayInRoleSwitches;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        Self::_decode_depth(buf, ::buffa::RECURSION_LIMIT)
+    }
+    fn decode_view_with_limit(
+        buf: &'a [u8],
+        depth: u32,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        Self::_decode_depth(buf, depth)
+    }
+    /// Convert this view to the owned message type.
+    #[allow(clippy::redundant_closure, clippy::useless_conversion)]
+    #[allow(clippy::needless_update)]
+    fn to_owned_message(&self) -> super::super::StayInRoleSwitches {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        super::super::StayInRoleSwitches {
+            defend_chat_template_spoofing: self.defend_chat_template_spoofing,
+            defend_constitution_judge: self.defend_constitution_judge,
+            __buffa_unknown_fields: self
+                .__buffa_unknown_fields
+                .to_owned()
+                .unwrap_or_default()
+                .into(),
+            ..::core::default::Default::default()
+        }
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for StayInRoleSwitchesView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.defend_chat_template_spoofing {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        if self.defend_constitution_judge {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.defend_chat_template_spoofing {
+            ::buffa::encoding::Tag::new(1u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_bool(self.defend_chat_template_spoofing, buf);
+        }
+        if self.defend_constitution_judge {
+            ::buffa::encoding::Tag::new(2u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_bool(self.defend_constitution_judge, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+impl<'v> ::buffa::DefaultViewInstance for StayInRoleSwitchesView<'v> {
+    fn default_view_instance<'a>() -> &'a Self
+    where
+        Self: 'a,
+    {
+        static VALUE: ::buffa::__private::OnceBox<StayInRoleSwitchesView<'static>> = ::buffa::__private::OnceBox::new();
+        VALUE
+            .get_or_init(|| ::buffa::alloc::boxed::Box::new(
+                <StayInRoleSwitchesView<'static>>::default(),
             ))
     }
 }

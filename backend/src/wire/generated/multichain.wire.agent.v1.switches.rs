@@ -13,17 +13,19 @@
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct AgentSwitches {
-    /// Identity, scope, conduct rules. With this off, the model is
-    /// whatever the underlying LLM is.
+    /// Identity, scope, conduct rules. Sub-message so each defense
+    /// surface can be ablated independently for the article-path
+    /// comparison work; the legacy single-bool meaning is preserved
+    /// by `defend_constitution_judge` (the LLM-side gate that the old
+    /// bool gated). See #35.
     ///
     /// Field 1: `stay_in_role`
     #[serde(
         rename = "stayInRole",
         alias = "stay_in_role",
-        with = "::buffa::json_helpers::proto_bool",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
     )]
-    pub stay_in_role: bool,
+    pub stay_in_role: ::buffa::MessageField<StayInRoleSwitches>,
     /// Numbers and entities in claims must come from real tool output.
     /// With this off, the model can invent values that no tool returned.
     ///
@@ -94,8 +96,13 @@ impl ::buffa::Message for AgentSwitches {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
-        if self.stay_in_role {
-            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        if self.stay_in_role.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.stay_in_role.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
         }
         if self.dont_fabricate {
             size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
@@ -121,10 +128,14 @@ impl ::buffa::Message for AgentSwitches {
     ) {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
-        if self.stay_in_role {
-            ::buffa::encoding::Tag::new(1u32, ::buffa::encoding::WireType::Varint)
+        if self.stay_in_role.is_set() {
+            ::buffa::encoding::Tag::new(
+                    1u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
                 .encode(buf);
-            ::buffa::types::encode_bool(self.stay_in_role, buf);
+            ::buffa::encoding::encode_varint(__cache.consume_next() as u64, buf);
+            self.stay_in_role.write_to(__cache, buf);
         }
         if self.dont_fabricate {
             ::buffa::encoding::Tag::new(2u32, ::buffa::encoding::WireType::Varint)
@@ -159,14 +170,18 @@ impl ::buffa::Message for AgentSwitches {
         use ::buffa::Enumeration as _;
         match tag.field_number() {
             1u32 => {
-                if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
                     return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
                         field_number: 1u32,
-                        expected: 0u8,
+                        expected: 2u8,
                         actual: tag.wire_type() as u8,
                     });
                 }
-                self.stay_in_role = ::buffa::types::decode_bool(buf)?;
+                ::buffa::Message::merge_length_delimited(
+                    self.stay_in_role.get_or_insert_default(),
+                    buf,
+                    depth,
+                )?;
             }
             2u32 => {
                 if tag.wire_type() != ::buffa::encoding::WireType::Varint {
@@ -210,7 +225,7 @@ impl ::buffa::Message for AgentSwitches {
         ::core::result::Result::Ok(())
     }
     fn clear(&mut self) {
-        self.stay_in_role = false;
+        self.stay_in_role = ::buffa::MessageField::none();
         self.dont_fabricate = false;
         self.cross_check = ::buffa::MessageField::none();
         self.dont_repeat_yourself = false;
@@ -244,6 +259,181 @@ pub const __AGENT_SWITCHES_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::bu
     type_url: "type.googleapis.com/multichain.wire.agent.v1.AgentSwitches",
     to_json: ::buffa::type_registry::any_to_json::<AgentSwitches>,
     from_json: ::buffa::type_registry::any_from_json::<AgentSwitches>,
+    is_wkt: false,
+};
+/// Per-defense ablation surface for the "stay in role" family.
+/// Each field is a defense the article toggles to measure which
+/// vectors the underlying model resists without our enforcement.
+///
+/// Defaults: caller MUST set every field explicitly (proto3 false
+/// default is deliberately the unsafe state so a caller forgetting
+/// a field reports raw model behavior, not an accidental "all
+/// defenses on by silent default").
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct StayInRoleSwitches {
+    /// Boundary rejection of chat-template tokens, closing pseudo-tags,
+    /// HTML script tags. Deterministic input rail; when off, unsafe
+    /// input flows to agent.run() unchanged. See `boundary.py` and #33.
+    ///
+    /// Field 1: `defend_chat_template_spoofing`
+    #[serde(
+        rename = "defendChatTemplateSpoofing",
+        alias = "defend_chat_template_spoofing",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub defend_chat_template_spoofing: bool,
+    /// LLM-side constitution gate that judges Claim + Narrative against
+    /// policy_v4 rules. This preserves the legacy semantic of the
+    /// bool stay_in_role: when off, the constitution gate spans
+    /// (mcae.gate.constitution, mcae.gate.narrative_constitution) are
+    /// not emitted and gate verdicts default to approved.
+    ///
+    /// Field 2: `defend_constitution_judge`
+    #[serde(
+        rename = "defendConstitutionJudge",
+        alias = "defend_constitution_judge",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub defend_constitution_judge: bool,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for StayInRoleSwitches {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("StayInRoleSwitches")
+            .field("defend_chat_template_spoofing", &self.defend_chat_template_spoofing)
+            .field("defend_constitution_judge", &self.defend_constitution_judge)
+            .finish()
+    }
+}
+impl StayInRoleSwitches {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/multichain.wire.agent.v1.StayInRoleSwitches";
+}
+impl ::buffa::DefaultInstance for StayInRoleSwitches {
+    fn default_instance() -> &'static Self {
+        static VALUE: ::buffa::__private::OnceBox<StayInRoleSwitches> = ::buffa::__private::OnceBox::new();
+        VALUE.get_or_init(|| ::buffa::alloc::boxed::Box::new(Self::default()))
+    }
+}
+impl ::buffa::Message for StayInRoleSwitches {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.defend_chat_template_spoofing {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        if self.defend_constitution_judge {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.defend_chat_template_spoofing {
+            ::buffa::encoding::Tag::new(1u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_bool(self.defend_chat_template_spoofing, buf);
+        }
+        if self.defend_constitution_judge {
+            ::buffa::encoding::Tag::new(2u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_bool(self.defend_constitution_judge, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        depth: u32,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 1u32,
+                        expected: 0u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                self.defend_chat_template_spoofing = ::buffa::types::decode_bool(buf)?;
+            }
+            2u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 2u32,
+                        expected: 0u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                self.defend_constitution_judge = ::buffa::types::decode_bool(buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, depth)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.defend_chat_template_spoofing = false;
+        self.defend_constitution_judge = false;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for StayInRoleSwitches {
+    const PROTO_FQN: &'static str = "multichain.wire.agent.v1.StayInRoleSwitches";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for StayInRoleSwitches {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __STAY_IN_ROLE_SWITCHES_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.StayInRoleSwitches",
+    to_json: ::buffa::type_registry::any_to_json::<StayInRoleSwitches>,
+    from_json: ::buffa::type_registry::any_from_json::<StayInRoleSwitches>,
     is_wkt: false,
 };
 /// Sub-modes of cross_check. Two independent toggles after ship 5a
