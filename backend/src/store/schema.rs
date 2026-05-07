@@ -54,6 +54,30 @@ pub async fn bootstrap(client: &Client) -> anyhow::Result<()> {
         .execute()
         .await?;
 
+    // Memo table. One row per SPL Memo program instruction (top-level
+    // or CPI'd inner). Joins to `multichain.edges` by signature for
+    // analytics that pair value movement with attached note text.
+    // See `docs/architecture/memos.md` for the schema rationale.
+    client
+        .query(
+            r#"
+            CREATE TABLE IF NOT EXISTS multichain.memos (
+                signature       String,
+                slot            UInt64,
+                block_time      UInt32,
+                instruction_idx UInt16,
+                is_inner        Bool,
+                program         LowCardinality(String),
+                memo_text       String,
+                signers         Array(String),
+                version         UInt64
+            ) ENGINE = ReplacingMergeTree(version)
+            ORDER BY (signature, instruction_idx, is_inner)
+            "#,
+        )
+        .execute()
+        .await?;
+
     // Ship 1 of agent-observability (ADR 13) replaced the bespoke
     // multichain.agent_ledger table with OTel spans in otel.otel_traces
     // (auto-managed by the otel-collector clickhouseexporter). The

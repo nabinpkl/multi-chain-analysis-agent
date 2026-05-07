@@ -7,7 +7,7 @@ use tracing::{error, info, warn};
 
 use crate::rpc::{RpcClient, RpcError};
 use crate::store::EdgeStore;
-use crate::stream::EdgeProducer;
+use crate::stream::{EdgeProducer, MemoProducer};
 use crate::tip::TipTracker;
 
 const COMPONENT: &str = "solana_ingester";
@@ -23,7 +23,8 @@ const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(30);
 pub async fn run(
     rpc: RpcClient,
     store: Arc<dyn EdgeStore>,
-    producer: EdgeProducer,
+    edge_producer: EdgeProducer,
+    memo_producer: MemoProducer,
     tip: TipTracker,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
@@ -37,7 +38,16 @@ pub async fn run(
     };
     info!(slot = starting_slot, "ingester starting");
 
-    fetcher_loop(rpc, producer, store, tip, starting_slot, &mut shutdown_rx).await;
+    fetcher_loop(
+        rpc,
+        edge_producer,
+        memo_producer,
+        store,
+        tip,
+        starting_slot,
+        &mut shutdown_rx,
+    )
+    .await;
     Ok(())
 }
 
@@ -45,6 +55,7 @@ pub async fn run(
 struct ProgressCounters {
     slots: u64,
     edges: u64,
+    memos: u64,
     rate_limits: u64,
     transient_errors: u64,
     skipped: u64,
@@ -52,7 +63,8 @@ struct ProgressCounters {
 
 async fn fetcher_loop(
     rpc: RpcClient,
-    producer: EdgeProducer,
+    edge_producer: EdgeProducer,
+    memo_producer: MemoProducer,
     store: Arc<dyn EdgeStore>,
     tip: TipTracker,
     mut next: u64,
@@ -95,26 +107,36 @@ async fn fetcher_loop(
             Ok(block) => {
                 let version = epoch_ms();
                 let edges = crate::ingest::parser::parse_edges(&block, next, version);
-                info!(slot = next, edges = edges.len(), "ingested block");
+                let memos = crate::ingest::parser::parse_memos(&block, next, version);
+                info!(slot = next, edges = edges.len(), memos = memos.len(), "ingested block");
 
-                // Atomic-per-slot publish: if any edge fails, abandon
-                // the slot and let the outer loop retry the same `next`.
-                // The previous `continue` inside the for-loop only
-                // skipped the failing edge, then advanced `next`, which
-                // dropped data permanently.
+                // Atomic-per-slot publish: if any edge or memo publish
+                // fails, abandon the slot and let the outer loop retry
+                // the same `next`. The previous `continue` inside the
+                // for-loop only skipped the failing edge, then advanced
+                // `next`, which dropped data permanently.
                 //
-                // Retry safety: producer has enable.idempotence=true +
-                // acks=all + retries=10, so partial publishes from a
+                // Retry safety: producers have enable.idempotence=true
+                // + acks=all + retries=10, so partial publishes from a
                 // failed attempt are deduped at the broker. Downstream,
-                // ClickHouse's edges table is ReplacingMergeTree keyed
-                // on (signature, instruction_idx); duplicate rows from
-                // a retried slot collapse on merge.
+                // both ClickHouse tables are ReplacingMergeTree keyed
+                // by (signature, instruction_idx[, is_inner]) so any
+                // duplicates from a retried slot collapse on merge.
                 let mut publish_failed = false;
                 for edge in &edges {
-                    if let Err(e) = producer.publish(edge).await {
-                        warn!(slot = next, error = %e, "kafka publish failed; retrying slot");
+                    if let Err(e) = edge_producer.publish(edge).await {
+                        warn!(slot = next, error = %e, "kafka edge publish failed; retrying slot");
                         publish_failed = true;
                         break;
+                    }
+                }
+                if !publish_failed {
+                    for memo in &memos {
+                        if let Err(e) = memo_producer.publish(memo).await {
+                            warn!(slot = next, error = %e, "kafka memo publish failed; retrying slot");
+                            publish_failed = true;
+                            break;
+                        }
                     }
                 }
                 if publish_failed {
@@ -122,6 +144,7 @@ async fn fetcher_loop(
                     continue;
                 }
                 counters.edges += edges.len() as u64;
+                counters.memos += memos.len() as u64;
                 next += 1;
                 counters.slots += 1;
                 slots_since_checkpoint += 1;
@@ -184,6 +207,7 @@ async fn fetcher_loop(
                 drift_slots = ?drift,
                 slots_per_s = format!("{:.2}", slots_per_s),
                 edges = counters.edges,
+                memos = counters.memos,
                 skipped_slots = counters.skipped,
                 rate_limits = counters.rate_limits,
                 transient_errors = counters.transient_errors,

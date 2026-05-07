@@ -14,8 +14,9 @@ use multichain_engine::{
 use config::Config;
 use rpc::RpcClient;
 use sinks::ch_sink::{self, ChSinkConfig};
+use sinks::memo_sink::{self, MemoSinkConfig};
 use state::AppState;
-use stream::{EdgeProducer, consumer::build_consumer};
+use stream::{EdgeProducer, MemoProducer, consumer::build_consumer};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -75,6 +76,32 @@ async fn main() -> anyhow::Result<()> {
     };
     bg_handles.push(ch_sink_handle);
 
+    // memo-sink: persists memos to ClickHouse. Parallel task to ch-sink
+    // against the memos topic, isolated so a memo-side stall does not
+    // block edge ingestion. Reuses ch_sink batch settings; memos are
+    // sparse so the same flush cadence is fine.
+    let memo_sink_handle = {
+        let consumer = build_consumer(
+            &config.kafka_brokers,
+            "memo-sink",
+            &config.kafka_topic_memos,
+            &config.kafka_auto_offset_reset,
+        )?;
+        info!(group = "memo-sink", topic = %config.kafka_topic_memos, "memo-sink consumer ready");
+        let store = state.store.clone();
+        let cfg = MemoSinkConfig {
+            batch_size: config.ch_sink_batch_size,
+            flush_interval: config.ch_sink_flush,
+        };
+        let rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = memo_sink::run(consumer, store, cfg, rx).await {
+                error!(error = %e, "memo-sink exited with error");
+            }
+        })
+    };
+    bg_handles.push(memo_sink_handle);
+
     // graph-engine: sole live ingest path. Builds in-memory graph and
     // dispatches GraphDelta batches per-window to /graph/stream
     // subscribers.
@@ -118,8 +145,11 @@ async fn main() -> anyhow::Result<()> {
     } else {
         let rpc = RpcClient::new(config.solana_rpc_url.clone(), config.rpc_min_interval);
 
-        let producer = EdgeProducer::new(&config.kafka_brokers, &config.kafka_topic_raw_edges)?;
-        info!(brokers = %config.kafka_brokers, topic = %config.kafka_topic_raw_edges, "kafka producer ready");
+        let edge_producer = EdgeProducer::new(&config.kafka_brokers, &config.kafka_topic_raw_edges)?;
+        info!(brokers = %config.kafka_brokers, topic = %config.kafka_topic_raw_edges, "kafka edge producer ready");
+
+        let memo_producer = MemoProducer::new(&config.kafka_brokers, &config.kafka_topic_memos)?;
+        info!(brokers = %config.kafka_brokers, topic = %config.kafka_topic_memos, "kafka memo producer ready");
 
         let ingest_handle = {
             let store = state.store.clone();
@@ -127,7 +157,8 @@ async fn main() -> anyhow::Result<()> {
             let tip = state.tip.clone();
             let rx = shutdown_rx.clone();
             tokio::spawn(async move {
-                if let Err(e) = ingest::run(rpc, store, producer, tip, rx).await {
+                if let Err(e) = ingest::run(rpc, store, edge_producer, memo_producer, tip, rx).await
+                {
                     error!(error = %e, "ingester exited with error");
                 }
             })

@@ -83,6 +83,7 @@ services:
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
       - KAFKA_BROKERS=redpanda:9092
       - KAFKA_TOPIC_RAW_EDGES=solana.raw-edges
+      - KAFKA_TOPIC_MEMOS=solana.memos.v1
     depends_on:
       clickhouse:
         condition: service_healthy
