@@ -38,6 +38,15 @@ pub struct AgentSwitchesView<'a> {
     ///
     /// Field 4: `dont_repeat_yourself`
     pub dont_repeat_yourself: bool,
+    /// Cockpit: per-channel I/O toggles for the agent's communication
+    /// surface. Each channel pairs a switch with a deterministic
+    /// observable (an `mcae.turn.channels.*` span attribute) so eval
+    /// probes can assert the off-state actually held.
+    ///
+    /// Field 5: `channels`
+    pub channels: ::buffa::MessageFieldView<
+        super::super::__buffa::view::ChannelSwitchesView<'a>,
+    >,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> AgentSwitchesView<'a> {
@@ -146,6 +155,30 @@ impl<'a> AgentSwitchesView<'a> {
                     }
                     view.dont_repeat_yourself = ::buffa::types::decode_bool(&mut cur)?;
                 }
+                5u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 5u32,
+                            expected: 2u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    if depth == 0 {
+                        return Err(::buffa::DecodeError::RecursionLimitExceeded);
+                    }
+                    let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                    match view.channels.as_mut() {
+                        Some(existing) => existing._merge_into_view(sub, depth - 1)?,
+                        None => {
+                            view.channels = ::buffa::MessageFieldView::set(
+                                super::super::__buffa::view::ChannelSwitchesView::_decode_depth(
+                                    sub,
+                                    depth - 1,
+                                )?,
+                            );
+                        }
+                    }
+                }
                 _ => {
                     ::buffa::encoding::skip_field_depth(tag, &mut cur, depth)?;
                     let span_len = before_tag.len() - cur.len();
@@ -192,6 +225,14 @@ impl<'a> ::buffa::MessageView<'a> for AgentSwitchesView<'a> {
                 None => ::buffa::MessageField::none(),
             },
             dont_repeat_yourself: self.dont_repeat_yourself,
+            channels: match self.channels.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::ChannelSwitches,
+                    >::some(v.to_owned_message())
+                }
+                None => ::buffa::MessageField::none(),
+            },
             __buffa_unknown_fields: self
                 .__buffa_unknown_fields
                 .to_owned()
@@ -228,6 +269,14 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentSwitchesView<'a> {
         }
         if self.dont_repeat_yourself {
             size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        if self.channels.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.channels.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
@@ -268,6 +317,15 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentSwitchesView<'a> {
                 .encode(buf);
             ::buffa::types::encode_bool(self.dont_repeat_yourself, buf);
         }
+        if self.channels.is_set() {
+            ::buffa::encoding::Tag::new(
+                    5u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
+                .encode(buf);
+            ::buffa::encoding::encode_varint(__cache.consume_next() as u64, buf);
+            self.channels.write_to(__cache, buf);
+        }
         self.__buffa_unknown_fields.write_to(buf);
     }
 }
@@ -280,6 +338,190 @@ impl<'v> ::buffa::DefaultViewInstance for AgentSwitchesView<'v> {
         VALUE
             .get_or_init(|| ::buffa::alloc::boxed::Box::new(
                 <AgentSwitchesView<'static>>::default(),
+            ))
+    }
+}
+/// Cockpit-style I/O channel toggles. Each switch controls one of
+/// the agent's input or output text surfaces. Defaults are the
+/// production preset (every channel on); proto3 false default
+/// deliberately puts the unsafe state behind explicit construction
+/// so a caller forgetting a field gets a noticeably restrictive
+/// agent rather than a silently-leaky one.
+#[derive(Clone, Debug, Default)]
+pub struct ChannelSwitchesView<'a> {
+    /// When false, the agent's free-form Narrative output is replaced
+    /// with empty text at the loop driver before the SSE Narrative
+    /// frame is emitted. The model still generates prose; we drop it
+    /// before any consumer sees it. The `mcae.narrative.emitted` span
+    /// still fires (with `length_chars=0` and `narrative.suppressed
+    /// =true`) so probes can assert the off-state held without
+    /// inspecting frontend state.
+    ///
+    /// Use cases: stress-test whether the agent can carry a turn
+    /// through Claim chips alone; remove Narrative as a potential
+    /// exfil channel for prompt-injected text; measure how much of
+    /// a turn's value lives in structured Claims vs interpretive prose.
+    ///
+    /// Field 1: `narrative_output_enabled`
+    pub narrative_output_enabled: bool,
+    /// When false, primitive tool outputs are sanitized before being
+    /// wrapped in \<external_data\>: every string field outside the
+    /// constrained-format allowlist (base58 address, enum role, mint
+    /// id) is replaced with a placeholder. Today no primitive emits
+    /// untrusted text so this switch is forward-looking, but it is
+    /// wired now so future memo or tag primitives slot in without a
+    /// schema change.
+    ///
+    /// Field 2: `external_text_input_enabled`
+    pub external_text_input_enabled: bool,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ChannelSwitchesView<'a> {
+    /// Decode from `buf`, enforcing a recursion depth limit for nested messages.
+    ///
+    /// Called by [`::buffa::MessageView::decode_view`] with [`::buffa::RECURSION_LIMIT`]
+    /// and by generated sub-message decode arms with `depth - 1`.
+    ///
+    /// **Not part of the public API.** Named with a leading underscore to
+    /// signal that it is for generated-code use only.
+    #[doc(hidden)]
+    pub fn _decode_depth(
+        buf: &'a [u8],
+        depth: u32,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let mut view = Self::default();
+        view._merge_into_view(buf, depth)?;
+        ::core::result::Result::Ok(view)
+    }
+    /// Merge fields from `buf` into this view (proto merge semantics).
+    ///
+    /// Repeated fields append; singular fields last-wins; singular
+    /// MESSAGE fields merge recursively. Used by sub-message decode
+    /// arms when the same field appears multiple times on the wire.
+    ///
+    /// **Not part of the public API.**
+    #[doc(hidden)]
+    pub fn _merge_into_view(
+        &mut self,
+        buf: &'a [u8],
+        depth: u32,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        let _ = depth;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur: &'a [u8] = buf;
+        while !cur.is_empty() {
+            let before_tag = cur;
+            let tag = ::buffa::encoding::Tag::decode(&mut cur)?;
+            match tag.field_number() {
+                1u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 1u32,
+                            expected: 0u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    view.narrative_output_enabled = ::buffa::types::decode_bool(
+                        &mut cur,
+                    )?;
+                }
+                2u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 2u32,
+                            expected: 0u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    view.external_text_input_enabled = ::buffa::types::decode_bool(
+                        &mut cur,
+                    )?;
+                }
+                _ => {
+                    ::buffa::encoding::skip_field_depth(tag, &mut cur, depth)?;
+                    let span_len = before_tag.len() - cur.len();
+                    view.__buffa_unknown_fields.push_raw(&before_tag[..span_len]);
+                }
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+}
+impl<'a> ::buffa::MessageView<'a> for ChannelSwitchesView<'a> {
+    type Owned = super::super::ChannelSwitches;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        Self::_decode_depth(buf, ::buffa::RECURSION_LIMIT)
+    }
+    fn decode_view_with_limit(
+        buf: &'a [u8],
+        depth: u32,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        Self::_decode_depth(buf, depth)
+    }
+    /// Convert this view to the owned message type.
+    #[allow(clippy::redundant_closure, clippy::useless_conversion)]
+    #[allow(clippy::needless_update)]
+    fn to_owned_message(&self) -> super::super::ChannelSwitches {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        super::super::ChannelSwitches {
+            narrative_output_enabled: self.narrative_output_enabled,
+            external_text_input_enabled: self.external_text_input_enabled,
+            __buffa_unknown_fields: self
+                .__buffa_unknown_fields
+                .to_owned()
+                .unwrap_or_default()
+                .into(),
+            ..::core::default::Default::default()
+        }
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for ChannelSwitchesView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.narrative_output_enabled {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        if self.external_text_input_enabled {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.narrative_output_enabled {
+            ::buffa::encoding::Tag::new(1u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_bool(self.narrative_output_enabled, buf);
+        }
+        if self.external_text_input_enabled {
+            ::buffa::encoding::Tag::new(2u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_bool(self.external_text_input_enabled, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+impl<'v> ::buffa::DefaultViewInstance for ChannelSwitchesView<'v> {
+    fn default_view_instance<'a>() -> &'a Self
+    where
+        Self: 'a,
+    {
+        static VALUE: ::buffa::__private::OnceBox<ChannelSwitchesView<'static>> = ::buffa::__private::OnceBox::new();
+        VALUE
+            .get_or_init(|| ::buffa::alloc::boxed::Box::new(
+                <ChannelSwitchesView<'static>>::default(),
             ))
     }
 }

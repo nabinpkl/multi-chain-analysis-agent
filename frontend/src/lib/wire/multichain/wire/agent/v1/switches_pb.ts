@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file multichain/wire/agent/v1/switches.proto.
  */
 export const file_multichain_wire_agent_v1_switches: GenFile = /*@__PURE__*/
-  fileDesc("CidtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc3dpdGNoZXMucHJvdG8SGG11bHRpY2hhaW4ud2lyZS5hZ2VudC52MSLMAQoNQWdlbnRTd2l0Y2hlcxJCCgxzdGF5X2luX3JvbGUYASABKAsyLC5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuU3RheUluUm9sZVN3aXRjaGVzEhYKDmRvbnRfZmFicmljYXRlGAIgASgIEkEKC2Nyb3NzX2NoZWNrGAMgASgLMiwubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkNyb3NzQ2hlY2tTd2l0Y2hlcxIcChRkb250X3JlcGVhdF95b3Vyc2VsZhgEIAEoCCL4AQoSU3RheUluUm9sZVN3aXRjaGVzEiUKHWRlZmVuZF9jaGF0X3RlbXBsYXRlX3Nwb29maW5nGAEgASgIEiEKGWRlZmVuZF9jb25zdGl0dXRpb25fanVkZ2UYAiABKAgSGwoTZGVmZW5kX3BlcnNvbmFfc3dhcBgDIAEoCBIhChlkZWZlbmRfZGVjb2RlX2FuZF9leGVjdXRlGAQgASgIEh4KFmRlZmVuZF9pZGVudGl0eV9yZXZlYWwYBSABKAgSGQoRZGVmZW5kX29mZl9kb21haW4YBiABKAgSHQoVZGVmZW5kX21lbW9faW5qZWN0aW9uGAcgASgIIlAKEkNyb3NzQ2hlY2tTd2l0Y2hlcxIeChZwYXJhcGhyYXNlX2F3YXJlX21hdGNoGAEgASgIEhoKEmdyb3VuZF90cnV0aF9tYXRjaBgCIAEoCGIGcHJvdG8z");
+  fileDesc("CidtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc3dpdGNoZXMucHJvdG8SGG11bHRpY2hhaW4ud2lyZS5hZ2VudC52MSKJAgoNQWdlbnRTd2l0Y2hlcxJCCgxzdGF5X2luX3JvbGUYASABKAsyLC5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuU3RheUluUm9sZVN3aXRjaGVzEhYKDmRvbnRfZmFicmljYXRlGAIgASgIEkEKC2Nyb3NzX2NoZWNrGAMgASgLMiwubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkNyb3NzQ2hlY2tTd2l0Y2hlcxIcChRkb250X3JlcGVhdF95b3Vyc2VsZhgEIAEoCBI7CghjaGFubmVscxgFIAEoCzIpLm11bHRpY2hhaW4ud2lyZS5hZ2VudC52MS5DaGFubmVsU3dpdGNoZXMiWAoPQ2hhbm5lbFN3aXRjaGVzEiAKGG5hcnJhdGl2ZV9vdXRwdXRfZW5hYmxlZBgBIAEoCBIjChtleHRlcm5hbF90ZXh0X2lucHV0X2VuYWJsZWQYAiABKAgi+AEKElN0YXlJblJvbGVTd2l0Y2hlcxIlCh1kZWZlbmRfY2hhdF90ZW1wbGF0ZV9zcG9vZmluZxgBIAEoCBIhChlkZWZlbmRfY29uc3RpdHV0aW9uX2p1ZGdlGAIgASgIEhsKE2RlZmVuZF9wZXJzb25hX3N3YXAYAyABKAgSIQoZZGVmZW5kX2RlY29kZV9hbmRfZXhlY3V0ZRgEIAEoCBIeChZkZWZlbmRfaWRlbnRpdHlfcmV2ZWFsGAUgASgIEhkKEWRlZmVuZF9vZmZfZG9tYWluGAYgASgIEh0KFWRlZmVuZF9tZW1vX2luamVjdGlvbhgHIAEoCCJQChJDcm9zc0NoZWNrU3dpdGNoZXMSHgoWcGFyYXBocmFzZV9hd2FyZV9tYXRjaBgBIAEoCBIaChJncm91bmRfdHJ1dGhfbWF0Y2gYAiABKAhiBnByb3RvMw");
 
 /**
  * Ship 3.5 ablation switches. Each field is a behavior contract;
@@ -59,6 +59,16 @@ export type AgentSwitches = Message<"multichain.wire.agent.v1.AgentSwitches"> & 
    * @generated from field: bool dont_repeat_yourself = 4;
    */
   dontRepeatYourself: boolean;
+
+  /**
+   * Cockpit: per-channel I/O toggles for the agent's communication
+   * surface. Each channel pairs a switch with a deterministic
+   * observable (an `mcae.turn.channels.*` span attribute) so eval
+   * probes can assert the off-state actually held.
+   *
+   * @generated from field: multichain.wire.agent.v1.ChannelSwitches channels = 5;
+   */
+  channels?: ChannelSwitches | undefined;
 };
 
 /**
@@ -67,6 +77,56 @@ export type AgentSwitches = Message<"multichain.wire.agent.v1.AgentSwitches"> & 
  */
 export const AgentSwitchesSchema: GenMessage<AgentSwitches> = /*@__PURE__*/
   messageDesc(file_multichain_wire_agent_v1_switches, 0);
+
+/**
+ * Cockpit-style I/O channel toggles. Each switch controls one of
+ * the agent's input or output text surfaces. Defaults are the
+ * production preset (every channel on); proto3 false default
+ * deliberately puts the unsafe state behind explicit construction
+ * so a caller forgetting a field gets a noticeably restrictive
+ * agent rather than a silently-leaky one.
+ *
+ * @generated from message multichain.wire.agent.v1.ChannelSwitches
+ */
+export type ChannelSwitches = Message<"multichain.wire.agent.v1.ChannelSwitches"> & {
+  /**
+   * When false, the agent's free-form Narrative output is replaced
+   * with empty text at the loop driver before the SSE Narrative
+   * frame is emitted. The model still generates prose; we drop it
+   * before any consumer sees it. The `mcae.narrative.emitted` span
+   * still fires (with `length_chars=0` and `narrative.suppressed
+   * =true`) so probes can assert the off-state held without
+   * inspecting frontend state.
+   *
+   * Use cases: stress-test whether the agent can carry a turn
+   * through Claim chips alone; remove Narrative as a potential
+   * exfil channel for prompt-injected text; measure how much of
+   * a turn's value lives in structured Claims vs interpretive prose.
+   *
+   * @generated from field: bool narrative_output_enabled = 1;
+   */
+  narrativeOutputEnabled: boolean;
+
+  /**
+   * When false, primitive tool outputs are sanitized before being
+   * wrapped in <external_data>: every string field outside the
+   * constrained-format allowlist (base58 address, enum role, mint
+   * id) is replaced with a placeholder. Today no primitive emits
+   * untrusted text so this switch is forward-looking, but it is
+   * wired now so future memo or tag primitives slot in without a
+   * schema change.
+   *
+   * @generated from field: bool external_text_input_enabled = 2;
+   */
+  externalTextInputEnabled: boolean;
+};
+
+/**
+ * Describes the message multichain.wire.agent.v1.ChannelSwitches.
+ * Use `create(ChannelSwitchesSchema)` to create a new message.
+ */
+export const ChannelSwitchesSchema: GenMessage<ChannelSwitches> = /*@__PURE__*/
+  messageDesc(file_multichain_wire_agent_v1_switches, 1);
 
 /**
  * Per-defense ablation surface for the "stay in role" family.
@@ -149,7 +209,7 @@ export type StayInRoleSwitches = Message<"multichain.wire.agent.v1.StayInRoleSwi
  * Use `create(StayInRoleSwitchesSchema)` to create a new message.
  */
 export const StayInRoleSwitchesSchema: GenMessage<StayInRoleSwitches> = /*@__PURE__*/
-  messageDesc(file_multichain_wire_agent_v1_switches, 1);
+  messageDesc(file_multichain_wire_agent_v1_switches, 2);
 
 /**
  * Sub-modes of cross_check. Two independent toggles after ship 5a
@@ -181,5 +241,5 @@ export type CrossCheckSwitches = Message<"multichain.wire.agent.v1.CrossCheckSwi
  * Use `create(CrossCheckSwitchesSchema)` to create a new message.
  */
 export const CrossCheckSwitchesSchema: GenMessage<CrossCheckSwitches> = /*@__PURE__*/
-  messageDesc(file_multichain_wire_agent_v1_switches, 2);
+  messageDesc(file_multichain_wire_agent_v1_switches, 3);
 

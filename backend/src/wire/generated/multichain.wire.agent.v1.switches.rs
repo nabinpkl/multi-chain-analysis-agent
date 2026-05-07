@@ -58,6 +58,17 @@ pub struct AgentSwitches {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
     )]
     pub dont_repeat_yourself: bool,
+    /// Cockpit: per-channel I/O toggles for the agent's communication
+    /// surface. Each channel pairs a switch with a deterministic
+    /// observable (an `mcae.turn.channels.*` span attribute) so eval
+    /// probes can assert the off-state actually held.
+    ///
+    /// Field 5: `channels`
+    #[serde(
+        rename = "channels",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub channels: ::buffa::MessageField<ChannelSwitches>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -69,6 +80,7 @@ impl ::core::fmt::Debug for AgentSwitches {
             .field("dont_fabricate", &self.dont_fabricate)
             .field("cross_check", &self.cross_check)
             .field("dont_repeat_yourself", &self.dont_repeat_yourself)
+            .field("channels", &self.channels)
             .finish()
     }
 }
@@ -118,6 +130,14 @@ impl ::buffa::Message for AgentSwitches {
         if self.dont_repeat_yourself {
             size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
         }
+        if self.channels.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.channels.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -155,6 +175,15 @@ impl ::buffa::Message for AgentSwitches {
             ::buffa::encoding::Tag::new(4u32, ::buffa::encoding::WireType::Varint)
                 .encode(buf);
             ::buffa::types::encode_bool(self.dont_repeat_yourself, buf);
+        }
+        if self.channels.is_set() {
+            ::buffa::encoding::Tag::new(
+                    5u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
+                .encode(buf);
+            ::buffa::encoding::encode_varint(__cache.consume_next() as u64, buf);
+            self.channels.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -217,6 +246,20 @@ impl ::buffa::Message for AgentSwitches {
                 }
                 self.dont_repeat_yourself = ::buffa::types::decode_bool(buf)?;
             }
+            5u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 5u32,
+                        expected: 2u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                ::buffa::Message::merge_length_delimited(
+                    self.channels.get_or_insert_default(),
+                    buf,
+                    depth,
+                )?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, depth)?);
@@ -229,6 +272,7 @@ impl ::buffa::Message for AgentSwitches {
         self.dont_fabricate = false;
         self.cross_check = ::buffa::MessageField::none();
         self.dont_repeat_yourself = false;
+        self.channels = ::buffa::MessageField::none();
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -259,6 +303,190 @@ pub const __AGENT_SWITCHES_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::bu
     type_url: "type.googleapis.com/multichain.wire.agent.v1.AgentSwitches",
     to_json: ::buffa::type_registry::any_to_json::<AgentSwitches>,
     from_json: ::buffa::type_registry::any_from_json::<AgentSwitches>,
+    is_wkt: false,
+};
+/// Cockpit-style I/O channel toggles. Each switch controls one of
+/// the agent's input or output text surfaces. Defaults are the
+/// production preset (every channel on); proto3 false default
+/// deliberately puts the unsafe state behind explicit construction
+/// so a caller forgetting a field gets a noticeably restrictive
+/// agent rather than a silently-leaky one.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ChannelSwitches {
+    /// When false, the agent's free-form Narrative output is replaced
+    /// with empty text at the loop driver before the SSE Narrative
+    /// frame is emitted. The model still generates prose; we drop it
+    /// before any consumer sees it. The `mcae.narrative.emitted` span
+    /// still fires (with `length_chars=0` and `narrative.suppressed
+    /// =true`) so probes can assert the off-state held without
+    /// inspecting frontend state.
+    ///
+    /// Use cases: stress-test whether the agent can carry a turn
+    /// through Claim chips alone; remove Narrative as a potential
+    /// exfil channel for prompt-injected text; measure how much of
+    /// a turn's value lives in structured Claims vs interpretive prose.
+    ///
+    /// Field 1: `narrative_output_enabled`
+    #[serde(
+        rename = "narrativeOutputEnabled",
+        alias = "narrative_output_enabled",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub narrative_output_enabled: bool,
+    /// When false, primitive tool outputs are sanitized before being
+    /// wrapped in \<external_data\>: every string field outside the
+    /// constrained-format allowlist (base58 address, enum role, mint
+    /// id) is replaced with a placeholder. Today no primitive emits
+    /// untrusted text so this switch is forward-looking, but it is
+    /// wired now so future memo or tag primitives slot in without a
+    /// schema change.
+    ///
+    /// Field 2: `external_text_input_enabled`
+    #[serde(
+        rename = "externalTextInputEnabled",
+        alias = "external_text_input_enabled",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub external_text_input_enabled: bool,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ChannelSwitches {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ChannelSwitches")
+            .field("narrative_output_enabled", &self.narrative_output_enabled)
+            .field("external_text_input_enabled", &self.external_text_input_enabled)
+            .finish()
+    }
+}
+impl ChannelSwitches {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/multichain.wire.agent.v1.ChannelSwitches";
+}
+impl ::buffa::DefaultInstance for ChannelSwitches {
+    fn default_instance() -> &'static Self {
+        static VALUE: ::buffa::__private::OnceBox<ChannelSwitches> = ::buffa::__private::OnceBox::new();
+        VALUE.get_or_init(|| ::buffa::alloc::boxed::Box::new(Self::default()))
+    }
+}
+impl ::buffa::Message for ChannelSwitches {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.narrative_output_enabled {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        if self.external_text_input_enabled {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.narrative_output_enabled {
+            ::buffa::encoding::Tag::new(1u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_bool(self.narrative_output_enabled, buf);
+        }
+        if self.external_text_input_enabled {
+            ::buffa::encoding::Tag::new(2u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_bool(self.external_text_input_enabled, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        depth: u32,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 1u32,
+                        expected: 0u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                self.narrative_output_enabled = ::buffa::types::decode_bool(buf)?;
+            }
+            2u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 2u32,
+                        expected: 0u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                self.external_text_input_enabled = ::buffa::types::decode_bool(buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, depth)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.narrative_output_enabled = false;
+        self.external_text_input_enabled = false;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ChannelSwitches {
+    const PROTO_FQN: &'static str = "multichain.wire.agent.v1.ChannelSwitches";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ChannelSwitches {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __CHANNEL_SWITCHES_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.ChannelSwitches",
+    to_json: ::buffa::type_registry::any_to_json::<ChannelSwitches>,
+    from_json: ::buffa::type_registry::any_from_json::<ChannelSwitches>,
     is_wkt: false,
 };
 /// Per-defense ablation surface for the "stay in role" family.

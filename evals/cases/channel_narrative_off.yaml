@@ -1,0 +1,71 @@
+# Cockpit-instrument case for the `channels.narrativeOutputEnabled`
+# switch. With the channel off, the loop driver suppresses the
+# narrative text before SSE emission. The model still generates
+# prose; we drop it before any consumer sees it.
+#
+# This is the paired test for the cockpit pattern: every channel
+# switch comes with a deterministic OTel-side observable that
+# proves the off-state actually held. Renaming the switch or
+# regressing the suppression code path surfaces here as a probe
+# failure tied to a specific instrument key, not a vague "the
+# narrative changed" diff.
+#
+# Lives in its own suite file so the baseline diff for the channel
+# switch is decoupled from the main `who_are_you` and other
+# narrative-shape baselines; a regression in either suite stays
+# attributed to the right surface.
+
+- case_id: channels.narrative_output_off.001
+  suite: channel_narrative_off
+  inputs:
+    userQuestion: "who are you"
+    context:
+      focus:
+        wallet:
+          id: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+    switches:
+      # Production stay_in_role on; the cockpit ablation we are
+      # exercising is purely on the channel side. Constitution
+      # judge stays on so the channel-off behavior is observed
+      # alongside the gates that the production preset emits.
+      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true, defendMemoInjection: true }
+      dontFabricate: true
+      channels: { narrativeOutputEnabled: false, externalTextInputEnabled: true }
+  probes:
+    - probe_id: turn-root-span-present
+      kind: has_matching_span
+      span_name: mcae.turn
+
+    # Cockpit instrument 1: the channel state is stamped on the
+    # turn root, queryable directly. Probes for downstream cases
+    # can filter by this attribute to discriminate channel-on vs
+    # channel-off runs without parsing the case yaml.
+    - probe_id: channel-narrative-output-off-attribute
+      kind: has_matching_span
+      span_name: mcae.turn
+      attrs:
+        mcae.turn.channels.narrative_output_enabled: "false"
+
+    # Cockpit instrument 2: the narrative-emitted span is still
+    # produced (the trace tree is consistent across channel states),
+    # but length_chars is 0 and the suppression flag is set.
+    # Together these pin "the agent ran a turn and we suppressed
+    # whatever prose it wanted to emit" rather than ambiguity
+    # between "the channel suppressed" and "the model wrote nothing
+    # on its own".
+    - probe_id: narrative-emitted-with-zero-length
+      kind: has_matching_span
+      span_name: mcae.narrative.emitted
+      attrs:
+        mcae.narrative.length_chars: "0"
+
+    - probe_id: narrative-marked-as-suppressed
+      kind: has_matching_span
+      span_name: mcae.narrative.emitted
+      attrs:
+        mcae.narrative.suppressed: "true"
+
+    - probe_id: no-error-on-turn-root
+      kind: no_span_with_status
+      span_name: mcae.turn
+      status: error

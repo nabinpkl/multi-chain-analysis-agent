@@ -26,6 +26,41 @@ message AgentSwitches {
   // re-fetches the prior turn's primitives, deterministically diffs
   // against the prior outputs, and surfaces only what changed.
   bool dont_repeat_yourself = 4;
+  // Cockpit: per-channel I/O toggles for the agent's communication
+  // surface. Each channel pairs a switch with a deterministic
+  // observable (an `mcae.turn.channels.*` span attribute) so eval
+  // probes can assert the off-state actually held.
+  ChannelSwitches channels = 5;
+}
+
+// Cockpit-style I/O channel toggles. Each switch controls one of
+// the agent's input or output text surfaces. Defaults are the
+// production preset (every channel on); proto3 false default
+// deliberately puts the unsafe state behind explicit construction
+// so a caller forgetting a field gets a noticeably restrictive
+// agent rather than a silently-leaky one.
+message ChannelSwitches {
+  // When false, the agent's free-form Narrative output is replaced
+  // with empty text at the loop driver before the SSE Narrative
+  // frame is emitted. The model still generates prose; we drop it
+  // before any consumer sees it. The `mcae.narrative.emitted` span
+  // still fires (with `length_chars=0` and `narrative.suppressed
+  // =true`) so probes can assert the off-state held without
+  // inspecting frontend state.
+  //
+  // Use cases: stress-test whether the agent can carry a turn
+  // through Claim chips alone; remove Narrative as a potential
+  // exfil channel for prompt-injected text; measure how much of
+  // a turn's value lives in structured Claims vs interpretive prose.
+  bool narrative_output_enabled = 1;
+  // When false, primitive tool outputs are sanitized before being
+  // wrapped in <external_data>: every string field outside the
+  // constrained-format allowlist (base58 address, enum role, mint
+  // id) is replaced with a placeholder. Today no primitive emits
+  // untrusted text so this switch is forward-looking, but it is
+  // wired now so future memo or tag primitives slot in without a
+  // schema change.
+  bool external_text_input_enabled = 2;
 }
 
 // Per-defense ablation surface for the "stay in role" family.

@@ -3,6 +3,7 @@ import { create } from "@bufbuild/protobuf";
 
 import {
   AgentSwitchesSchema,
+  ChannelSwitchesSchema,
   CrossCheckSwitchesSchema,
   StayInRoleSwitchesSchema,
   type AgentSwitches,
@@ -74,6 +75,15 @@ function makeSwitches(opts: {
       groundTruthMatch: opts.groundTruthMatch,
     }),
     dontRepeatYourself: opts.dontRepeatYourself,
+    // Cockpit channels: production preset has every output channel
+    // on. The narrative-output toggle (and the forward-looking
+    // external-text-input toggle) are not currently surfaced on the
+    // UI; they are wire-only ablation lanes for evals and the
+    // article runner.
+    channels: create(ChannelSwitchesSchema, {
+      narrativeOutputEnabled: true,
+      externalTextInputEnabled: true,
+    }),
   });
 }
 
@@ -200,6 +210,7 @@ function applySwitchKey(
   // init shape on sub-messages).
   const cross = s.crossCheck;
   const role = s.stayInRole;
+  const channels = s.channels;
   // Carry every sub-field through unchanged when reconstructing the
   // sub-message so toggling another switch (e.g. dontFabricate) does
   // not silently reset role-defense fields.
@@ -219,6 +230,13 @@ function applySwitchKey(
     crossCheck: create(CrossCheckSwitchesSchema, {
       paraphraseAwareMatch: cross?.paraphraseAwareMatch ?? false,
       groundTruthMatch: cross?.groundTruthMatch ?? false,
+    }),
+    // Channel sub-message: carry every field through unchanged so
+    // toggling another switch (e.g. dontFabricate) does not silently
+    // reset cockpit lanes.
+    channels: create(ChannelSwitchesSchema, {
+      narrativeOutputEnabled: channels?.narrativeOutputEnabled ?? false,
+      externalTextInputEnabled: channels?.externalTextInputEnabled ?? false,
     }),
   };
   switch (key) {

@@ -168,6 +168,40 @@ def _frame(event: str, msg) -> dict[str, str]:
     }
 
 
+def _resolve_narrative_text(
+    raw_text: str,
+    *,
+    narrative_output_enabled: bool,
+    nar_span: trace.Span,
+) -> str:
+    """Apply the narrative-output channel switch to the model's prose
+    and stamp the matching cockpit instruments on `nar_span`.
+
+    When the channel is on, returns `raw_text` unchanged and stamps the
+    usual length attribute. When the channel is off, returns "" and
+    stamps `narrative.suppressed=true` plus `narrative.pre_suppression
+    _chars=len(raw_text)` so probes can assert "model wrote N chars
+    but the cockpit suppressed them" without inspecting SSE bytes.
+
+    The full-text NARRATIVE_TEXT attribute is NOT set here; callers
+    that want to attach it (with the existing 8 KiB cap) do so before
+    or after based on whether the channel is on. We never stamp the
+    pre-suppression body to the span: that would defeat the point of
+    suppression as an exfil control.
+    """
+    if narrative_output_enabled:
+        nar_span.set_attribute(
+            spans.Attrs.NARRATIVE_LENGTH_CHARS, len(raw_text)
+        )
+        return raw_text
+    nar_span.set_attribute(spans.Attrs.NARRATIVE_SUPPRESSED, True)
+    nar_span.set_attribute(spans.Attrs.NARRATIVE_LENGTH_CHARS, 0)
+    nar_span.set_attribute(
+        spans.Attrs.NARRATIVE_PRE_SUPPRESSION_CHARS, len(raw_text)
+    )
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Provenance mapping (tool-arg ProvenanceRefIn -> proto ProvenanceRef)
 # ---------------------------------------------------------------------------
@@ -477,6 +511,21 @@ async def run_turn(
             # consolidated it into the span attribute set.
             turn_span.set_attribute(spans.Attrs.TURN_USER_QUESTION, request.user_question)
 
+            # Cockpit instruments: stamp every channel switch state on
+            # the turn span so eval probes can assert the off-state
+            # held without inspecting SSE bytes or frontend state.
+            # Boolean attributes go through as JSON booleans in the
+            # OTel JSON exporter and as "true"/"false" strings in
+            # the ClickHouse string-attr map; probes coerce both.
+            turn_span.set_attribute(
+                spans.Attrs.TURN_CHANNEL_NARRATIVE_OUTPUT_ENABLED,
+                request.switches.channels.narrative_output_enabled,
+            )
+            turn_span.set_attribute(
+                spans.Attrs.TURN_CHANNEL_EXTERNAL_TEXT_INPUT_ENABLED,
+                request.switches.channels.external_text_input_enabled,
+            )
+
             # ------ Topical rail: reject unsafe user input ------
             # The user question is one of two untrusted-input slots
             # (the other is `<external_data>` blocks from primitive
@@ -506,13 +555,20 @@ async def run_turn(
                     "summarize communities, and look at on-chain transfers."
                 )
                 with _tracer.start_as_current_span(spans.NARRATIVE_EMITTED) as nar_span:
-                    nar_span.set_attribute(
-                        spans.Attrs.NARRATIVE_LENGTH_CHARS, len(rejection_text)
+                    # Channel-aware: when narrative output is off, the
+                    # rejection text is suppressed too. The cockpit
+                    # semantic is "no narrative bytes leave this turn",
+                    # which applies even to operator-controlled prose.
+                    sse_text = _resolve_narrative_text(
+                        rejection_text,
+                        narrative_output_enabled=request.switches.channels.narrative_output_enabled,
+                        nar_span=nar_span,
                     )
                     nar_span.set_attribute(
                         spans.Attrs.NARRATIVE_ASSEMBLED_PROVENANCE_COUNT, 0
                     )
-                    nar_span.set_attribute(spans.Attrs.NARRATIVE_TEXT, rejection_text)
+                    if sse_text:
+                        nar_span.set_attribute(spans.Attrs.NARRATIVE_TEXT, sse_text)
                     nar_span.set_attribute(
                         spans.Attrs.NARRATIVE_VERDICT, spans.VERDICT_APPROVED
                     )
@@ -529,7 +585,7 @@ async def run_turn(
                 yield _frame(
                     "Narrative",
                     narrative_pb2.NarrativeWithRefs(
-                        text=rejection_text, provenance=[]
+                        text=sse_text, provenance=[]
                     ),
                 )
                 # Mirror the end-of-turn aggregate stamping at the
@@ -539,8 +595,10 @@ async def run_turn(
                 turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_EMITTED, 0)
                 turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_APPROVED, 0)
                 turn_span.set_attribute(spans.Attrs.TURN_TOOL_CALLS, 0)
+                # Aggregate uses the post-suppression length so
+                # cockpit instruments match the on-wire reality.
                 turn_span.set_attribute(
-                    spans.Attrs.TURN_NARRATIVE_CHARS, len(rejection_text)
+                    spans.Attrs.TURN_NARRATIVE_CHARS, len(sse_text)
                 )
                 log.info(
                     "user_input_rejected_at_boundary",
@@ -814,8 +872,19 @@ async def run_turn(
                 )
 
             with _tracer.start_as_current_span(spans.NARRATIVE_EMITTED) as nar_span:
-                nar_span.set_attribute(
-                    spans.Attrs.NARRATIVE_LENGTH_CHARS, len(narrative_text)
+                # Apply the narrative-output channel switch. When off,
+                # `sse_text` is "" and the cockpit instruments
+                # (narrative.suppressed=true, pre_suppression_chars)
+                # are stamped on this span. When on, sse_text ==
+                # narrative_text and the usual length attribute is
+                # stamped. Placeholder validation below still runs
+                # against the model's original text so a "model wrote
+                # uncited audit numbers but we suppressed" path is
+                # observable distinct from "model wrote nothing".
+                sse_text = _resolve_narrative_text(
+                    narrative_text,
+                    narrative_output_enabled=request.switches.channels.narrative_output_enabled,
+                    nar_span=nar_span,
                 )
                 nar_span.set_attribute(
                     spans.Attrs.NARRATIVE_ASSEMBLED_PROVENANCE_COUNT,
@@ -824,12 +893,15 @@ async def run_turn(
                 # Full narrative text capped to NARRATIVE_TEXT_MAX_BYTES;
                 # overflow marker matches the primitive-payload convention
                 # so eval probes (and Langfuse) can detect truncation.
-                if len(narrative_text) <= spans.NARRATIVE_TEXT_MAX_BYTES:
-                    _capped_narrative = narrative_text
+                # When suppressed sse_text is "", which we still stamp so
+                # downstream queries see an empty field rather than a
+                # missing one.
+                if len(sse_text) <= spans.NARRATIVE_TEXT_MAX_BYTES:
+                    _capped_narrative = sse_text
                 else:
                     _capped_narrative = (
-                        narrative_text[: spans.NARRATIVE_TEXT_MAX_BYTES]
-                        + f" ...[truncated, total={len(narrative_text)}]"
+                        sse_text[: spans.NARRATIVE_TEXT_MAX_BYTES]
+                        + f" ...[truncated, total={len(sse_text)}]"
                     )
                 nar_span.set_attribute(
                     spans.Attrs.NARRATIVE_TEXT, _capped_narrative
@@ -850,7 +922,7 @@ async def run_turn(
                             spans.Attrs.NARRATIVE_VERDICT, spans.VERDICT_RETRACTED
                         )
                         ret = narrative_pb2.NarrativeRetracted(
-                            text=narrative_text, reason=ref_err.to_human_string()
+                            text=sse_text, reason=ref_err.to_human_string()
                         )
                         if handles.debug_public:
                             ret.debug_reason = f"placeholder_validate: {ref_err.kind}"
@@ -882,7 +954,7 @@ async def run_turn(
                                 _normalize_verdict(verdict.verdict),
                             )
                             ret = narrative_pb2.NarrativeRetracted(
-                                text=narrative_text,
+                                text=sse_text,
                                 reason=verdict.reason or f"constitution {verdict.verdict}",
                             )
                             if handles.debug_public:
@@ -893,7 +965,7 @@ async def run_turn(
                                 spans.Attrs.NARRATIVE_VERDICT, spans.VERDICT_APPROVED
                             )
                             nar = narrative_pb2.NarrativeWithRefs(
-                                text=narrative_text, provenance=assembled_provenance
+                                text=sse_text, provenance=assembled_provenance
                             )
                             yield _frame("Narrative", nar)
                 else:
@@ -902,7 +974,7 @@ async def run_turn(
                         spans.Attrs.NARRATIVE_VERDICT, spans.VERDICT_APPROVED
                     )
                     nar = narrative_pb2.NarrativeWithRefs(
-                        text=narrative_text, provenance=assembled_provenance
+                        text=sse_text, provenance=assembled_provenance
                     )
                     yield _frame("Narrative", nar)
 
@@ -927,7 +999,12 @@ async def run_turn(
             turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_EMITTED, len(deps.emitted_claims))
             turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_APPROVED, len(approved_claims))
             turn_span.set_attribute(spans.Attrs.TURN_TOOL_CALLS, len(deps.tool_call_records))
-            turn_span.set_attribute(spans.Attrs.TURN_NARRATIVE_CHARS, len(narrative_text))
+            # Aggregate uses the post-suppression length so the cockpit
+            # instrument matches what actually left the agent. The
+            # pre-suppression length lives on the narrative span as
+            # `mcae.narrative.pre_suppression_chars` for probes that
+            # want both numbers.
+            turn_span.set_attribute(spans.Attrs.TURN_NARRATIVE_CHARS, len(sse_text))
 
             yield _terminal_done(session_id, session_started_at_ms)
 

@@ -93,6 +93,29 @@ class Attrs:
     TURN_UNSAFE_INPUT_REJECTED: Final = "mcae.turn.unsafe_input_rejected"
     TURN_UNSAFE_INPUT_PATTERN: Final = "mcae.turn.unsafe_input_pattern"
 
+    # Channel cockpit instruments. One attribute per ChannelSwitches
+    # field, stamped on the mcae.turn span at turn start. Probes
+    # assert `mcae.turn.channels.narrative_output_enabled = "false"`
+    # to gate-test the off-state path without needing to inspect
+    # SSE bytes. Keys mirror the proto field names so a future
+    # field add maps 1-to-1.
+    TURN_CHANNEL_NARRATIVE_OUTPUT_ENABLED: Final = (
+        "mcae.turn.channels.narrative_output_enabled"
+    )
+    TURN_CHANNEL_EXTERNAL_TEXT_INPUT_ENABLED: Final = (
+        "mcae.turn.channels.external_text_input_enabled"
+    )
+
+    # Narrative suppression (set on `mcae.narrative.emitted` when
+    # the narrative-output channel is off). Pairs with
+    # NARRATIVE_LENGTH_CHARS=0 so a probe can assert "model wrote
+    # text but we suppressed it" vs "model wrote nothing" without
+    # ambiguity.
+    NARRATIVE_SUPPRESSED: Final = "mcae.narrative.suppressed"
+    NARRATIVE_PRE_SUPPRESSION_CHARS: Final = (
+        "mcae.narrative.pre_suppression_chars"
+    )
+
     # Gates (every mcae.gate.* span carries verdict + optional reason
     # and a version pin so eval probes can assert "constitution v4
     # passed", not just "the constitution gate passed today").

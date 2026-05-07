@@ -36,6 +36,7 @@
     switches:
       stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true, defendMemoInjection: true }
       dontFabricate: true
+      channels: { narrativeOutputEnabled: true, externalTextInputEnabled: true }
   probes:
     - probe_id: turn-root-span-present
       kind: has_matching_span
