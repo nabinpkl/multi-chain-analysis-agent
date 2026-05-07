@@ -19,10 +19,13 @@ from __future__ import annotations
 
 import pytest
 
+from multichain.wire.agent.v1 import switches_pb2 as sw_pb
+
 from agent_service.prompts import load_prompt
 from agent_service.prompts.composer import (
     CompositionError,
     compose_system_prompt,
+    drops_from_switches,
     known_rule_ids,
 )
 
@@ -212,6 +215,141 @@ def test_known_rule_ids_lists_real_defense_namespace():
         f"these ids. Either restore them or update the article-side "
         f"switch wiring."
     )
+
+
+# ---------------------------------------------------------------------------
+# drops_from_switches: switches sub-message -> rule-id drop set
+# ---------------------------------------------------------------------------
+
+
+def _all_on_switches() -> sw_pb.AgentSwitches:
+    """Production preset: every defense in StayInRoleSwitches is on."""
+    return sw_pb.AgentSwitches(
+        stay_in_role=sw_pb.StayInRoleSwitches(
+            defend_chat_template_spoofing=True,
+            defend_constitution_judge=True,
+            defend_persona_swap=True,
+            defend_decode_and_execute=True,
+            defend_identity_reveal=True,
+            defend_off_domain=True,
+            defend_memo_injection=True,
+        ),
+    )
+
+
+def test_drops_from_switches_production_preset_drops_nothing():
+    """Production: all sub-defenses on -> empty drop set -> prompt
+    is the unmodified file. The byte-identity guarantee depends on
+    this returning frozenset()."""
+    assert drops_from_switches(_all_on_switches()) == frozenset()
+
+
+def test_drops_from_switches_chat_template_off_drops_rule():
+    s = _all_on_switches()
+    s.stay_in_role.defend_chat_template_spoofing = False
+    assert drops_from_switches(s) == frozenset({"defense:chat_template_rejection"})
+
+
+def test_drops_from_switches_persona_swap_alone_off_keeps_rule():
+    """The user_question_untrusted rule covers BOTH persona-swap
+    and decode-and-execute. Either alone off -> rule stays."""
+    s = _all_on_switches()
+    s.stay_in_role.defend_persona_swap = False
+    assert drops_from_switches(s) == frozenset()
+
+
+def test_drops_from_switches_decode_alone_off_keeps_rule():
+    """Mirror of the persona-swap test."""
+    s = _all_on_switches()
+    s.stay_in_role.defend_decode_and_execute = False
+    assert drops_from_switches(s) == frozenset()
+
+
+def test_drops_from_switches_persona_and_decode_both_off_drops_rule():
+    """Both off -> drop the shared rule."""
+    s = _all_on_switches()
+    s.stay_in_role.defend_persona_swap = False
+    s.stay_in_role.defend_decode_and_execute = False
+    assert drops_from_switches(s) == frozenset(
+        {"defense:user_question_untrusted"}
+    )
+
+
+def test_drops_from_switches_identity_off_drops_rule():
+    s = _all_on_switches()
+    s.stay_in_role.defend_identity_reveal = False
+    assert drops_from_switches(s) == frozenset({"defense:identity"})
+
+
+def test_drops_from_switches_off_domain_off_drops_rule():
+    s = _all_on_switches()
+    s.stay_in_role.defend_off_domain = False
+    assert drops_from_switches(s) == frozenset({"defense:off_domain"})
+
+
+def test_drops_from_switches_memo_injection_off_drops_rule():
+    s = _all_on_switches()
+    s.stay_in_role.defend_memo_injection = False
+    assert drops_from_switches(s) == frozenset({"defense:memo_injection"})
+
+
+def test_drops_from_switches_constitution_judge_does_not_drop_any_rule():
+    """`defend_constitution_judge` gates the gate spans, not the
+    prompt content. Pinned so a future refactor doesn't accidentally
+    couple it to a rule drop and double-disable on switch off."""
+    s = _all_on_switches()
+    s.stay_in_role.defend_constitution_judge = False
+    assert drops_from_switches(s) == frozenset()
+
+
+def test_drops_from_switches_all_off_drops_every_defense_rule():
+    """End-to-end ablation: every defense in StayInRoleSwitches off
+    -> the full set of `defense:*` rules covered by the mapping is
+    dropped. Acts as a regression test for the rule-namespace
+    contract: if a new defense rule is added without wiring its
+    drop here, this test surfaces it."""
+    s = sw_pb.AgentSwitches(
+        stay_in_role=sw_pb.StayInRoleSwitches(
+            defend_chat_template_spoofing=False,
+            defend_constitution_judge=False,
+            defend_persona_swap=False,
+            defend_decode_and_execute=False,
+            defend_identity_reveal=False,
+            defend_off_domain=False,
+            defend_memo_injection=False,
+        ),
+    )
+    assert drops_from_switches(s) == frozenset(
+        {
+            "defense:chat_template_rejection",
+            "defense:user_question_untrusted",
+            "defense:identity",
+            "defense:off_domain",
+            "defense:memo_injection",
+        }
+    )
+
+
+def test_drops_from_switches_drops_match_known_rule_ids():
+    """Sanity: every rule id we drop actually exists in the source
+    file. Without this, a typo in `drops_from_switches` would
+    silently no-op until someone toggled the switch."""
+    ids = known_rule_ids()
+    s = sw_pb.AgentSwitches(
+        stay_in_role=sw_pb.StayInRoleSwitches(),  # all defaults false
+    )
+    drops = drops_from_switches(s)
+    missing = drops - ids
+    assert not missing, (
+        f"drops_from_switches references rule ids not present in "
+        f"system_v4.txt: {sorted(missing)}. Either rename the rule "
+        f"or fix the mapping."
+    )
+
+
+# ---------------------------------------------------------------------------
+# end drops_from_switches
+# ---------------------------------------------------------------------------
 
 
 def test_known_rule_ids_raises_on_duplicate():

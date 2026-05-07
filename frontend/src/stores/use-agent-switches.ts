@@ -51,15 +51,22 @@ function makeSwitches(opts: {
   groundTruthMatch: boolean;
   dontRepeatYourself: boolean;
 }): AgentSwitches {
-  // The single `stayInRole` UI toggle drives both sub-defenses
-  // (boundary chat-template rejection + constitution judge gate).
-  // Stage C (#36 phase 4) adds finer-grained fields; until then the
-  // UI continues to expose one composite toggle and we keep the
-  // sub-fields in lockstep here.
+  // The single `stayInRole` UI toggle drives the two original
+  // sub-defenses (boundary chat-template rejection + constitution
+  // judge gate). The five per-prompt-rule defenses added in #36
+  // phase 4 stay on regardless: their off-state changes the system
+  // prompt content, which is article-only ablation and not
+  // appropriate to expose on the production UI. Article-side
+  // cases set those flags directly on the wire.
   return create(AgentSwitchesSchema, {
     stayInRole: create(StayInRoleSwitchesSchema, {
       defendChatTemplateSpoofing: opts.stayInRole,
       defendConstitutionJudge: opts.stayInRole,
+      defendPersonaSwap: true,
+      defendDecodeAndExecute: true,
+      defendIdentityReveal: true,
+      defendOffDomain: true,
+      defendMemoInjection: true,
     }),
     dontFabricate: opts.dontFabricate,
     crossCheck: create(CrossCheckSwitchesSchema, {
@@ -193,11 +200,20 @@ function applySwitchKey(
   // init shape on sub-messages).
   const cross = s.crossCheck;
   const role = s.stayInRole;
+  // Carry every sub-field through unchanged when reconstructing the
+  // sub-message so toggling another switch (e.g. dontFabricate) does
+  // not silently reset role-defense fields.
+  const carriedRole = {
+    defendChatTemplateSpoofing: role?.defendChatTemplateSpoofing ?? false,
+    defendConstitutionJudge: role?.defendConstitutionJudge ?? false,
+    defendPersonaSwap: role?.defendPersonaSwap ?? false,
+    defendDecodeAndExecute: role?.defendDecodeAndExecute ?? false,
+    defendIdentityReveal: role?.defendIdentityReveal ?? false,
+    defendOffDomain: role?.defendOffDomain ?? false,
+    defendMemoInjection: role?.defendMemoInjection ?? false,
+  };
   const base = {
-    stayInRole: create(StayInRoleSwitchesSchema, {
-      defendChatTemplateSpoofing: role?.defendChatTemplateSpoofing ?? false,
-      defendConstitutionJudge: role?.defendConstitutionJudge ?? false,
-    }),
+    stayInRole: create(StayInRoleSwitchesSchema, carriedRole),
     dontFabricate: s.dontFabricate,
     dontRepeatYourself: s.dontRepeatYourself,
     crossCheck: create(CrossCheckSwitchesSchema, {
@@ -207,11 +223,13 @@ function applySwitchKey(
   };
   switch (key) {
     case "stayInRole":
-      // Composite toggle: both sub-defenses move in lockstep until
-      // the UI gains per-defense rows in Stage C (#36 phase 4).
+      // Composite UI toggle moves the two original sub-defenses in
+      // lockstep. The five per-prompt-rule defenses added in #36
+      // phase 4 are not exposed on the UI; they stay carried.
       return create(AgentSwitchesSchema, {
         ...base,
         stayInRole: create(StayInRoleSwitchesSchema, {
+          ...carriedRole,
           defendChatTemplateSpoofing: on,
           defendConstitutionJudge: on,
         }),

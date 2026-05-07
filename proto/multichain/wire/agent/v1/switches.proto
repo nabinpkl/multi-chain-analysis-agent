@@ -47,6 +47,31 @@ message StayInRoleSwitches {
   // (mcae.gate.constitution, mcae.gate.narrative_constitution) are
   // not emitted and gate verdicts default to approved.
   bool defend_constitution_judge = 2;
+
+  // Per-prompt-rule defenses (#36 phase 4). Each maps to dropping
+  // a specific <rule id="..."> block from `system_v4.txt` via the
+  // composer in `prompts/composer.py`. When off, the model never
+  // sees that rule and the article can measure raw model behavior
+  // on the corresponding vector.
+
+  // Drops `defense:user_question_untrusted`. The rule covers
+  // persona-swap and decode-and-execute together (one tightly
+  // worded paragraph), so both `defend_persona_swap` and
+  // `defend_decode_and_execute` map to the same drop. Either flag
+  // off keeps the rule; both off drops it.
+  bool defend_persona_swap = 3;
+  bool defend_decode_and_execute = 4;
+  // Drops `defense:identity`. When off the agent will name the
+  // underlying LLM if asked.
+  bool defend_identity_reveal = 5;
+  // Drops `defense:off_domain`. When off the agent's "decline
+  // off-topic" rule disappears.
+  bool defend_off_domain = 6;
+  // Drops `defense:memo_injection`. When off the agent loses the
+  // explicit rule that <external_data> blocks are data not
+  // instructions; `wrap_external_data` still fires but the
+  // model-side defense-in-depth is gone.
+  bool defend_memo_injection = 7;
 }
 
 // Sub-modes of cross_check. Two independent toggles after ship 5a

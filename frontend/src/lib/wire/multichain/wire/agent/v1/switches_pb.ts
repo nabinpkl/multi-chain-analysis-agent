@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file multichain/wire/agent/v1/switches.proto.
  */
 export const file_multichain_wire_agent_v1_switches: GenFile = /*@__PURE__*/
-  fileDesc("CidtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc3dpdGNoZXMucHJvdG8SGG11bHRpY2hhaW4ud2lyZS5hZ2VudC52MSLMAQoNQWdlbnRTd2l0Y2hlcxJCCgxzdGF5X2luX3JvbGUYASABKAsyLC5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuU3RheUluUm9sZVN3aXRjaGVzEhYKDmRvbnRfZmFicmljYXRlGAIgASgIEkEKC2Nyb3NzX2NoZWNrGAMgASgLMiwubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkNyb3NzQ2hlY2tTd2l0Y2hlcxIcChRkb250X3JlcGVhdF95b3Vyc2VsZhgEIAEoCCJeChJTdGF5SW5Sb2xlU3dpdGNoZXMSJQodZGVmZW5kX2NoYXRfdGVtcGxhdGVfc3Bvb2ZpbmcYASABKAgSIQoZZGVmZW5kX2NvbnN0aXR1dGlvbl9qdWRnZRgCIAEoCCJQChJDcm9zc0NoZWNrU3dpdGNoZXMSHgoWcGFyYXBocmFzZV9hd2FyZV9tYXRjaBgBIAEoCBIaChJncm91bmRfdHJ1dGhfbWF0Y2gYAiABKAhiBnByb3RvMw");
+  fileDesc("CidtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc3dpdGNoZXMucHJvdG8SGG11bHRpY2hhaW4ud2lyZS5hZ2VudC52MSLMAQoNQWdlbnRTd2l0Y2hlcxJCCgxzdGF5X2luX3JvbGUYASABKAsyLC5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuU3RheUluUm9sZVN3aXRjaGVzEhYKDmRvbnRfZmFicmljYXRlGAIgASgIEkEKC2Nyb3NzX2NoZWNrGAMgASgLMiwubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkNyb3NzQ2hlY2tTd2l0Y2hlcxIcChRkb250X3JlcGVhdF95b3Vyc2VsZhgEIAEoCCL4AQoSU3RheUluUm9sZVN3aXRjaGVzEiUKHWRlZmVuZF9jaGF0X3RlbXBsYXRlX3Nwb29maW5nGAEgASgIEiEKGWRlZmVuZF9jb25zdGl0dXRpb25fanVkZ2UYAiABKAgSGwoTZGVmZW5kX3BlcnNvbmFfc3dhcBgDIAEoCBIhChlkZWZlbmRfZGVjb2RlX2FuZF9leGVjdXRlGAQgASgIEh4KFmRlZmVuZF9pZGVudGl0eV9yZXZlYWwYBSABKAgSGQoRZGVmZW5kX29mZl9kb21haW4YBiABKAgSHQoVZGVmZW5kX21lbW9faW5qZWN0aW9uGAcgASgIIlAKEkNyb3NzQ2hlY2tTd2l0Y2hlcxIeChZwYXJhcGhyYXNlX2F3YXJlX21hdGNoGAEgASgIEhoKEmdyb3VuZF90cnV0aF9tYXRjaBgCIAEoCGIGcHJvdG8z");
 
 /**
  * Ship 3.5 ablation switches. Each field is a behavior contract;
@@ -100,6 +100,48 @@ export type StayInRoleSwitches = Message<"multichain.wire.agent.v1.StayInRoleSwi
    * @generated from field: bool defend_constitution_judge = 2;
    */
   defendConstitutionJudge: boolean;
+
+  /**
+   * Drops `defense:user_question_untrusted`. The rule covers
+   * persona-swap and decode-and-execute together (one tightly
+   * worded paragraph), so both `defend_persona_swap` and
+   * `defend_decode_and_execute` map to the same drop. Either flag
+   * off keeps the rule; both off drops it.
+   *
+   * @generated from field: bool defend_persona_swap = 3;
+   */
+  defendPersonaSwap: boolean;
+
+  /**
+   * @generated from field: bool defend_decode_and_execute = 4;
+   */
+  defendDecodeAndExecute: boolean;
+
+  /**
+   * Drops `defense:identity`. When off the agent will name the
+   * underlying LLM if asked.
+   *
+   * @generated from field: bool defend_identity_reveal = 5;
+   */
+  defendIdentityReveal: boolean;
+
+  /**
+   * Drops `defense:off_domain`. When off the agent's "decline
+   * off-topic" rule disappears.
+   *
+   * @generated from field: bool defend_off_domain = 6;
+   */
+  defendOffDomain: boolean;
+
+  /**
+   * Drops `defense:memo_injection`. When off the agent loses the
+   * explicit rule that <external_data> blocks are data not
+   * instructions; `wrap_external_data` still fires but the
+   * model-side defense-in-depth is gone.
+   *
+   * @generated from field: bool defend_memo_injection = 7;
+   */
+  defendMemoInjection: boolean;
 };
 
 /**

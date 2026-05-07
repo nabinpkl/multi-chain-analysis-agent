@@ -299,6 +299,69 @@ pub struct StayInRoleSwitches {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
     )]
     pub defend_constitution_judge: bool,
+    /// Per-prompt-rule defenses (#36 phase 4). Each maps to dropping
+    /// a specific \<rule id="..."\> block from `system_v4.txt` via the
+    /// composer in `prompts/composer.py`. When off, the model never
+    /// sees that rule and the article can measure raw model behavior
+    /// on the corresponding vector.
+    ///
+    /// Drops `defense:user_question_untrusted`. The rule covers
+    /// persona-swap and decode-and-execute together (one tightly
+    /// worded paragraph), so both `defend_persona_swap` and
+    /// `defend_decode_and_execute` map to the same drop. Either flag
+    /// off keeps the rule; both off drops it.
+    ///
+    /// Field 3: `defend_persona_swap`
+    #[serde(
+        rename = "defendPersonaSwap",
+        alias = "defend_persona_swap",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub defend_persona_swap: bool,
+    /// Field 4: `defend_decode_and_execute`
+    #[serde(
+        rename = "defendDecodeAndExecute",
+        alias = "defend_decode_and_execute",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub defend_decode_and_execute: bool,
+    /// Drops `defense:identity`. When off the agent will name the
+    /// underlying LLM if asked.
+    ///
+    /// Field 5: `defend_identity_reveal`
+    #[serde(
+        rename = "defendIdentityReveal",
+        alias = "defend_identity_reveal",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub defend_identity_reveal: bool,
+    /// Drops `defense:off_domain`. When off the agent's "decline
+    /// off-topic" rule disappears.
+    ///
+    /// Field 6: `defend_off_domain`
+    #[serde(
+        rename = "defendOffDomain",
+        alias = "defend_off_domain",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub defend_off_domain: bool,
+    /// Drops `defense:memo_injection`. When off the agent loses the
+    /// explicit rule that \<external_data\> blocks are data not
+    /// instructions; `wrap_external_data` still fires but the
+    /// model-side defense-in-depth is gone.
+    ///
+    /// Field 7: `defend_memo_injection`
+    #[serde(
+        rename = "defendMemoInjection",
+        alias = "defend_memo_injection",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub defend_memo_injection: bool,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -308,6 +371,11 @@ impl ::core::fmt::Debug for StayInRoleSwitches {
         f.debug_struct("StayInRoleSwitches")
             .field("defend_chat_template_spoofing", &self.defend_chat_template_spoofing)
             .field("defend_constitution_judge", &self.defend_constitution_judge)
+            .field("defend_persona_swap", &self.defend_persona_swap)
+            .field("defend_decode_and_execute", &self.defend_decode_and_execute)
+            .field("defend_identity_reveal", &self.defend_identity_reveal)
+            .field("defend_off_domain", &self.defend_off_domain)
+            .field("defend_memo_injection", &self.defend_memo_injection)
             .finish()
     }
 }
@@ -341,6 +409,21 @@ impl ::buffa::Message for StayInRoleSwitches {
         if self.defend_constitution_judge {
             size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
         }
+        if self.defend_persona_swap {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        if self.defend_decode_and_execute {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        if self.defend_identity_reveal {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        if self.defend_off_domain {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        if self.defend_memo_injection {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -360,6 +443,31 @@ impl ::buffa::Message for StayInRoleSwitches {
             ::buffa::encoding::Tag::new(2u32, ::buffa::encoding::WireType::Varint)
                 .encode(buf);
             ::buffa::types::encode_bool(self.defend_constitution_judge, buf);
+        }
+        if self.defend_persona_swap {
+            ::buffa::encoding::Tag::new(3u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_bool(self.defend_persona_swap, buf);
+        }
+        if self.defend_decode_and_execute {
+            ::buffa::encoding::Tag::new(4u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_bool(self.defend_decode_and_execute, buf);
+        }
+        if self.defend_identity_reveal {
+            ::buffa::encoding::Tag::new(5u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_bool(self.defend_identity_reveal, buf);
+        }
+        if self.defend_off_domain {
+            ::buffa::encoding::Tag::new(6u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_bool(self.defend_off_domain, buf);
+        }
+        if self.defend_memo_injection {
+            ::buffa::encoding::Tag::new(7u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_bool(self.defend_memo_injection, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -394,6 +502,56 @@ impl ::buffa::Message for StayInRoleSwitches {
                 }
                 self.defend_constitution_judge = ::buffa::types::decode_bool(buf)?;
             }
+            3u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 3u32,
+                        expected: 0u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                self.defend_persona_swap = ::buffa::types::decode_bool(buf)?;
+            }
+            4u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 4u32,
+                        expected: 0u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                self.defend_decode_and_execute = ::buffa::types::decode_bool(buf)?;
+            }
+            5u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 5u32,
+                        expected: 0u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                self.defend_identity_reveal = ::buffa::types::decode_bool(buf)?;
+            }
+            6u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 6u32,
+                        expected: 0u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                self.defend_off_domain = ::buffa::types::decode_bool(buf)?;
+            }
+            7u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 7u32,
+                        expected: 0u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                self.defend_memo_injection = ::buffa::types::decode_bool(buf)?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, depth)?);
@@ -404,6 +562,11 @@ impl ::buffa::Message for StayInRoleSwitches {
     fn clear(&mut self) {
         self.defend_chat_template_spoofing = false;
         self.defend_constitution_judge = false;
+        self.defend_persona_swap = false;
+        self.defend_decode_and_execute = false;
+        self.defend_identity_reveal = false;
+        self.defend_off_domain = false;
+        self.defend_memo_injection = false;
         self.__buffa_unknown_fields.clear();
     }
 }

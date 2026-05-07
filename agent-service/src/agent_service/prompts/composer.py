@@ -42,8 +42,12 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 from agent_service.prompts import load_prompt
+
+if TYPE_CHECKING:
+    from multichain.wire.agent.v1.switches_pb2 import AgentSwitches
 
 
 class CompositionError(ValueError):
@@ -147,6 +151,52 @@ def compose_system_prompt(
             cursor = tail_end
     out_parts.append(text[cursor:])
     return "".join(out_parts)
+
+
+def drops_from_switches(switches: "AgentSwitches") -> frozenset[str]:
+    """Compute the set of rule ids to drop from `system_v4.txt` given
+    a turn's `AgentSwitches`. Pure helper, no side effects.
+
+    Mapping rules:
+
+    - `defend_chat_template_spoofing` toggles the boundary rail in
+      `loop_driver.py` (`reject_if_unsafe_user_question`). When off,
+      we ALSO drop the matching prompt rule
+      (`defense:chat_template_rejection`) so the model is not told
+      about a rail that no longer fires.
+    - `defend_persona_swap` and `defend_decode_and_execute` BOTH map
+      to dropping `defense:user_question_untrusted`. The rule's
+      prose covers persona-swap, fictional-game framings, AND
+      decode-and-execute in one tightly coupled paragraph; we
+      considered splitting but the framing is shared. Either flag
+      off keeps the rule; only when BOTH are off does the rule
+      drop. This is the not-quite-1-to-1 mapping documented in the
+      #36 plan.
+    - `defend_identity_reveal` -> drop `defense:identity`.
+    - `defend_off_domain` -> drop `defense:off_domain`.
+    - `defend_memo_injection` -> drop `defense:memo_injection`.
+
+    `defend_constitution_judge` does NOT appear here: it gates the
+    constitution gate spans, not the prompt content. Its handling
+    lives in `loop_driver.py`'s gate-emission sites.
+    """
+    role = switches.stay_in_role
+    drops: set[str] = set()
+    if not role.defend_chat_template_spoofing:
+        drops.add("defense:chat_template_rejection")
+    if not role.defend_persona_swap and not role.defend_decode_and_execute:
+        # Both vectors share the same rule; only drop when BOTH are
+        # off. If only one is off the prompt still mentions both
+        # framings, which is fine: the model just keeps the still-on
+        # vector defended at the prompt layer.
+        drops.add("defense:user_question_untrusted")
+    if not role.defend_identity_reveal:
+        drops.add("defense:identity")
+    if not role.defend_off_domain:
+        drops.add("defense:off_domain")
+    if not role.defend_memo_injection:
+        drops.add("defense:memo_injection")
+    return frozenset(drops)
 
 
 def known_rule_ids(*, source_text: str | None = None) -> frozenset[str]:

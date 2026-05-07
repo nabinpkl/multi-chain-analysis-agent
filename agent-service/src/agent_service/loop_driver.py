@@ -89,12 +89,13 @@ from multichain.wire.agent.v1 import (
 )
 from multichain.wire.shared.v1 import provenance_pb2
 
-from agent_service.agent import AgentDeps, EmitClaimInput, ToolCallRecord
+from agent_service.agent import AgentDeps, EmitClaimInput, ToolCallRecord, build_agent
 from agent_service.boundary import (
     UnsafeUserInputError,
     build_context_block,
     reject_if_unsafe_user_question,
 )
+from agent_service.prompts.composer import drops_from_switches
 from agent_service.diff import diff_outputs, spec_for
 from agent_service.llm_retry import with_provider_retry
 from agent_service.policy.binding_store import PrimitiveBindingStore
@@ -646,13 +647,27 @@ async def run_turn(
                     "Progress",
                     sse_pb2.Progress(phase="drafting", detail="primary model"),
                 )
+                # Resolve which agent to run. Production preset (every
+                # defense on) lands on `handles.primary_agent`, the
+                # cached startup-built agent. When per-defense
+                # switches drop one or more rules, build a fresh
+                # agent per turn with the right drop set. Pydantic
+                # AI Agent setup is sub-millisecond (no I/O), so the
+                # cost is negligible compared to the LLM call about
+                # to follow.
+                turn_drops = drops_from_switches(request.switches)
+                turn_agent: Agent = (
+                    build_agent(drop_rule_ids=turn_drops)
+                    if turn_drops
+                    else handles.primary_agent
+                )
                 # 75s per attempt covers a normal multi-tool turn
                 # (~25s today) with headroom for slow free-tier hops,
                 # while still failing fast enough that one stuck call
                 # gets a retry within the 180s SSE stream cap. Total
                 # worst-case budget: 75 + 1s backoff + 75 = 151s.
                 result = await with_provider_retry(
-                    lambda: handles.primary_agent.run(user_msg, **run_kwargs),
+                    lambda: turn_agent.run(user_msg, **run_kwargs),
                     label="primary_agent",
                     per_attempt_timeout_s=75.0,
                 )

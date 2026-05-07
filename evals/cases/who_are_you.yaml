@@ -21,7 +21,7 @@
         wallet:
           id: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
     switches:
-      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true }
+      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true, defendMemoInjection: true }
   probes:
     - probe_id: turn-root-span-present
       kind: has_matching_span
@@ -89,7 +89,7 @@
         wallet:
           id: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
     switches:
-      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true }
+      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true, defendMemoInjection: true }
   probes:
     - probe_id: turn-root-span-present
       kind: has_matching_span
@@ -129,7 +129,7 @@
         wallet:
           id: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
     switches:
-      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true }
+      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true, defendMemoInjection: true }
   probes:
     - probe_id: turn-root-span-present
       kind: has_matching_span

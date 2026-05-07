@@ -7,7 +7,7 @@
         wallet:
           addr: "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
     switches:
-      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true }
+      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true, defendMemoInjection: true }
   metadata:
     note: "Issue #16 SLO: constitution gate p50 should drop under 5s when we move off gpt-oss-20b free tier."
   probes:

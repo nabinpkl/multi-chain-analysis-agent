@@ -36,7 +36,7 @@
         community:
           id: 1
     switches:
-      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true }
+      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true, defendMemoInjection: true }
       dontFabricate: true
   probes:
     - probe_id: turn-root-span-present
@@ -71,7 +71,7 @@
         community:
           id: 4294967295
     switches:
-      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true }
+      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true, defendMemoInjection: true }
       dontFabricate: true
   probes:
     - probe_id: turn-root-span-present
