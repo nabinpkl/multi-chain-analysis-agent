@@ -179,11 +179,29 @@ interface AgentSwitchesStore {
 }
 
 export type SwitchKey =
+  // Composite stay-in-role flip (kept so presets and the legacy
+  // top-row toggle still work). Drives both original sub-defenses
+  // in lockstep.
   | "stayInRole"
+  // Per-defense flips inside StayInRoleSwitches. Each one is a
+  // single-bit ablation surface for the article-path runs and is
+  // exposed individually in builder view so a human can verify
+  // the negative path.
+  | "stayInRole.defendChatTemplateSpoofing"
+  | "stayInRole.defendConstitutionJudge"
+  | "stayInRole.defendPersonaSwap"
+  | "stayInRole.defendDecodeAndExecute"
+  | "stayInRole.defendIdentityReveal"
+  | "stayInRole.defendOffDomain"
+  | "stayInRole.defendMemoInjection"
   | "dontFabricate"
   | "crossCheck.paraphraseAwareMatch"
   | "crossCheck.groundTruthMatch"
-  | "dontRepeatYourself";
+  | "dontRepeatYourself"
+  // Cockpit channel toggles. Each pairs with a deterministic
+  // OTel attribute so the off-state is observable in the trace.
+  | "channels.narrativeOutputEnabled"
+  | "channels.externalTextInputEnabled";
 
 const PRODUCTION_PRESET = PRESETS.find((p) => p.id === "with-dont-repeat-yourself")!;
 
@@ -239,19 +257,55 @@ function applySwitchKey(
       externalTextInputEnabled: channels?.externalTextInputEnabled ?? false,
     }),
   };
+  // Helper: rebuild AgentSwitches with a single role sub-field
+  // overridden, every other field carried through unchanged.
+  const withRole = (overrides: Partial<typeof carriedRole>) =>
+    create(AgentSwitchesSchema, {
+      ...base,
+      stayInRole: create(StayInRoleSwitchesSchema, {
+        ...carriedRole,
+        ...overrides,
+      }),
+    });
+  // Helper: rebuild AgentSwitches with one channel field overridden.
+  const withChannels = (overrides: {
+    narrativeOutputEnabled?: boolean;
+    externalTextInputEnabled?: boolean;
+  }) =>
+    create(AgentSwitchesSchema, {
+      ...base,
+      channels: create(ChannelSwitchesSchema, {
+        narrativeOutputEnabled:
+          overrides.narrativeOutputEnabled ??
+          (channels?.narrativeOutputEnabled ?? false),
+        externalTextInputEnabled:
+          overrides.externalTextInputEnabled ??
+          (channels?.externalTextInputEnabled ?? false),
+      }),
+    });
   switch (key) {
     case "stayInRole":
       // Composite UI toggle moves the two original sub-defenses in
-      // lockstep. The five per-prompt-rule defenses added in #36
-      // phase 4 are not exposed on the UI; they stay carried.
-      return create(AgentSwitchesSchema, {
-        ...base,
-        stayInRole: create(StayInRoleSwitchesSchema, {
-          ...carriedRole,
-          defendChatTemplateSpoofing: on,
-          defendConstitutionJudge: on,
-        }),
+      // lockstep. The five per-prompt-rule defenses each have their
+      // own SwitchKey now and are not touched by the composite flip.
+      return withRole({
+        defendChatTemplateSpoofing: on,
+        defendConstitutionJudge: on,
       });
+    case "stayInRole.defendChatTemplateSpoofing":
+      return withRole({ defendChatTemplateSpoofing: on });
+    case "stayInRole.defendConstitutionJudge":
+      return withRole({ defendConstitutionJudge: on });
+    case "stayInRole.defendPersonaSwap":
+      return withRole({ defendPersonaSwap: on });
+    case "stayInRole.defendDecodeAndExecute":
+      return withRole({ defendDecodeAndExecute: on });
+    case "stayInRole.defendIdentityReveal":
+      return withRole({ defendIdentityReveal: on });
+    case "stayInRole.defendOffDomain":
+      return withRole({ defendOffDomain: on });
+    case "stayInRole.defendMemoInjection":
+      return withRole({ defendMemoInjection: on });
     case "dontFabricate":
       return create(AgentSwitchesSchema, { ...base, dontFabricate: on });
     case "crossCheck.paraphraseAwareMatch":
@@ -272,5 +326,9 @@ function applySwitchKey(
       });
     case "dontRepeatYourself":
       return create(AgentSwitchesSchema, { ...base, dontRepeatYourself: on });
+    case "channels.narrativeOutputEnabled":
+      return withChannels({ narrativeOutputEnabled: on });
+    case "channels.externalTextInputEnabled":
+      return withChannels({ externalTextInputEnabled: on });
   }
 }

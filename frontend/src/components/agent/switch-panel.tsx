@@ -4,13 +4,18 @@ import { useState } from "react";
 import { InfoIcon } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { PRESETS, useAgentSwitches } from "@/stores/use-agent-switches";
+import {
+  PRESETS,
+  useAgentSwitches,
+  type SwitchKey,
+} from "@/stores/use-agent-switches";
 
 /**
- * Ablation switch panel. Each row is a behavior toggle paired with an
- * (i) info popover. Hovering the row text or the icon, or tapping the
- * icon on touch devices, surfaces a plain-language explanation of what
- * the switch does and what fails when it's off.
+ * Ablation switch panel rendered inside builder view. Every wire
+ * field on `AgentSwitches` is exposed as its own row so a human can
+ * verify the negative path of each defense, channel, or cross-check
+ * directly from the UI. Presets at the bottom snap the whole set to
+ * a known good configuration.
  *
  * Tooltips are deliberately user-facing: no implementation jargon,
  * no ship references. The implementation map lives in
@@ -21,60 +26,110 @@ export function SwitchPanel() {
   const setSwitch = useAgentSwitches((s) => s.setSwitch);
   const applyPreset = useAgentSwitches((s) => s.applyPreset);
 
+  const role = switches.stayInRole;
+  const cross = switches.crossCheck;
+  const channels = switches.channels;
+
   return (
-    <div className="border-b border-mca-border bg-mca-surface-raised px-4 py-3 space-y-3">
-      <div className="space-y-2">
+    <div className="border-b border-mca-border bg-mca-surface-raised px-4 py-3 space-y-4">
+      <Group title="Stay in role">
         <ToggleRow
-          label="stay in role"
-          tooltip="Keeps the agent focused on chain analysis. With this on it declines off-topic questions, won't write code, won't give financial advice, and won't pretend to be a different model. Turn it off to talk to the underlying LLM directly."
-          on={
-            // Composite toggle: both sub-defenses (boundary
-            // chat-template rejection + constitution judge) drive
-            // off the same UI bit until per-defense rows ship.
-            (switches.stayInRole?.defendConstitutionJudge ?? false) ||
-            (switches.stayInRole?.defendChatTemplateSpoofing ?? false)
+          label="chat-template spoofing"
+          tooltip="Boundary rail that rejects chat-template tokens (like </user> or [INST]) before they reach the agent. With this off, hostile inputs can fake a system message."
+          on={role?.defendChatTemplateSpoofing ?? false}
+          onChange={(on) =>
+            setSwitch("stayInRole.defendChatTemplateSpoofing", on)
           }
-          onChange={(on) => setSwitch("stayInRole", on)}
         />
         <ToggleRow
+          label="constitution judge"
+          tooltip="A second LLM checks every claim and narrative against the agent's constitution before it ships. With this off the gate is skipped and verdicts default to approved."
+          on={role?.defendConstitutionJudge ?? false}
+          onChange={(on) =>
+            setSwitch("stayInRole.defendConstitutionJudge", on)
+          }
+        />
+        <ToggleRow
+          label="persona swap"
+          tooltip="Prompt-side rule that tells the agent to ignore 'pretend you are X' / 'play this character' jailbreaks. With this off the agent may adopt the requested persona."
+          on={role?.defendPersonaSwap ?? false}
+          onChange={(on) => setSwitch("stayInRole.defendPersonaSwap", on)}
+        />
+        <ToggleRow
+          label="decode and execute"
+          tooltip="Prompt-side rule that refuses to decode encoded payloads (base64, hex, rot13) and run them. With this off the agent may follow instructions hidden inside encoded text."
+          on={role?.defendDecodeAndExecute ?? false}
+          onChange={(on) =>
+            setSwitch("stayInRole.defendDecodeAndExecute", on)
+          }
+        />
+        <ToggleRow
+          label="identity reveal"
+          tooltip="Prompt-side rule that keeps the agent from naming the underlying LLM if asked 'what model are you'. With this off the agent will say."
+          on={role?.defendIdentityReveal ?? false}
+          onChange={(on) => setSwitch("stayInRole.defendIdentityReveal", on)}
+        />
+        <ToggleRow
+          label="off-domain refusal"
+          tooltip="Prompt-side rule that declines anything outside chain analysis (writing code, financial advice, general chat). With this off the agent will answer off-topic questions."
+          on={role?.defendOffDomain ?? false}
+          onChange={(on) => setSwitch("stayInRole.defendOffDomain", on)}
+        />
+        <ToggleRow
+          label="memo injection"
+          tooltip="Prompt-side rule that treats anything inside <external_data> blocks as data, never instructions. The boundary still wraps the data even with this off; this only removes the model-side defense-in-depth."
+          on={role?.defendMemoInjection ?? false}
+          onChange={(on) => setSwitch("stayInRole.defendMemoInjection", on)}
+        />
+      </Group>
+
+      <Group title="Grounding">
+        <ToggleRow
           label="don't fabricate"
-          tooltip="Every number cited in an answer must trace back to data the agent actually fetched from the chain. With this on it can't invent values that look plausible but aren't real. Turn it off and the agent may make up numbers no tool actually returned."
+          tooltip="Every number cited in an answer must trace back to data the agent actually fetched from the chain. With this off the agent may invent values that no tool returned."
           on={switches.dontFabricate}
           onChange={(on) => setSwitch("dontFabricate", on)}
         />
-      </div>
-
-      <div className="space-y-1.5">
-        <p className="text-[0.55rem] uppercase tracking-[1.5px] text-mca-muted">
-          Cross check
-        </p>
-        <div className="space-y-2 pl-3 border-l border-mca-border">
-          <ToggleRow
-            label="paraphrase coherence"
-            tooltip="A second pass reads the agent's prose and flags places where the words don't fit the data chip next to them (for example, 'a lot' next to a chip showing 1). Advisory only: it shows in the trace, doesn't block answers."
-            on={switches.crossCheck?.paraphraseAwareMatch ?? false}
-            onChange={(on) =>
-              setSwitch("crossCheck.paraphraseAwareMatch", on)
-            }
-          />
-          <ToggleRow
-            label="ground-truth match"
-            tooltip="Re-checks every cited number directly against the live database, not just against what the agent's own tool call returned. Catches the case where a tool gave back stale or wrong data. Not active yet."
-            sublabel="coming soon"
-            on={switches.crossCheck?.groundTruthMatch ?? false}
-            onChange={(on) => setSwitch("crossCheck.groundTruthMatch", on)}
-          />
-        </div>
-      </div>
-
-      <div className="space-y-2 pt-1 border-t border-mca-border">
         <ToggleRow
           label="don't repeat yourself"
-          tooltip="When you ask about the same wallet again, the agent re-fetches the data and tells you only what changed since last time. Live data keeps moving, so re-stating the whole answer would hide real movement."
+          tooltip="When you ask about the same wallet again, the agent re-fetches the data and tells you only what changed since last time. Live data keeps moving, so re-stating would hide real movement."
           on={switches.dontRepeatYourself}
           onChange={(on) => setSwitch("dontRepeatYourself", on)}
         />
-      </div>
+      </Group>
+
+      <Group title="Cross check">
+        <ToggleRow
+          label="paraphrase coherence"
+          tooltip="A second pass reads the prose and flags places where the words don't fit the cited chip values (for example, 'a lot' next to a chip showing 1). Advisory only: shows in the trace, doesn't block answers."
+          on={cross?.paraphraseAwareMatch ?? false}
+          onChange={(on) => setSwitch("crossCheck.paraphraseAwareMatch", on)}
+        />
+        <ToggleRow
+          label="ground-truth match"
+          tooltip="Re-checks every cited number directly against the live database, not just against what the agent's own tool call returned. Catches stale or wrong tool data."
+          sublabel="coming soon"
+          on={cross?.groundTruthMatch ?? false}
+          onChange={(on) => setSwitch("crossCheck.groundTruthMatch", on)}
+        />
+      </Group>
+
+      <Group title="Channels">
+        <ToggleRow
+          label="narrative output"
+          tooltip="The free-form prose channel. With this off the loop driver replaces the narrative text with empty before the SSE frame is emitted; the model still generates it but no consumer sees it. Use to test whether the agent can carry a turn through claim chips alone."
+          on={channels?.narrativeOutputEnabled ?? false}
+          onChange={(on) => setSwitch("channels.narrativeOutputEnabled", on)}
+        />
+        <ToggleRow
+          label="external text input"
+          tooltip="The wrapped <external_data> input channel. With this off, primitive tool outputs are sanitized before reaching the agent: free-text fields outside the constrained allowlist are replaced with placeholders. Forward-looking; no primitive emits free text yet."
+          on={channels?.externalTextInputEnabled ?? false}
+          onChange={(on) =>
+            setSwitch("channels.externalTextInputEnabled", on)
+          }
+        />
+      </Group>
 
       <div className="space-y-1.5 pt-1 border-t border-mca-border">
         <p className="text-[0.55rem] uppercase tracking-[1.5px] text-mca-muted pt-2">
@@ -92,6 +147,30 @@ export function SwitchPanel() {
             </button>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Section heading + indented list. Used to group a family of
+ * related switches (stay-in-role defenses, cross-check passes,
+ * I/O channels) so the panel stays scannable as the surface grows.
+ */
+function Group({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[0.55rem] uppercase tracking-[1.5px] text-mca-muted">
+        {title}
+      </p>
+      <div className="space-y-2 pl-3 border-l border-mca-border">
+        {children}
       </div>
     </div>
   );
@@ -168,3 +247,7 @@ function ToggleRow({
     </div>
   );
 }
+
+// Re-export the SwitchKey type so other consumers (tests, panels)
+// can typecheck their setSwitch calls without re-importing the store.
+export type { SwitchKey };
