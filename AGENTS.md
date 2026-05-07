@@ -7,7 +7,8 @@
 - **Every response ends with a "what's next" section.** After the substantive answer or change summary, append a short list of plausible next directions so the user can snap back to context without reconstructing it from memory. Calibrate depth: if the just-finished work is part of a larger feature arc, list the next iteration step inside that feature first, then a wider-scope alternative or two. If the feature itself is finished, suggest the natural follow-on feature plus one cleanup or one foundation-strengthening option. Keep it 2 to 4 bullets, one line each, concrete (file or surface named) not vague ("improve UX"). Go deep enough to be actionable, not so deep that it's a sub-plan. The user picks one; do not start any of them without a green light.
 
 # Don'ts
-- No God component. Extract component if make sense.
+- No God component or god file or god functions. Extract/refactor when it feels like multiple isolated things are happening here at once but this shouldn't be done earlier than required.  When the agent encounters one of these while doing other work, the agent must call it out (don't silently work around it) and propose the extraction in the same change OR file a tracked issue if the extraction is too large for the current PR. Defending the existing shape with "matches what we have" or "minimizes churn" is the anti-principle the "Existing code is not authoritative" section already rejects; this bullet makes the size/shape signals explicit so the agent doesn't miss them.
+
 - No dead code. Removed = delete entirely (files, imports, types, all refs).
 - No backward compat layers. Iteration-based dev. Change code direct.
 - No hand-typed wire types. Single source of truth (proto/`*.proto` files), generated to Rust + Python + TS via approved generators. Hand-typed allowed only for UI-internal models that never cross a service boundary.
