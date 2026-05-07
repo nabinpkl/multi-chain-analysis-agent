@@ -96,12 +96,30 @@ async fn fetcher_loop(
                 let version = epoch_ms();
                 let edges = crate::ingest::parser::parse_edges(&block, next, version);
                 info!(slot = next, edges = edges.len(), "ingested block");
+
+                // Atomic-per-slot publish: if any edge fails, abandon
+                // the slot and let the outer loop retry the same `next`.
+                // The previous `continue` inside the for-loop only
+                // skipped the failing edge, then advanced `next`, which
+                // dropped data permanently.
+                //
+                // Retry safety: producer has enable.idempotence=true +
+                // acks=all + retries=10, so partial publishes from a
+                // failed attempt are deduped at the broker. Downstream,
+                // ClickHouse's edges table is ReplacingMergeTree keyed
+                // on (signature, instruction_idx); duplicate rows from
+                // a retried slot collapse on merge.
+                let mut publish_failed = false;
                 for edge in &edges {
                     if let Err(e) = producer.publish(edge).await {
-                        warn!(slot = next, error = %e, "kafka publish failed; will retry block");
-                        sleep(Duration::from_millis(500)).await;
-                        continue;
+                        warn!(slot = next, error = %e, "kafka publish failed; retrying slot");
+                        publish_failed = true;
+                        break;
                     }
+                }
+                if publish_failed {
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
                 }
                 counters.edges += edges.len() as u64;
                 next += 1;
