@@ -4,7 +4,7 @@ use clickhouse::Row;
 use serde::Serialize;
 
 use super::EdgeStore;
-use crate::domain::Edge;
+use crate::domain::{Edge, TokenMetadataEvent};
 
 pub struct ClickHouseEdgeStore {
     client: Client,
@@ -32,6 +32,18 @@ impl EdgeStore for ClickHouseEdgeStore {
         let mut insert = self.client.insert("multichain.edges")?;
         for edge in edges {
             insert.write(edge).await?;
+        }
+        insert.end().await?;
+        Ok(())
+    }
+
+    async fn insert_token_metadata(&self, rows: &[TokenMetadataEvent]) -> anyhow::Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut insert = self.client.insert("multichain.token_metadata")?;
+        for row in rows {
+            insert.write(row).await?;
         }
         insert.end().await?;
         Ok(())

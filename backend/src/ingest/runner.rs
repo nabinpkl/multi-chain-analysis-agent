@@ -7,7 +7,7 @@ use tracing::{error, info, warn};
 
 use crate::rpc::{RpcClient, RpcError};
 use crate::store::EdgeStore;
-use crate::stream::EdgeProducer;
+use crate::stream::{EdgeProducer, MetadataProducer};
 use crate::tip::TipTracker;
 
 const COMPONENT: &str = "solana_ingester";
@@ -24,6 +24,7 @@ pub async fn run(
     rpc: RpcClient,
     store: Arc<dyn EdgeStore>,
     edge_producer: EdgeProducer,
+    metadata_producer: MetadataProducer,
     tip: TipTracker,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
@@ -40,6 +41,7 @@ pub async fn run(
     fetcher_loop(
         rpc,
         edge_producer,
+        metadata_producer,
         store,
         tip,
         starting_slot,
@@ -53,6 +55,7 @@ pub async fn run(
 struct ProgressCounters {
     slots: u64,
     edges: u64,
+    token_metadata: u64,
     rate_limits: u64,
     transient_errors: u64,
     skipped: u64,
@@ -61,6 +64,7 @@ struct ProgressCounters {
 async fn fetcher_loop(
     rpc: RpcClient,
     edge_producer: EdgeProducer,
+    metadata_producer: MetadataProducer,
     store: Arc<dyn EdgeStore>,
     tip: TipTracker,
     mut next: u64,
@@ -103,20 +107,28 @@ async fn fetcher_loop(
             Ok(block) => {
                 let version = epoch_ms();
                 let edges = crate::ingest::parser::parse_edges(&block, next, version);
-                info!(slot = next, edges = edges.len(), "ingested block");
+                let metadata =
+                    crate::ingest::metadata::parse_token_metadata(&block, next, version);
+                info!(
+                    slot = next,
+                    edges = edges.len(),
+                    token_metadata = metadata.len(),
+                    "ingested block"
+                );
 
-                // Atomic-per-slot publish: if any edge publish fails,
-                // abandon the slot and let the outer loop retry the
-                // same `next`. The previous `continue` inside the
-                // for-loop only skipped the failing edge, then advanced
-                // `next`, which dropped data permanently.
+                // Atomic-per-slot publish: if any publish fails (edges
+                // OR metadata), abandon the slot and let the outer
+                // loop retry the same `next`. The previous `continue`
+                // inside the for-loop only skipped the failing item,
+                // then advanced `next`, which dropped data permanently.
                 //
-                // Retry safety: producer has enable.idempotence=true +
-                // acks=all + retries=10, so partial publishes from a
-                // failed attempt are deduped at the broker. Downstream,
-                // the ClickHouse edges table is ReplacingMergeTree keyed
-                // by (signature, instruction_idx) so any duplicates from
-                // a retried slot collapse on merge.
+                // Retry safety: each producer has
+                // enable.idempotence=true + acks=all + retries=10, so
+                // partial publishes from a failed attempt are deduped
+                // at the broker. Downstream, both ClickHouse tables
+                // (edges, token_metadata) are ReplacingMergeTree keyed
+                // by ordering tuples that include the signature, so any
+                // duplicates from a retried slot collapse on merge.
                 let mut publish_failed = false;
                 for edge in &edges {
                     if let Err(e) = edge_producer.publish(edge).await {
@@ -125,11 +137,21 @@ async fn fetcher_loop(
                         break;
                     }
                 }
+                if !publish_failed {
+                    for row in &metadata {
+                        if let Err(e) = metadata_producer.publish(row).await {
+                            warn!(slot = next, error = %e, "kafka token-metadata publish failed; retrying slot");
+                            publish_failed = true;
+                            break;
+                        }
+                    }
+                }
                 if publish_failed {
                     sleep(Duration::from_millis(500)).await;
                     continue;
                 }
                 counters.edges += edges.len() as u64;
+                counters.token_metadata += metadata.len() as u64;
                 next += 1;
                 counters.slots += 1;
                 slots_since_checkpoint += 1;
@@ -192,6 +214,7 @@ async fn fetcher_loop(
                 drift_slots = ?drift,
                 slots_per_s = format!("{:.2}", slots_per_s),
                 edges = counters.edges,
+                token_metadata = counters.token_metadata,
                 skipped_slots = counters.skipped,
                 rate_limits = counters.rate_limits,
                 transient_errors = counters.transient_errors,

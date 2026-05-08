@@ -62,6 +62,38 @@ pub async fn bootstrap(client: &Client) -> anyhow::Result<()> {
         .execute()
         .await?;
 
+    // Token metadata table. One row per Metaplex Token Metadata
+    // Program write (CreateMetadataAccountV2 / V3 today; Token-2022
+    // metadata-extension writes when that decoder lands). The
+    // `program` column distinguishes source so multiple programs share
+    // the table cleanly. Current metadata per mint is a query
+    // (`ORDER BY slot DESC LIMIT 1`), not a materialized view. See
+    // `docs/architecture/token-metadata-ingestion.md`.
+    client
+        .query(
+            r#"
+            CREATE TABLE IF NOT EXISTS multichain.token_metadata (
+                mint              String,
+                metadata_pda      String,
+                signature         String,
+                slot              UInt64,
+                block_time        UInt32,
+                instruction_idx   UInt16,
+                is_inner          Bool,
+                program           LowCardinality(String),
+                op                LowCardinality(String),
+                name              String,
+                symbol            String,
+                uri               String,
+                update_authority  String,
+                version           UInt64
+            ) ENGINE = ReplacingMergeTree(version)
+            ORDER BY (mint, signature, instruction_idx, is_inner)
+            "#,
+        )
+        .execute()
+        .await?;
+
     // Ship 1 of agent-observability (ADR 13) replaced the bespoke
     // multichain.agent_ledger table with OTel spans in otel.otel_traces
     // (auto-managed by the otel-collector clickhouseexporter). The

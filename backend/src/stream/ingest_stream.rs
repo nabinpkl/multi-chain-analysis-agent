@@ -26,9 +26,11 @@ use clickhouse::Row;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::domain::Edge;
+use crate::domain::{Edge, TokenMetadataEvent};
 use crate::store::EdgeStore;
-use crate::stream::topics::{Envelope, EnvelopeRef};
+use crate::stream::topics::{
+    Envelope, EnvelopeRef, TokenMetadataEnvelope, TokenMetadataEnvelopeRef,
+};
 
 pub trait IngestStream: Send + Sync + 'static {
     /// The deserialized Rust row type.
@@ -87,5 +89,40 @@ impl IngestStream for EdgeStream {
         rows: &'a [Edge],
     ) -> impl Future<Output = anyhow::Result<()>> + Send + 'a {
         async move { store.insert_edges(rows).await }
+    }
+}
+
+/// Token metadata stream. Metaplex Token Metadata Program writes
+/// (CreateMetadataAccountV2 / V3 today) decoded by
+/// `ingest::metadata::parse_token_metadata`. Future Token-2022 stream-
+/// decode work emits into the same row type with `program="token2022"`.
+/// Topic `solana.token_metadata.v1`, table `multichain.token_metadata`.
+/// Partition key is the mint pubkey so a future "everything for mint M"
+/// consumer finds all events on one partition.
+pub struct MetadataStream;
+
+impl IngestStream for MetadataStream {
+    type Row = TokenMetadataEvent;
+    const NAME: &'static str = "token-metadata";
+
+    fn partition_key(row: &TokenMetadataEvent) -> &str {
+        &row.mint
+    }
+
+    fn wrap_envelope(row: &TokenMetadataEvent) -> Vec<u8> {
+        serde_json::to_vec(&TokenMetadataEnvelopeRef::wrap(row))
+            .expect("token metadata envelope serialize")
+    }
+
+    fn unwrap_envelope(payload: &[u8]) -> anyhow::Result<TokenMetadataEvent> {
+        let env: TokenMetadataEnvelope = serde_json::from_slice(payload)?;
+        Ok(env.token_metadata)
+    }
+
+    fn insert<'a>(
+        store: &'a Arc<dyn EdgeStore>,
+        rows: &'a [TokenMetadataEvent],
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'a {
+        async move { store.insert_token_metadata(rows).await }
     }
 }

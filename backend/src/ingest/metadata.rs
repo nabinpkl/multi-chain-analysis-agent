@@ -145,6 +145,14 @@ fn try_emit(
     let disc = bytes[0];
     let payload = &bytes[1..];
 
+    // Visibility log for "is the decoder seeing Metaplex traffic at
+    // all" debugging. Disc 49 / 47 (v1-namespace updates) dominate
+    // recent mainnet activity and we deliberately skip them, so
+    // without this log the periodic counter stuck at 0 looks like a
+    // bug when it is actually correct behavior. Enabled with
+    // `RUST_LOG=multichain_engine::ingest::metadata=debug`.
+    debug!(disc, signature = %signature, "metaplex inst observed");
+
     // Decode args by discriminator. Each branch returns `Option<DataV2>`
     // for the metadata fields, or skips the instruction entirely.
     let (op, data) = match disc {
