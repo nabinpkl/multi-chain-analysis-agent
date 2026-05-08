@@ -19,6 +19,14 @@ pub async fn bootstrap(client: &Client) -> anyhow::Result<()> {
         .execute()
         .await?;
 
+    // The memo capture pipeline was removed when audit found zero
+    // downstream consumers. Drop any leftover table from prior runs.
+    // No corresponding CREATE; the table is intentionally gone.
+    client
+        .query("DROP TABLE IF EXISTS multichain.memos")
+        .execute()
+        .await?;
+
     client
         .query(
             r#"
@@ -49,30 +57,6 @@ pub async fn bootstrap(client: &Client) -> anyhow::Result<()> {
                 updated_at  DateTime
             ) ENGINE = ReplacingMergeTree(updated_at)
             ORDER BY (component)
-            "#,
-        )
-        .execute()
-        .await?;
-
-    // Memo table. One row per SPL Memo program instruction (top-level
-    // or CPI'd inner). Joins to `multichain.edges` by signature for
-    // analytics that pair value movement with attached note text.
-    // See `docs/architecture/memos.md` for the schema rationale.
-    client
-        .query(
-            r#"
-            CREATE TABLE IF NOT EXISTS multichain.memos (
-                signature       String,
-                slot            UInt64,
-                block_time      UInt32,
-                instruction_idx UInt16,
-                is_inner        Bool,
-                program         LowCardinality(String),
-                memo_text       String,
-                signers         Array(String),
-                version         UInt64
-            ) ENGINE = ReplacingMergeTree(version)
-            ORDER BY (signature, instruction_idx, is_inner)
             "#,
         )
         .execute()

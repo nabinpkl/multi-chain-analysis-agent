@@ -39,7 +39,7 @@ Industry consensus on what a serious agent eval substrate needs (verified dated 
 
 | Dimension | What we have | What's shallow |
 |---|---|---|
-| **Counterfactual / scaffold ablation** | Single-switch toggling per case | No cross-trace differential probe (gated vs ungated on same input). Filed as #29 — that's the right ticket. |
+| **Counterfactual / scaffold ablation** | Single-switch toggling per case | No cross-trace differential probe (gated vs ungated on same input). Filed as #29  that's the right ticket. |
 | **Tool misuse coverage (OWASP ASI02)** | Refusal cases pin `tool_calls=0` on off-domain | No test of "wrong tool fired" (e.g., asked wallet question, agent fired community_summary). Could add via `tool_called_with_args` negative assertions, but value is low at our 2-primitive surface. |
 | **Cost/latency metrics** | `span_latency_p50_under`, `slowest_call_under_ms` | No token-cost or token-count probe. OTel emits `gen_ai.usage.input_tokens` / `output_tokens` already; one new probe shape covers it. Value when we cost-tune. |
 | **Tool argument validation** | `tool_called_with_args` (top-level keys only) | Doesn't read nested JSON paths. Already noted in `wallet_profile_smoke.yaml` comments as a future probe extension. |
@@ -49,10 +49,10 @@ Industry consensus on what a serious agent eval substrate needs (verified dated 
 
 | Gap | Recommendation |
 |---|---|
-| **Multi-turn / long-horizon eval.** ThreadRegistry exists (Ship 4 prep) but zero multi-turn eval cases. Confident AI's 2026-03-22 post names knowledge retention, context drift, role inconsistency as the dominant failure modes; we test none. | **File ticket. Real gap.** Defer until ship 4 lands — testing multi-turn before multi-turn ships is YAGNI. |
-| **Indirect prompt injection** (instructions hidden in primitive output). NVIDIA's 2026 blog and AgentDojo flag this as the dominant 2026 attack vector. Our primitive outputs are structured JSON from our own Rust service today, so the surface is small — but if we ever ingest external content (RPC return strings, on-chain memos), it opens. | **File deferred ticket.** Not worth covering until we ingest untrusted content. |
+| **Multi-turn / long-horizon eval.** ThreadRegistry exists (Ship 4 prep) but zero multi-turn eval cases. Confident AI's 2026-03-22 post names knowledge retention, context drift, role inconsistency as the dominant failure modes; we test none. | **File ticket. Real gap.** Defer until ship 4 lands  testing multi-turn before multi-turn ships is YAGNI. |
+| **Indirect prompt injection** (instructions hidden in primitive output). NVIDIA's 2026 blog and AgentDojo flag this as the dominant 2026 attack vector. Our primitive outputs are structured JSON from our own Rust service today, so the surface is small  but the in-flight token metadata pipeline opens it (Metaplex name / symbol / uri and the off-chain JSON those uris point to are user-authored text). | **File deferred ticket.** Not worth covering until the metadata pipeline is end-to-end and the agent has a primitive that surfaces metadata text. |
 | **Goal hijacking (OWASP ASI01).** Multi-turn variant of injection: a session starts benign, later turns subtly redirect the agent. Our prompt-injection case is single-turn. | **Bundle into the multi-turn ticket above.** Same eval shape, same blocker (need multi-turn eval first). |
-| **Production trace sampling.** Anthropic's 2026-01-09 piece: layer 3 of the eval architecture. We have CH with `mcae.run.type` discriminator, so production traces ARE captured — we just don't sample them into eval. | **File deferred ticket.** Real value when production traffic exists. Today everything in CH is dev/eval. |
+| **Production trace sampling.** Anthropic's 2026-01-09 piece: layer 3 of the eval architecture. We have CH with `mcae.run.type` discriminator, so production traces ARE captured  we just don't sample them into eval. | **File deferred ticket.** Real value when production traffic exists. Today everything in CH is dev/eval. |
 | **Trace-replay case generation.** Already filed as #30 (deferred). Closes the loop with #28 supersession reasoning. | **Already filed.** No action. |
 | **Cross-trace differential probes.** Already mentioned in #29 as out-of-scope-for-now. | **Already flagged.** No action. |
 | **Context window pollution / latent injection.** Multi-turn problem: an early turn plants instructions that activate later when context shifts. | **Bundle into multi-turn ticket.** |
@@ -76,6 +76,6 @@ Sources (dates verified per AGENTS.md rule):
 - [Confident AI: Multi-Turn LLM Evaluation in 2026 (2026-03-22)](https://www.confident-ai.com/blog/multi-turn-llm-evaluation-in-2026)
 - [Agent-SafetyBench (arxiv 2412.14470, Dec 2025)](https://arxiv.org/abs/2412.14470)
 - [OWASP Top 10 for Agents 2026 (DeepTeam framing)](https://www.trydeepteam.com/docs/frameworks-owasp-top-10-for-agentic-applications)
-- [AgentDojo (UK AISI inspect_evals)](https://ukgovernmentbeis.github.io/inspect_evals/evals/safeguards/agentdojo/) — date not verifiable on the fetched page; treat as a known framework, not a dated claim
-- [OpenTelemetry blog: AI Agent Observability](https://opentelemetry.io/blog/2025/ai-agent-observability/) — URL dated 2025; cited only as evidence the OTel semconv work is live, not as a fresh source
-- [Promptfoo (red-teaming framework)](https://github.com/promptfoo/promptfoo) — used by OpenAI and Anthropic; project page not date-verifiable in this fetch
+- [AgentDojo (UK AISI inspect_evals)](https://ukgovernmentbeis.github.io/inspect_evals/evals/safeguards/agentdojo/)  date not verifiable on the fetched page; treat as a known framework, not a dated claim
+- [OpenTelemetry blog: AI Agent Observability](https://opentelemetry.io/blog/2025/ai-agent-observability/)  URL dated 2025; cited only as evidence the OTel semconv work is live, not as a fresh source
+- [Promptfoo (red-teaming framework)](https://github.com/promptfoo/promptfoo)  used by OpenAI and Anthropic; project page not date-verifiable in this fetch

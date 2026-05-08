@@ -37,10 +37,12 @@ multi-tenant isolation, customer billing). The threats that remain:
    silently. Defended by multi-axis budget buckets per principal.
 3. **Confident wrong claims.** Agent asserts something untrue with no
    trace. Defended by mandatory provenance attached to every claim.
-4. **Data-borne prompt injection.** On-chain memo fields, SPL token
-   names, and (eventually) third-party wallet tags are user-authored
-   text the agent reads. Defended by three layers: structural
-   separation, tool-result-as-data, output policy.
+4. **Data-borne prompt injection.** On-chain token metadata fields
+   (Metaplex name / symbol / uri, Token-2022 extension fields), the
+   off-chain JSON those uris point to, and (eventually) third-party
+   wallet tags are user-authored text the agent reads. Defended by
+   three layers: structural separation, tool-result-as-data, output
+   policy.
 5. **Adversarial graph structure.** A motivated actor shapes their
    on-chain activity to fool the classifier or the agent reading
    classifier output. Out of scope for v0; mitigated by the

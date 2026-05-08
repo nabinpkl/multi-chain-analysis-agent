@@ -48,15 +48,16 @@ pub struct TransactionPayload {
 pub struct TxMessage {
     /// Resolved account keys for the transaction. With `jsonParsed`
     /// encoding the RPC returns objects with `pubkey` plus role flags;
-    /// we keep `pubkey` and `signer` (the latter so memo extraction
-    /// can attribute signers without re-parsing the message header).
-    /// Address-table-lookup entries are resolved before we see them,
-    /// so every entry is a base58 wallet or program id.
+    /// we keep `pubkey` and `signer` (the latter so program-specific
+    /// extractors can attribute signers without re-parsing the message
+    /// header). Address-table-lookup entries are resolved before we
+    /// see them, so every entry is a base58 wallet or program id.
     #[serde(default)]
     pub account_keys: Vec<AccountKey>,
-    /// Top-level instructions. Used by the memo extractor to find SPL
-    /// Memo program calls; the edge parser ignores this field. Decoded
-    /// from the `jsonParsed` shape only.
+    /// Top-level instructions. Walked by program-specific extractors
+    /// (e.g. `ingest::metadata::parse_token_metadata` filtering on the
+    /// Metaplex program ID). The edge parser ignores this field.
+    /// Decoded from the `jsonParsed` shape only.
     #[serde(default)]
     pub instructions: Vec<RawInstruction>,
 }
@@ -71,24 +72,33 @@ pub struct AccountKey {
     pub signer: bool,
 }
 
-/// One instruction inside a tx, jsonParsed shape. Fields populated only
-/// for the program shapes the RPC understands; for the SPL memo program
-/// the `parsed` field is a JSON string (the memo text directly), and
-/// `accounts` is the list of signer pubkeys the memo references.
+/// One instruction inside a tx, jsonParsed shape. The RPC decodes
+/// `parsed` only for programs in its hardcoded allowlist (System,
+/// Stake, Vote, SPL Token, SPL Token-2022, BPF Loader, etc.); for
+/// everything else the raw instruction args land in `data` as a
+/// base58 string. For the Metaplex Token Metadata Program the `data`
+/// field is the base58-encoded borsh args, decoded by
+/// `ingest::metadata`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RawInstruction {
     pub program_id: String,
-    /// Account pubkeys referenced by this instruction. For the memo
-    /// program this is the list of required signers.
+    /// Account pubkeys referenced by this instruction. For Metaplex
+    /// Create instructions account[0] is the metadata PDA and
+    /// account[1] is the mint.
     #[serde(default)]
     pub accounts: Vec<String>,
-    /// Program-specific parsed payload. For SPL memo this is a JSON
-    /// string containing the memo text; for other programs it varies.
-    /// Kept as `Value` so non-memo programs don't pay a typed-decode
-    /// cost we'd never use.
+    /// Program-specific parsed payload, populated only for programs
+    /// in the RPC's jsonParsed allowlist. Kept as `Value` because
+    /// each allowlisted program has a different shape.
     #[serde(default)]
     pub parsed: Option<Value>,
+    /// Base58-encoded raw instruction data. Populated by the RPC for
+    /// any program whose instruction shape jsonParsed doesn't natively
+    /// decode (Metaplex, Token-2022 extensions, Anchor programs in
+    /// general). The metadata extractor borsh-decodes this slice.
+    #[serde(default)]
+    pub data: Option<String>,
 }
 
 /// One inner-instructions group. `index` is the position of the parent
@@ -122,12 +132,12 @@ pub struct TxMeta {
     pub pre_token_balances: Vec<TokenBalance>,
     #[serde(default)]
     pub post_token_balances: Vec<TokenBalance>,
-    /// CPI'd instructions per top-level instruction. Memo programs are
-    /// occasionally invoked via CPI, so the memo extractor walks both
-    /// this and `TxMessage::instructions`. Edge parser ignores it.
-    /// Note: we deliberately do NOT capture `logMessages`; at ~831 KB
-    /// per block average it's the same cost wall as storing whole
-    /// blocks and adds nothing for memos. See `docs/architecture/memos.md`.
+    /// CPI'd instructions per top-level instruction. Program-specific
+    /// extractors (e.g. `ingest::metadata`) walk both this and
+    /// `TxMessage::instructions` because metadata writes can happen
+    /// either way. The edge parser ignores it. Note: we deliberately
+    /// do NOT capture `logMessages`; at ~831 KB per block average it's
+    /// the same cost wall as storing whole blocks and adds nothing.
     #[serde(default)]
     pub inner_instructions: Vec<RawInnerInstructions>,
 }

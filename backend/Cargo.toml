@@ -21,6 +21,13 @@ thiserror = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 governor = "0.7"
 bs58 = "0.5"
+# Borsh deserializer for on-chain instruction data we receive in
+# `getBlock` and currently discard. Used by `ingest::metadata` to
+# decode Metaplex Token Metadata Program instruction args (DataV2:
+# name/symbol/uri) without pulling the full mpl-token-metadata client
+# SDK and its solana_program transitive weight. Schema is stable
+# since 2021; we re-derive only the slice of types we read.
+borsh = { version = "1", features = ["derive"] }
 # `EdgeStore` trait in store/mod.rs needs async fn in trait via async-trait
 # (still the most ergonomic option pre-stable async-fn-in-trait).
 async-trait = "0.1"

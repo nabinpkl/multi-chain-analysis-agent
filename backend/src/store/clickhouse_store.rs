@@ -4,7 +4,7 @@ use clickhouse::Row;
 use serde::Serialize;
 
 use super::EdgeStore;
-use crate::domain::{Edge, Memo};
+use crate::domain::Edge;
 
 pub struct ClickHouseEdgeStore {
     client: Client,
@@ -32,18 +32,6 @@ impl EdgeStore for ClickHouseEdgeStore {
         let mut insert = self.client.insert("multichain.edges")?;
         for edge in edges {
             insert.write(edge).await?;
-        }
-        insert.end().await?;
-        Ok(())
-    }
-
-    async fn insert_memos(&self, memos: &[Memo]) -> anyhow::Result<()> {
-        if memos.is_empty() {
-            return Ok(());
-        }
-        let mut insert = self.client.insert("multichain.memos")?;
-        for memo in memos {
-            insert.write(memo).await?;
         }
         insert.end().await?;
         Ok(())

@@ -154,7 +154,7 @@ What CAN happen:
 1. **Compute exhaustion**: agent issues an unbounded query that pegs the box. The Oracle Free Tier VM has 4 cores. One bad agent loop is enough.
 2. **Token burn**: agent gets stuck in a tool-call loop, costs real money silently.
 3. **Confident wrong claims**: agent says "this wallet is a drainer" with no traceable evidence, user acts on it. This is the highest-impact failure mode and it's invisible.
-4. **Data-borne prompt injection**: a wallet's memo field, an SPL token's name, a future tag we add — the AGENT reads these as text. If we ever wire up labels from external sources, those become the attack surface.
+4. **Data-borne prompt injection**: an SPL token's metadata (Metaplex name / symbol / uri or Token-2022 extension), the off-chain JSON that uri points to, a future tag we add  the AGENT reads these as text. Once we wire up labels from external sources, those become the attack surface.
 5. **Adversarial graph structure**: someone shapes their on-chain activity to fool the classifier and the agent that reads classifier output. Less "injection", more "the data is the attacker".
 
 Framing the design around those five is more useful than copying SOC2 patterns from b2b SaaS.
