@@ -1,1 +1,1 @@
-pub mod ch_sink;
+pub mod stream_sink;

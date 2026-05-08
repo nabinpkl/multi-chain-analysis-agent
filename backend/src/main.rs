@@ -13,9 +13,9 @@ use multichain_engine::{
 
 use config::Config;
 use rpc::RpcClient;
-use sinks::ch_sink::{self, ChSinkConfig};
+use sinks::stream_sink::{self, SinkConfig};
 use state::AppState;
-use stream::{EdgeProducer, consumer::build_consumer};
+use stream::{EdgeProducer, EdgeStream, consumer::build_consumer};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -52,28 +52,31 @@ async fn main() -> anyhow::Result<()> {
 
     let mut bg_handles = Vec::new();
 
-    // ch-sink: persists edges to ClickHouse. Separate consumer group.
-    let ch_sink_handle = {
+    // edge-sink: persists edges to ClickHouse. Separate consumer
+    // group. Uses the generic `stream_sink::run` parameterized over
+    // `EdgeStream`; future stream types spawn their own task with the
+    // same body, parameterized over their own `IngestStream` impl.
+    let edge_sink_handle = {
         let consumer = build_consumer(
             &config.kafka_brokers,
             &config.kafka_group_ch_sink,
             &config.kafka_topic_raw_edges,
             &config.kafka_auto_offset_reset,
         )?;
-        info!(group = %config.kafka_group_ch_sink, topic = %config.kafka_topic_raw_edges, "ch-sink consumer ready");
+        info!(group = %config.kafka_group_ch_sink, topic = %config.kafka_topic_raw_edges, "edge-sink consumer ready");
         let store = state.store.clone();
-        let cfg = ChSinkConfig {
+        let cfg = SinkConfig {
             batch_size: config.ch_sink_batch_size,
             flush_interval: config.ch_sink_flush,
         };
         let rx = shutdown_rx.clone();
         tokio::spawn(async move {
-            if let Err(e) = ch_sink::run(consumer, store, cfg, rx).await {
-                error!(error = %e, "ch-sink exited with error");
+            if let Err(e) = stream_sink::run::<EdgeStream>(consumer, store, cfg, rx).await {
+                error!(error = %e, "edge-sink exited with error");
             }
         })
     };
-    bg_handles.push(ch_sink_handle);
+    bg_handles.push(edge_sink_handle);
 
     // graph-engine: sole live ingest path. Builds in-memory graph and
     // dispatches GraphDelta batches per-window to /graph/stream

@@ -1,5 +1,13 @@
 pub mod consumer;
-pub mod producer;
+pub mod ingest_stream;
+pub mod stream_producer;
 pub mod topics;
 
-pub use producer::EdgeProducer;
+pub use ingest_stream::{EdgeStream, IngestStream};
+pub use stream_producer::StreamProducer;
+
+/// Type alias for the existing edge call sites. New stream types use
+/// `StreamProducer<MyStream>` directly; this alias keeps the
+/// pre-abstraction `EdgeProducer` name in places where churn is not
+/// worth it (runner signature, `main.rs` wiring).
+pub type EdgeProducer = StreamProducer<EdgeStream>;
