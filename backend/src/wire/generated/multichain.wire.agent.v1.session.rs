@@ -64,6 +64,18 @@ pub struct AgentRequest {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
     )]
     pub run_type: ::buffa::alloc::string::String,
+    /// Dev-only per-role LLM provider override. Empty / missing = use
+    /// the production preset (env-driven OpenRouter). Set by the
+    /// frontend builder view's Models section; production frontend
+    /// never populates this field. See llm.proto for shape.
+    ///
+    /// Field 7: `llm_override`
+    #[serde(
+        rename = "llmOverride",
+        alias = "llm_override",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub llm_override: ::buffa::MessageField<LlmOverride>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -77,6 +89,7 @@ impl ::core::fmt::Debug for AgentRequest {
             .field("switches", &self.switches)
             .field("show_trace", &self.show_trace)
             .field("run_type", &self.run_type)
+            .field("llm_override", &self.llm_override)
             .finish()
     }
 }
@@ -132,6 +145,14 @@ impl ::buffa::Message for AgentRequest {
         }
         if !self.run_type.is_empty() {
             size += 1u32 + ::buffa::types::string_encoded_len(&self.run_type) as u32;
+        }
+        if self.llm_override.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.llm_override.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
@@ -189,6 +210,15 @@ impl ::buffa::Message for AgentRequest {
                 )
                 .encode(buf);
             ::buffa::types::encode_string(&self.run_type, buf);
+        }
+        if self.llm_override.is_set() {
+            ::buffa::encoding::Tag::new(
+                    7u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
+                .encode(buf);
+            ::buffa::encoding::encode_varint(__cache.consume_next() as u64, buf);
+            self.llm_override.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -276,6 +306,20 @@ impl ::buffa::Message for AgentRequest {
                 }
                 ::buffa::types::merge_string(&mut self.run_type, buf)?;
             }
+            7u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 7u32,
+                        expected: 2u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                ::buffa::Message::merge_length_delimited(
+                    self.llm_override.get_or_insert_default(),
+                    buf,
+                    depth,
+                )?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, depth)?);
@@ -290,6 +334,7 @@ impl ::buffa::Message for AgentRequest {
         self.switches = ::buffa::MessageField::none();
         self.show_trace = false;
         self.run_type.clear();
+        self.llm_override = ::buffa::MessageField::none();
         self.__buffa_unknown_fields.clear();
     }
 }

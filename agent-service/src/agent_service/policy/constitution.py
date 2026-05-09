@@ -83,15 +83,21 @@ def _system_prompt() -> str:
     return _PROMPT_PATH.read_text(encoding="utf-8")
 
 
-def build_constitution_agent() -> Agent[_Deps, ConstitutionVerdict]:
+def build_constitution_agent(*, llm_override=None) -> Agent[_Deps, ConstitutionVerdict]:
     """Construct the policy gate agent. One model call per invocation;
     no tools; structured output via Pydantic AI's native output_type.
 
     The cheap policy model is hardcoded here (gpt-oss-20b free tier).
     Free-tier rate limits force sequential calls; the loop driver
-    pipelines this after the primary agent completes, never in parallel."""
+    pipelines this after the primary agent completes, never in parallel.
+
+    `llm_override` (a `RoleOverride`-shaped object) pins the agent to
+    a specific provider + model id for this turn; populated by the
+    loop driver from `request.llm_override.policy`. None = production
+    preset.
+    """
     return Agent(
-        model=llm.make_model("policy"),
+        model=llm.make_model("policy", override=llm_override),
         deps_type=_Deps,
         output_type=ConstitutionVerdict,
         system_prompt=_system_prompt(),

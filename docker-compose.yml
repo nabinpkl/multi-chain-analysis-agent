@@ -106,6 +106,15 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8003:8003"
+    # `host.docker.internal` is the hostname the LM Studio proxy
+    # (GET /agent/local/models) and the per-role local-provider path
+    # in agent_service.llm.make_model resolve to when LOCAL_LLM_BASE_URL
+    # is unset. Mac/Windows Docker Desktop provides this name
+    # automatically; on Linux this `extra_hosts` line is what supplies
+    # it (`host-gateway` is a magic value Docker substitutes for the
+    # host bridge IP). Harmless on Mac/Windows.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - ./.env
     environment:

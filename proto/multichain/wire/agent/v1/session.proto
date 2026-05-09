@@ -3,6 +3,7 @@ syntax = "proto3";
 package multichain.wire.agent.v1;
 
 import "multichain/wire/agent/v1/entity.proto";
+import "multichain/wire/agent/v1/llm.proto";
 import "multichain/wire/agent/v1/switches.proto";
 
 // User question + ViewContext. `thread_id` is None on the first
@@ -28,6 +29,11 @@ message AgentRequest {
   AgentSwitches switches = 4;
   bool show_trace = 5;
   string run_type = 6;
+  // Dev-only per-role LLM provider override. Empty / missing = use
+  // the production preset (env-driven OpenRouter). Set by the
+  // frontend builder view's Models section; production frontend
+  // never populates this field. See llm.proto for shape.
+  LlmOverride llm_override = 7;
 }
 
 // Returned synchronously from POST /agent/ask. `session_id` is

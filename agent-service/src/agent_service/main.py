@@ -36,6 +36,7 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
+import httpx
 import structlog
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -179,6 +180,43 @@ def _validate_request(req: sess_pb.AgentRequest) -> None:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/agent/local/models")
+async def local_models() -> dict:
+    """Proxy `GET ${LOCAL_LLM_BASE_URL}/models` so the frontend
+    builder view can populate its local-model dropdown without
+    hitting the user's host directly (CORS would block the browser
+    even if the URL were reachable).
+
+    Defaults LOCAL_LLM_BASE_URL to `http://host.docker.internal:1234/v1`
+    (LM Studio's default port). On Mac/Windows Docker Desktop this
+    name resolves automatically; on Linux the docker-compose
+    `extra_hosts: ["host.docker.internal:host-gateway"]` line on
+    this service supplies the missing entry.
+
+    Returns one canonical shape regardless of failure mode:
+      `{"reachable": bool, "baseUrl": "...", "models": [{id, object}, ...]}`
+    so the frontend renders one error state for "LM Studio not
+    running, no permitted models, and any other connection failure."
+    """
+    base_url = os.environ.get(
+        "LOCAL_LLM_BASE_URL", "http://host.docker.internal:1234/v1"
+    )
+    url = base_url.rstrip("/") + "/models"
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get(url)
+        if r.status_code != 200:
+            return {"reachable": False, "baseUrl": base_url, "models": []}
+        body = r.json()
+        # OpenAI-compatible /models response: {"object": "list", "data": [...]}.
+        # LM Studio + most others follow this. We forward the `data` array
+        # under `models` and drop everything else.
+        models = body.get("data", []) if isinstance(body, dict) else []
+        return {"reachable": True, "baseUrl": base_url, "models": models}
+    except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError):
+        return {"reachable": False, "baseUrl": base_url, "models": []}
 
 
 @app.post("/agent/ask")

@@ -5,6 +5,7 @@ include!("multichain.wire.agent.v1.claim.rs");
 include!("multichain.wire.agent.v1.constitution.rs");
 include!("multichain.wire.agent.v1.diff.rs");
 include!("multichain.wire.agent.v1.entity.rs");
+include!("multichain.wire.agent.v1.llm.rs");
 include!("multichain.wire.agent.v1.narrative.rs");
 include!("multichain.wire.agent.v1.switches.rs");
 include!("multichain.wire.agent.v1.session.rs");
@@ -30,6 +31,7 @@ pub mod __buffa {
         include!("multichain.wire.agent.v1.constitution.__view.rs");
         include!("multichain.wire.agent.v1.diff.__view.rs");
         include!("multichain.wire.agent.v1.entity.__view.rs");
+        include!("multichain.wire.agent.v1.llm.__view.rs");
         include!("multichain.wire.agent.v1.narrative.__view.rs");
         include!("multichain.wire.agent.v1.switches.__view.rs");
         include!("multichain.wire.agent.v1.session.__view.rs");
@@ -42,6 +44,7 @@ pub mod __buffa {
             include!("multichain.wire.agent.v1.constitution.__view_oneof.rs");
             include!("multichain.wire.agent.v1.diff.__view_oneof.rs");
             include!("multichain.wire.agent.v1.entity.__view_oneof.rs");
+            include!("multichain.wire.agent.v1.llm.__view_oneof.rs");
             include!("multichain.wire.agent.v1.narrative.__view_oneof.rs");
             include!("multichain.wire.agent.v1.switches.__view_oneof.rs");
             include!("multichain.wire.agent.v1.session.__view_oneof.rs");
@@ -56,6 +59,7 @@ pub mod __buffa {
         include!("multichain.wire.agent.v1.constitution.__oneof.rs");
         include!("multichain.wire.agent.v1.diff.__oneof.rs");
         include!("multichain.wire.agent.v1.entity.__oneof.rs");
+        include!("multichain.wire.agent.v1.llm.__oneof.rs");
         include!("multichain.wire.agent.v1.narrative.__oneof.rs");
         include!("multichain.wire.agent.v1.switches.__oneof.rs");
         include!("multichain.wire.agent.v1.session.__oneof.rs");
@@ -69,6 +73,7 @@ pub mod __buffa {
         include!("multichain.wire.agent.v1.constitution.__ext.rs");
         include!("multichain.wire.agent.v1.diff.__ext.rs");
         include!("multichain.wire.agent.v1.entity.__ext.rs");
+        include!("multichain.wire.agent.v1.llm.__ext.rs");
         include!("multichain.wire.agent.v1.narrative.__ext.rs");
         include!("multichain.wire.agent.v1.switches.__ext.rs");
         include!("multichain.wire.agent.v1.session.__ext.rs");
@@ -104,6 +109,8 @@ pub mod __buffa {
         reg.register_json_any(super::__ENTITY_REF_EDGE_JSON_ANY);
         reg.register_json_any(super::__ENTITY_REF_COMMUNITY_JSON_ANY);
         reg.register_json_any(super::__VIEW_CONTEXT_JSON_ANY);
+        reg.register_json_any(super::__LLM_OVERRIDE_JSON_ANY);
+        reg.register_json_any(super::__ROLE_OVERRIDE_JSON_ANY);
         reg.register_json_any(super::__NARRATIVE_WITH_REFS_JSON_ANY);
         reg.register_json_any(super::__NARRATIVE_RETRACTED_JSON_ANY);
         reg.register_json_any(super::__AGENT_SWITCHES_JSON_ANY);

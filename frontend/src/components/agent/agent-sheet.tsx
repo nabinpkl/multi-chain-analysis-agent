@@ -8,6 +8,7 @@ import { AgentEmptyState } from "./agent-empty-state";
 import { AgentClaimList } from "./agent-claim-list";
 import { AgentInput } from "./agent-input";
 import { BuilderViewToggle } from "./builder-view-toggle";
+import { ModelsPanel } from "./models-panel";
 import { SwitchPanel } from "./switch-panel";
 
 /**
@@ -44,7 +45,7 @@ export function AgentSheet({
         side="right"
         className="!max-w-[480px] w-full sm:!max-w-[480px] flex flex-col p-0 gap-0 bg-mca-bg"
       >
-        <header className="px-4 py-3 border-b border-mca-border space-y-1">
+        <header className="px-4 py-3 border-b border-mca-border space-y-1 shrink-0">
           <div className="flex items-center justify-between gap-2 pr-8">
             <span className="text-[0.7rem] uppercase tracking-[2px] text-mca-text flex items-center gap-2">
               agent
@@ -69,25 +70,34 @@ export function AgentSheet({
           <FocusHeader focusedAddr={focusedAddr} />
         </header>
 
-        {builderViewOn ? <SwitchPanel /> : null}
+        {/* Single scrollable region covering the builder-view panels +
+            the conversation. Without an explicit overflow boundary the
+            panels and the claim list compete for the SheetContent's
+            height: tall builder content used to push the input below
+            the viewport with no way to reach it. ModelsPanel comes
+            first because the dev-loop pain point that motivated it
+            (free-tier flakes + provider switching) is the more
+            frequently touched surface; defense-ablation switches sit
+            below for less-frequent flips. */}
+        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+          {builderViewOn ? (
+            <>
+              <ModelsPanel />
+              <SwitchPanel />
+            </>
+          ) : null}
 
-        {turns.length === 0 && !inFlight ? (
-          <AgentEmptyState focusedAddr={focusedAddr} />
-        ) : (
-          // Live SSE progress used to render in a sticky strip above
-          // the conversation. It drifted from the per-turn pending
-          // placeholder ("thinking…") and the user saw two indicators
-          // saying different things at the same time. Now the per-
-          // turn placeholder reads the same `progress` and renders
-          // the formatted phase inline under the user's message
-          // bubble; only one indicator total.
-          <AgentClaimList
-            turns={turns}
-            status={status}
-            progress={progress}
-            builderView={builderViewOn}
-          />
-        )}
+          {turns.length === 0 && !inFlight ? (
+            <AgentEmptyState focusedAddr={focusedAddr} />
+          ) : (
+            <AgentClaimList
+              turns={turns}
+              status={status}
+              progress={progress}
+              builderView={builderViewOn}
+            />
+          )}
+        </div>
 
         <TraceLink status={status} builderView={builderViewOn} />
 

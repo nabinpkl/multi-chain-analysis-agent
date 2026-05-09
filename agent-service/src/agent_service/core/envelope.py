@@ -72,3 +72,13 @@ class TurnEnvelope:
     # this from `thread.message_history` and pydantic-ai validates it
     # at agent.run() time.
     history: list[Any] = field(default_factory=list)
+
+    # Optional per-role LLM override for this turn (a `RoleOverride`
+    # for the primary agent only). Empty / None = production preset
+    # (env-driven OpenRouter). When the core rebuilds the primary
+    # agent on the per-defense drop path, this is threaded into the
+    # rebuild so the swap takes effect on that turn. Constitution and
+    # repeat overrides do NOT live here; the chat driver applies them
+    # before calling `run_one_turn` since the core never rebuilds
+    # those agents itself.
+    primary_llm_override: Any | None = None

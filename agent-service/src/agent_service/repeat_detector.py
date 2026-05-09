@@ -77,11 +77,18 @@ class RepeatDetectorOutcome:
         return cls(repeat_of_turn=None, reason=reason, user_explicitly_wants_refresh=False)
 
 
-def build_repeat_agent() -> Agent[None, _RepeatJudgement]:
+def build_repeat_agent(*, llm_override=None) -> Agent[None, _RepeatJudgement]:
     """Construct the repeat detector agent. Cheap policy model, no
-    tools, structured output."""
+    tools, structured output.
+
+    `llm_override` (a `RoleOverride`-shaped object) pins the agent to
+    a specific provider + model id for this turn; populated by the
+    loop driver from `request.llm_override.policy` (the repeat
+    detector shares the policy role with the constitution gate).
+    None = production preset.
+    """
     return Agent(
-        model=llm.make_model("policy"),
+        model=llm.make_model("policy", override=llm_override),
         output_type=_RepeatJudgement,
         system_prompt=_REPEAT_SYSTEM,
     )

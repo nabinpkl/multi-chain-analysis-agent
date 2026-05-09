@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useGraphFocus } from "@/stores/use-graph-focus";
 import { useAgentSwitches } from "@/stores/use-agent-switches";
+import { useLlmOverride } from "@/stores/use-llm-override";
 import {
   AgentRequestSchema,
   type AgentRequest,
@@ -16,6 +17,10 @@ import {
   EntityRefWalletSchema,
   ViewContextSchema,
 } from "@/lib/wire/multichain/wire/agent/v1/entity_pb";
+import {
+  LlmOverrideSchema,
+  RoleOverrideSchema,
+} from "@/lib/wire/multichain/wire/agent/v1/llm_pb";
 import type { AgentStatus } from "@/hooks/use-agent-stream";
 
 /**
@@ -38,6 +43,9 @@ export function AgentInput({
   const selection = useGraphFocus((s) => s.selection);
   const switches = useAgentSwitches((s) => s.switches);
   const builderViewOn = useAgentSwitches((s) => s.builderViewOn);
+  const primaryOverride = useLlmOverride((s) => s.primary);
+  const policyOverride = useLlmOverride((s) => s.policy);
+  const judgeOverride = useLlmOverride((s) => s.judge);
 
   const inFlight = status.kind === "sending" || status.kind === "streaming";
 
@@ -67,6 +75,31 @@ export function AgentInput({
         },
       }),
     );
+    // Per-role LLM provider override (dev-only). Only attach the
+    // wire field when at least one role is actually pinned;
+    // production traffic carries an empty `LlmOverride` and the
+    // backend defaults to env-driven OpenRouter for every role.
+    const anyOverrideActive =
+      primaryOverride.provider !== "" ||
+      policyOverride.provider !== "" ||
+      judgeOverride.provider !== "";
+    const llmOverride = anyOverrideActive
+      ? create(LlmOverrideSchema, {
+          primary: create(RoleOverrideSchema, {
+            provider: primaryOverride.provider,
+            modelId: primaryOverride.modelId,
+          }),
+          policy: create(RoleOverrideSchema, {
+            provider: policyOverride.provider,
+            modelId: policyOverride.modelId,
+          }),
+          judge: create(RoleOverrideSchema, {
+            provider: judgeOverride.provider,
+            modelId: judgeOverride.modelId,
+          }),
+        })
+      : undefined;
+
     const request = create(AgentRequestSchema, {
       userQuestion: trimmed,
       context: create(ViewContextSchema, {
@@ -76,6 +109,7 @@ export function AgentInput({
       }),
       switches,
       showTrace: builderViewOn,
+      llmOverride,
     });
     onSend(request);
     setText("");

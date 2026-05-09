@@ -44,6 +44,7 @@ from opentelemetry import trace
 from pydantic_ai import Agent
 
 from agent_service import spans
+from agent_service.agent import build_agent
 from agent_service.core import (
     SseSink,
     TurnEnvelope,
@@ -51,8 +52,9 @@ from agent_service.core import (
     run_one_turn,
 )
 from agent_service.diff import diff_outputs, spec_for
+from agent_service.policy.constitution import build_constitution_agent
 from agent_service.primitive_client import PrimitiveClient, PrimitiveError
-from agent_service.repeat_detector import detect_repeat
+from agent_service.repeat_detector import build_repeat_agent, detect_repeat
 from agent_service.thread_state import (
     AgentThread,
     ThreadRegistry,
@@ -69,6 +71,20 @@ log = structlog.get_logger(__name__)
 # Module-level tracer. init_otel() registered the global TracerProvider
 # at app startup; this resolves through to it.
 _tracer = trace.get_tracer(__name__)
+
+
+def _override_or_none(role_override):
+    """Treat empty `RoleOverride` (default-constructed proto with empty
+    provider AND empty model_id) as None so the per-turn rebuild path
+    only fires when an actual override is set. Production traffic
+    sends `llm_override` unset; the dev frontend sends a populated
+    field only when a developer flips the toggle.
+    """
+    if role_override is None:
+        return None
+    if not role_override.provider and not role_override.model_id:
+        return None
+    return role_override
 
 
 # Generic user-facing error message; raw exception only crosses the
@@ -237,6 +253,37 @@ async def run_turn(
     writes the core's outcome back into thread state.
     """
     snapshot_id: str | None = None
+    # Resolve per-turn agents up front. When the request carries an
+    # `llm_override`, build fresh agents pinned to the requested
+    # provider for this turn; otherwise reuse the lifespan-cached
+    # ones. Sub-millisecond per build, no I/O. Constitution + repeat
+    # share the "policy" override field (both are cheap policy-tier
+    # gates); primary stands alone.
+    primary_override = _override_or_none(
+        getattr(request.llm_override, "primary", None)
+        if request.HasField("llm_override")
+        else None
+    )
+    policy_override = _override_or_none(
+        getattr(request.llm_override, "policy", None)
+        if request.HasField("llm_override")
+        else None
+    )
+    primary_agent_for_turn = (
+        build_agent(llm_override=primary_override)
+        if primary_override is not None
+        else handles.primary_agent
+    )
+    constitution_agent_for_turn = (
+        build_constitution_agent(llm_override=policy_override)
+        if policy_override is not None
+        else handles.constitution_agent
+    )
+    repeat_agent_for_turn = (
+        build_repeat_agent(llm_override=policy_override)
+        if policy_override is not None
+        else handles.repeat_agent
+    )
     try:
         thread, lock = await handles.threads.get_or_create(thread_id)
         async with lock:
@@ -289,7 +336,7 @@ async def run_turn(
                             outcome = await detect_repeat(
                                 prior_qs,
                                 request.user_question,
-                                handles.repeat_agent,
+                                repeat_agent_for_turn,
                             )
                             is_repeat = outcome.repeat_of_turn is not None
                             rd_span.set_attribute(
@@ -362,14 +409,15 @@ async def run_turn(
                     history=list(thread.message_history)
                     if thread.message_history
                     else [],
+                    primary_llm_override=primary_override,
                 )
                 sink = SseSink()
 
                 async def _run_core():
                     try:
                         return await run_one_turn(
-                            primary_agent=handles.primary_agent,
-                            constitution_agent=handles.constitution_agent,
+                            primary_agent=primary_agent_for_turn,
+                            constitution_agent=constitution_agent_for_turn,
                             primitive_client=handles.primitive_client,
                             envelope=envelope,
                             bindings=thread.bindings,

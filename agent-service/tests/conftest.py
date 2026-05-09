@@ -220,7 +220,7 @@ async def httpx_async_client() -> AsyncIterator[httpx.AsyncClient]:
 
 
 @pytest.fixture(autouse=True)
-def _no_live_llm(monkeypatch):
+def _no_live_llm(request, monkeypatch):
     """Stub `agent_service.llm.make_model` for every test so any agent
     constructed during a test run, current or future, gets a `TestModel`
     instead of a real OpenRouter-backed model. `make_model` is the
@@ -239,9 +239,16 @@ def _no_live_llm(monkeypatch):
     that still works for unit-level tests not driven through
     `TestClient`. For the SSE-driven integration tests, this autouse
     is the only thing that fires.
-    """
 
-    def _stub(role, *, model_id=None):
+    Tests that DIRECTLY exercise `make_model` itself (e.g. unit tests
+    asserting provider routing for the local-override path) opt out
+    by marking themselves `@pytest.mark.real_llm`; they are
+    responsible for not making any actual network call.
+    """
+    if request.node.get_closest_marker("real_llm"):
+        return
+
+    def _stub(role, *, override=None, model_id=None):
         return TestModel(call_tools=[])
 
     monkeypatch.setattr("agent_service.llm.make_model", _stub)

@@ -145,6 +145,7 @@ class ToolCallRecord:
 def build_agent(
     *,
     drop_rule_ids: Iterable[str] = (),
+    llm_override=None,
 ) -> Agent[AgentDeps, str]:
     """Construct the production agent. Three tools, free-form-string
     output (the narrative), system prompt composed from `system_v4.txt`
@@ -159,9 +160,15 @@ def build_agent(
             surface can disable individual defenses without touching
             the .txt file. See `prompts/composer.py` for the
             rule-id namespace.
+        llm_override: optional `RoleOverride`-shaped object pinning
+            the primary agent to a specific provider + model id for
+            this turn. Empty / None = production preset (env-driven
+            OpenRouter). Set by the dev builder view's Models
+            section; production frontend never populates it. See
+            `agent_service.llm.make_model` for resolution rules.
     """
     agent: Agent[AgentDeps, str] = Agent(
-        model=llm.make_model("primary"),
+        model=llm.make_model("primary", override=llm_override),
         deps_type=AgentDeps,
         output_type=str,
         system_prompt=compose_system_prompt(drop_rule_ids=drop_rule_ids),

@@ -266,7 +266,11 @@ async def run_one_turn(
     # the LLM call about to follow.
     turn_drops = drops_from_switches(envelope.switches)
     turn_agent: Agent = (
-        build_agent(drop_rule_ids=turn_drops) if turn_drops else primary_agent
+        build_agent(
+            drop_rule_ids=turn_drops, llm_override=envelope.primary_llm_override
+        )
+        if turn_drops
+        else primary_agent
     )
     # 75s per attempt covers a normal multi-tool turn (~25s today)
     # with headroom for slow free-tier hops, while still failing

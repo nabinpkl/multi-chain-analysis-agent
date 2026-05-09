@@ -6,6 +6,8 @@ import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import type { ViewContext } from "./entity_pb";
 import { file_multichain_wire_agent_v1_entity } from "./entity_pb";
+import type { LlmOverride } from "./llm_pb";
+import { file_multichain_wire_agent_v1_llm } from "./llm_pb";
 import type { AgentSwitches } from "./switches_pb";
 import { file_multichain_wire_agent_v1_switches } from "./switches_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -14,7 +16,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file multichain/wire/agent/v1/session.proto.
  */
 export const file_multichain_wire_agent_v1_session: GenFile = /*@__PURE__*/
-  fileDesc("CiZtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc2Vzc2lvbi5wcm90bxIYbXVsdGljaGFpbi53aXJlLmFnZW50LnYxIuQBCgxBZ2VudFJlcXVlc3QSFQoNdXNlcl9xdWVzdGlvbhgBIAEoCRI2Cgdjb250ZXh0GAIgASgLMiUubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLlZpZXdDb250ZXh0EhYKCXRocmVhZF9pZBgDIAEoCUgAiAEBEjkKCHN3aXRjaGVzGAQgASgLMicubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkFnZW50U3dpdGNoZXMSEgoKc2hvd190cmFjZRgFIAEoCBIQCghydW5fdHlwZRgGIAEoCUIMCgpfdGhyZWFkX2lkIkoKE0FnZW50U2Vzc2lvblN0YXJ0ZWQSEgoKc2Vzc2lvbl9pZBgBIAEoCRIRCgl0aHJlYWRfaWQYAiABKAkSDAoEdHVybhgDIAEoDSJFCglBZ2VudERvbmUSEgoKc2Vzc2lvbl9pZBgBIAEoCRISCgplbGFwc2VkX21zGAIgASgNEhAKCHRyYWNlX2lkGAMgASgJYgZwcm90bzM", [file_multichain_wire_agent_v1_entity, file_multichain_wire_agent_v1_switches]);
+  fileDesc("CiZtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc2Vzc2lvbi5wcm90bxIYbXVsdGljaGFpbi53aXJlLmFnZW50LnYxIqECCgxBZ2VudFJlcXVlc3QSFQoNdXNlcl9xdWVzdGlvbhgBIAEoCRI2Cgdjb250ZXh0GAIgASgLMiUubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLlZpZXdDb250ZXh0EhYKCXRocmVhZF9pZBgDIAEoCUgAiAEBEjkKCHN3aXRjaGVzGAQgASgLMicubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkFnZW50U3dpdGNoZXMSEgoKc2hvd190cmFjZRgFIAEoCBIQCghydW5fdHlwZRgGIAEoCRI7CgxsbG1fb3ZlcnJpZGUYByABKAsyJS5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuTGxtT3ZlcnJpZGVCDAoKX3RocmVhZF9pZCJKChNBZ2VudFNlc3Npb25TdGFydGVkEhIKCnNlc3Npb25faWQYASABKAkSEQoJdGhyZWFkX2lkGAIgASgJEgwKBHR1cm4YAyABKA0iRQoJQWdlbnREb25lEhIKCnNlc3Npb25faWQYASABKAkSEgoKZWxhcHNlZF9tcxgCIAEoDRIQCgh0cmFjZV9pZBgDIAEoCWIGcHJvdG8z", [file_multichain_wire_agent_v1_entity, file_multichain_wire_agent_v1_llm, file_multichain_wire_agent_v1_switches]);
 
 /**
  * User question + ViewContext. `thread_id` is None on the first
@@ -66,6 +68,16 @@ export type AgentRequest = Message<"multichain.wire.agent.v1.AgentRequest"> & {
    * @generated from field: string run_type = 6;
    */
   runType: string;
+
+  /**
+   * Dev-only per-role LLM provider override. Empty / missing = use
+   * the production preset (env-driven OpenRouter). Set by the
+   * frontend builder view's Models section; production frontend
+   * never populates this field. See llm.proto for shape.
+   *
+   * @generated from field: multichain.wire.agent.v1.LlmOverride llm_override = 7;
+   */
+  llmOverride?: LlmOverride | undefined;
 };
 
 /**

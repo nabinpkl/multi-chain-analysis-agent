@@ -35,6 +35,15 @@ pub struct AgentRequestView<'a> {
     pub show_trace: bool,
     /// Field 6: `run_type`
     pub run_type: &'a str,
+    /// Dev-only per-role LLM provider override. Empty / missing = use
+    /// the production preset (env-driven OpenRouter). Set by the
+    /// frontend builder view's Models section; production frontend
+    /// never populates this field. See llm.proto for shape.
+    ///
+    /// Field 7: `llm_override`
+    pub llm_override: ::buffa::MessageFieldView<
+        super::super::__buffa::view::LlmOverrideView<'a>,
+    >,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> AgentRequestView<'a> {
@@ -163,6 +172,30 @@ impl<'a> AgentRequestView<'a> {
                     }
                     view.run_type = ::buffa::types::borrow_str(&mut cur)?;
                 }
+                7u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 7u32,
+                            expected: 2u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    if depth == 0 {
+                        return Err(::buffa::DecodeError::RecursionLimitExceeded);
+                    }
+                    let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                    match view.llm_override.as_mut() {
+                        Some(existing) => existing._merge_into_view(sub, depth - 1)?,
+                        None => {
+                            view.llm_override = ::buffa::MessageFieldView::set(
+                                super::super::__buffa::view::LlmOverrideView::_decode_depth(
+                                    sub,
+                                    depth - 1,
+                                )?,
+                            );
+                        }
+                    }
+                }
                 _ => {
                     ::buffa::encoding::skip_field_depth(tag, &mut cur, depth)?;
                     let span_len = before_tag.len() - cur.len();
@@ -211,6 +244,14 @@ impl<'a> ::buffa::MessageView<'a> for AgentRequestView<'a> {
             },
             show_trace: self.show_trace,
             run_type: self.run_type.to_string(),
+            llm_override: match self.llm_override.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::LlmOverride,
+                    >::some(v.to_owned_message())
+                }
+                None => ::buffa::MessageField::none(),
+            },
             __buffa_unknown_fields: self
                 .__buffa_unknown_fields
                 .to_owned()
@@ -254,6 +295,14 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentRequestView<'a> {
         }
         if !self.run_type.is_empty() {
             size += 1u32 + ::buffa::types::string_encoded_len(&self.run_type) as u32;
+        }
+        if self.llm_override.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.llm_override.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
@@ -312,6 +361,15 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentRequestView<'a> {
                 )
                 .encode(buf);
             ::buffa::types::encode_string(&self.run_type, buf);
+        }
+        if self.llm_override.is_set() {
+            ::buffa::encoding::Tag::new(
+                    7u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
+                .encode(buf);
+            ::buffa::encoding::encode_varint(__cache.consume_next() as u64, buf);
+            self.llm_override.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }

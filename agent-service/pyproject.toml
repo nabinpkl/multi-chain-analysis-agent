@@ -90,3 +90,11 @@ testpaths = ["tests"]
 filterwarnings = [
     "error::DeprecationWarning:agent_service.*",
 ]
+markers = [
+    # Tests that directly exercise `agent_service.llm.make_model`
+    # need the real function, not the conftest autouse stub. They
+    # mark themselves with this so the autouse opts out. Marked
+    # tests must NOT make real network calls; they construct model
+    # objects and inspect provider config only.
+    "real_llm: opt out of the no-live-llm autouse to test make_model directly",
+]
