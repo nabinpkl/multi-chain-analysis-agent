@@ -70,10 +70,10 @@ pub struct AppState {
     /// anything older than 5 min.
     pub snapshot_cache: SnapshotCache,
     /// Solana RPC client. Shared between the ingester (which calls
-    /// `getBlock`) and primitive handlers (the `get_token_info` lazy
-    /// fetcher calls `getAccountInfo`). Both paths go through the
-    /// same governor rate limiter so heavy agent traffic naturally
-    /// throttles ingest, and vice versa.
+    /// `getBlock` / `getSlot`) and primitive handlers (the
+    /// `get_token_info` lazy fetcher calls `getAccountInfo`). The
+    /// client carries two independent rate-limit lanes so the two
+    /// consumers do not starve each other; see `rpc::client::RpcClient`.
     ///
     /// `None` when `SOLANA_RPC_URL` is unset (test/agent-only mode);
     /// any primitive that needs RPC returns 503 in that mode.
@@ -100,15 +100,18 @@ impl AppState {
         let ch_store = Arc::new(ClickHouseEdgeStore::new(clickhouse.clone()));
         let (analytics, analytics_senders) = AnalyticsChannels::new();
 
-        // Build the RPC client once. The ingester clones the same
-        // `Arc<RpcClient>` from `state.rpc` so both the ingester and
-        // any primitive that needs RPC share the rate limiter.
+        // Build the RPC client once. The ingester and any primitive
+        // that needs RPC clone the same `Arc<RpcClient>` from
+        // `state.rpc`. The client carries two independent rate-limit
+        // lanes (ingester + primitive) so heavy agent traffic does not
+        // stall block ingestion.
         let rpc = if config.solana_rpc_url.is_empty() {
             None
         } else {
             Some(Arc::new(RpcClient::new(
                 config.solana_rpc_url.clone(),
-                config.rpc_min_interval,
+                config.rpc_ingester_min_interval,
+                config.rpc_primitive_min_interval,
             )))
         };
 

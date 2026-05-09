@@ -21,4 +21,5 @@ pub mod state;
 pub mod store;
 pub mod stream;
 pub mod tip;
+pub mod util;
 pub mod wire;

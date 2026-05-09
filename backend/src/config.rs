@@ -10,7 +10,15 @@ pub struct Config {
     pub clickhouse_user: String,
     pub clickhouse_password: String,
     pub solana_rpc_url: String,
-    pub rpc_min_interval: Duration,
+    /// Minimum interval between calls on the ingester rate-limit lane
+    /// (`getBlock`, `getSlot`). Sized to match Solana mainnet's slot
+    /// production cadence so block ingestion stays responsive.
+    pub rpc_ingester_min_interval: Duration,
+    /// Minimum interval between calls on the primitive rate-limit lane
+    /// (`getAccountInfo` from `/primitive/get_token_info`). Independent
+    /// of the ingester lane so heavy agent traffic does not stall
+    /// block ingestion. Defaults to a slower cadence than the ingester.
+    pub rpc_primitive_min_interval: Duration,
     pub kafka_brokers: String,
     pub kafka_topic_raw_edges: String,
     pub kafka_group_ch_sink: String,
@@ -31,8 +39,14 @@ impl Config {
             clickhouse_user: env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".into()),
             clickhouse_password: env::var("CLICKHOUSE_PASSWORD").unwrap_or_default(),
             solana_rpc_url: env::var("SOLANA_RPC_URL").unwrap_or_default(),
-            rpc_min_interval: Duration::from_millis(
-                env::var("RPC_MIN_INTERVAL_MS")
+            rpc_ingester_min_interval: Duration::from_millis(
+                env::var("RPC_INGESTER_MIN_INTERVAL_MS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1000),
+            ),
+            rpc_primitive_min_interval: Duration::from_millis(
+                env::var("RPC_PRIMITIVE_MIN_INTERVAL_MS")
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(2000),

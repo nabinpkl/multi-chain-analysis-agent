@@ -10,6 +10,7 @@ use tracing::debug;
 use crate::rpc::client::RpcClient;
 use crate::rpc::error::RpcError;
 use crate::rpc::types::{AccountData, AccountInfoResponse};
+use crate::util::singleflight::Singleflight;
 
 /// Metaplex Token Metadata Program. Canonical singleton; never
 /// redeployed at a different address.
@@ -61,6 +62,17 @@ pub fn derive_metaplex_metadata_pda(mint: &Pubkey) -> Pubkey {
     pda
 }
 
+/// Per-mint single-flight wrapper. Two concurrent calls for the same
+/// mint share one in-flight execution; the second caller awaits the
+/// first's result instead of firing its own `getAccountInfo` pair.
+/// Cleared as soon as the leader finishes, so the next non-overlapping
+/// call starts a fresh flight (no caching).
+type FetchResult = Result<Option<OnChainMetadata>, RpcError>;
+fn singleflight() -> &'static Singleflight<String, FetchResult> {
+    static SF: OnceLock<Singleflight<String, FetchResult>> = OnceLock::new();
+    SF.get_or_init(Singleflight::new)
+}
+
 /// Fetch on-chain metadata for a mint by trying the two known paths
 /// in order:
 ///
@@ -75,13 +87,26 @@ pub fn derive_metaplex_metadata_pda(mint: &Pubkey) -> Pubkey {
 /// Returns `Ok(None)` when the mint exists but has no resolvable
 /// metadata via either path. `Err` is reserved for actual RPC failure.
 ///
-/// Both calls go through the shared `RpcClient` rate limiter, so this
-/// path competes with `getBlock` for budget.
+/// Concurrent calls for the same mint coalesce via per-mint
+/// single-flight: the first caller fires the `getAccountInfo` pair
+/// against the primitive rate-limit lane; subsequent in-flight callers
+/// for the same mint await the leader's result and consume zero
+/// additional limiter tickets.
 pub async fn fetch_token_metadata(
     rpc: &RpcClient,
     mint: &Pubkey,
 ) -> Result<Option<OnChainMetadata>, RpcError> {
     let mint_b58 = bs58::encode(mint.as_ref()).into_string();
+    singleflight()
+        .run(mint_b58.clone(), || fetch_inner(rpc, mint, mint_b58.clone()))
+        .await
+}
+
+async fn fetch_inner(
+    rpc: &RpcClient,
+    mint: &Pubkey,
+    mint_b58: String,
+) -> FetchResult {
     let pda = derive_metaplex_metadata_pda(mint);
     let pda_b58 = bs58::encode(pda.as_ref()).into_string();
 

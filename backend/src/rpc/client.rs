@@ -14,37 +14,48 @@ use super::types::{AccountInfoResponse, Block, JsonRpcResponse};
 
 type Limiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
+/// Single HTTP client over Solana JSON-RPC, with two independent
+/// rate-limiter lanes:
+///
+/// - **Ingester lane** (`ingester_limiter`) gates `getBlock` and
+///   `getSlot`. Owned by the ingester loop and the tip tracker; sized
+///   to keep block ingestion moving at the chain's slot cadence.
+/// - **Primitive lane** (`primitive_limiter`) gates `getAccountInfo`.
+///   Used by `/primitive/get_token_info` lazy fetches. Sized smaller
+///   so heavy agent traffic does not starve `getBlock` of tickets.
+///
+/// The lanes share one underlying `reqwest::Client` and one upstream
+/// URL; only the in-process rate limiter differs. See AGENTS.md
+/// "RPC budget: ingester vs primitive lane split" and issue #47.
 #[derive(Clone)]
 pub struct RpcClient {
     http: Client,
     url: String,
-    limiter: Arc<Limiter>,
+    ingester_limiter: Arc<Limiter>,
+    primitive_limiter: Arc<Limiter>,
 }
 
 impl RpcClient {
-    pub fn new(url: String, min_interval: Duration) -> Self {
-        let interval = if min_interval.is_zero() {
-            Duration::from_millis(1)
-        } else {
-            min_interval
-        };
-        let quota = Quota::with_period(interval)
-            .expect("min_interval must be > 0")
-            .allow_burst(NonZeroU32::new(1).unwrap());
-        let limiter = Arc::new(RateLimiter::direct(quota));
+    pub fn new(
+        url: String,
+        ingester_min_interval: Duration,
+        primitive_min_interval: Duration,
+    ) -> Self {
         Self {
             http: Client::new(),
             url,
-            limiter,
+            ingester_limiter: Arc::new(build_limiter(ingester_min_interval)),
+            primitive_limiter: Arc::new(build_limiter(primitive_min_interval)),
         }
     }
 
-    async fn call<T: serde::de::DeserializeOwned>(
+    async fn call_with<T: serde::de::DeserializeOwned>(
         &self,
         method: &str,
         params: Value,
+        limiter: &Limiter,
     ) -> Result<T, RpcError> {
-        self.limiter.until_ready().await;
+        limiter.until_ready().await;
         info!(method = method, url = %self.url, "rpc call");
 
         let body = json!({
@@ -99,11 +110,16 @@ impl RpcClient {
     }
 
     pub async fn get_slot(&self) -> Result<u64, RpcError> {
-        self.call("getSlot", json!([{ "commitment": "confirmed" }])).await
+        self.call_with(
+            "getSlot",
+            json!([{ "commitment": "confirmed" }]),
+            &self.ingester_limiter,
+        )
+        .await
     }
 
     pub async fn get_block(&self, slot: u64) -> Result<Block, RpcError> {
-        self.call(
+        self.call_with(
             "getBlock",
             json!([
                 slot,
@@ -115,14 +131,14 @@ impl RpcClient {
                     "maxSupportedTransactionVersion": 0
                 }
             ]),
+            &self.ingester_limiter,
         )
         .await
     }
 
     /// Read one account's state by base58 pubkey. Goes through the
-    /// same governor rate limiter as `get_block`, so heavy use of this
-    /// method (e.g. by the agent's `get_token_info` primitive) shares
-    /// the RPC budget with the ingester rather than starving either.
+    /// `primitive_limiter`, which is independent of the ingester
+    /// limiter so heavy agent traffic does not stall block ingestion.
     ///
     /// Uses `encoding=jsonParsed` so the RPC returns structured data
     /// for accounts owned by allowlisted programs (notably Token-2022
@@ -132,7 +148,7 @@ impl RpcClient {
         &self,
         pubkey: &str,
     ) -> Result<AccountInfoResponse, RpcError> {
-        self.call(
+        self.call_with(
             "getAccountInfo",
             json!([
                 pubkey,
@@ -141,9 +157,22 @@ impl RpcClient {
                     "commitment": "confirmed"
                 }
             ]),
+            &self.primitive_limiter,
         )
         .await
     }
+}
+
+fn build_limiter(min_interval: Duration) -> Limiter {
+    let interval = if min_interval.is_zero() {
+        Duration::from_millis(1)
+    } else {
+        min_interval
+    };
+    let quota = Quota::with_period(interval)
+        .expect("min_interval must be > 0")
+        .allow_burst(NonZeroU32::new(1).unwrap());
+    RateLimiter::direct(quota)
 }
 
 fn map_jsonrpc_error(code: i64, message: String) -> RpcError {
