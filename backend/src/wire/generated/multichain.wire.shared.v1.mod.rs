@@ -2,6 +2,7 @@
 
 include!("multichain.wire.shared.v1.scope.rs");
 include!("multichain.wire.shared.v1.community_summary.rs");
+include!("multichain.wire.shared.v1.get_token_info.rs");
 include!("multichain.wire.shared.v1.provenance.rs");
 include!("multichain.wire.shared.v1.subgraph.rs");
 include!("multichain.wire.shared.v1.role.rs");
@@ -26,6 +27,7 @@ pub mod __buffa {
         use super::*;
         include!("multichain.wire.shared.v1.scope.__view.rs");
         include!("multichain.wire.shared.v1.community_summary.__view.rs");
+        include!("multichain.wire.shared.v1.get_token_info.__view.rs");
         include!("multichain.wire.shared.v1.provenance.__view.rs");
         include!("multichain.wire.shared.v1.subgraph.__view.rs");
         include!("multichain.wire.shared.v1.role.__view.rs");
@@ -37,6 +39,7 @@ pub mod __buffa {
             use super::*;
             include!("multichain.wire.shared.v1.scope.__view_oneof.rs");
             include!("multichain.wire.shared.v1.community_summary.__view_oneof.rs");
+            include!("multichain.wire.shared.v1.get_token_info.__view_oneof.rs");
             include!("multichain.wire.shared.v1.provenance.__view_oneof.rs");
             include!("multichain.wire.shared.v1.subgraph.__view_oneof.rs");
             include!("multichain.wire.shared.v1.role.__view_oneof.rs");
@@ -50,6 +53,7 @@ pub mod __buffa {
         use super::*;
         include!("multichain.wire.shared.v1.scope.__oneof.rs");
         include!("multichain.wire.shared.v1.community_summary.__oneof.rs");
+        include!("multichain.wire.shared.v1.get_token_info.__oneof.rs");
         include!("multichain.wire.shared.v1.provenance.__oneof.rs");
         include!("multichain.wire.shared.v1.subgraph.__oneof.rs");
         include!("multichain.wire.shared.v1.role.__oneof.rs");
@@ -62,6 +66,7 @@ pub mod __buffa {
         use super::*;
         include!("multichain.wire.shared.v1.scope.__ext.rs");
         include!("multichain.wire.shared.v1.community_summary.__ext.rs");
+        include!("multichain.wire.shared.v1.get_token_info.__ext.rs");
         include!("multichain.wire.shared.v1.provenance.__ext.rs");
         include!("multichain.wire.shared.v1.subgraph.__ext.rs");
         include!("multichain.wire.shared.v1.role.__ext.rs");
@@ -77,6 +82,8 @@ pub mod __buffa {
         reg.register_json_any(super::__COMMUNITY_SUMMARY_INPUT_JSON_ANY);
         reg.register_json_any(super::__COMMUNITY_SUMMARY_OUTPUT_JSON_ANY);
         reg.register_json_any(super::__TOP_WALLET_JSON_ANY);
+        reg.register_json_any(super::__GET_TOKEN_INFO_INPUT_JSON_ANY);
+        reg.register_json_any(super::__GET_TOKEN_INFO_OUTPUT_JSON_ANY);
         reg.register_json_any(super::__PROVENANCE_REF_JSON_ANY);
         reg.register_json_any(super::__WALLET_REF_JSON_ANY);
         reg.register_json_any(super::__EDGE_REF_JSON_ANY);
@@ -93,6 +100,7 @@ pub mod __buffa {
         reg.register_json_any(super::__TOP_COUNTERPARTY_JSON_ANY);
         reg.register_json_any(super::__WALLET_PROFILE_REQUEST_JSON_ANY);
         reg.register_json_any(super::__COMMUNITY_SUMMARY_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__GET_TOKEN_INFO_REQUEST_JSON_ANY);
         reg.register_json_any(super::__PRIMITIVE_RESPONSE_ENVELOPE_JSON_ANY);
         reg.register_json_any(super::__SNAPSHOT_BEGIN_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__SNAPSHOT_END_REQUEST_JSON_ANY);

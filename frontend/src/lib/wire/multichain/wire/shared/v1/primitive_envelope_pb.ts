@@ -7,6 +7,8 @@ import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_google_protobuf_struct } from "@bufbuild/protobuf/wkt";
 import type { CommunitySummaryInput } from "./community_summary_pb";
 import { file_multichain_wire_shared_v1_community_summary } from "./community_summary_pb";
+import type { GetTokenInfoInput } from "./get_token_info_pb";
+import { file_multichain_wire_shared_v1_get_token_info } from "./get_token_info_pb";
 import type { ProvenanceRef } from "./provenance_pb";
 import { file_multichain_wire_shared_v1_provenance } from "./provenance_pb";
 import type { SubgraphSlice } from "./subgraph_pb";
@@ -19,7 +21,7 @@ import type { JsonObject, Message } from "@bufbuild/protobuf";
  * Describes the file multichain/wire/shared/v1/primitive_envelope.proto.
  */
 export const file_multichain_wire_shared_v1_primitive_envelope: GenFile = /*@__PURE__*/
-  fileDesc("CjJtdWx0aWNoYWluL3dpcmUvc2hhcmVkL3YxL3ByaW1pdGl2ZV9lbnZlbG9wZS5wcm90bxIZbXVsdGljaGFpbi53aXJlLnNoYXJlZC52MSJpChRXYWxsZXRQcm9maWxlUmVxdWVzdBI8CgVpbnB1dBgBIAEoCzItLm11bHRpY2hhaW4ud2lyZS5zaGFyZWQudjEuV2FsbGV0UHJvZmlsZUlucHV0EhMKC3NuYXBzaG90X2lkGAIgASgJIm8KF0NvbW11bml0eVN1bW1hcnlSZXF1ZXN0Ej8KBWlucHV0GAEgASgLMjAubXVsdGljaGFpbi53aXJlLnNoYXJlZC52MS5Db21tdW5pdHlTdW1tYXJ5SW5wdXQSEwoLc25hcHNob3RfaWQYAiABKAki2wEKGVByaW1pdGl2ZVJlc3BvbnNlRW52ZWxvcGUSJgoFdmFsdWUYASABKAsyFy5nb29nbGUucHJvdG9idWYuU3RydWN0EjwKCnByb3ZlbmFuY2UYAiADKAsyKC5tdWx0aWNoYWluLndpcmUuc2hhcmVkLnYxLlByb3ZlbmFuY2VSZWYSRQoOc3ViZ3JhcGhfc2xpY2UYAyABKAsyKC5tdWx0aWNoYWluLndpcmUuc2hhcmVkLnYxLlN1YmdyYXBoU2xpY2VIAIgBAUIRCg9fc3ViZ3JhcGhfc2xpY2ViBnByb3RvMw", [file_google_protobuf_struct, file_multichain_wire_shared_v1_community_summary, file_multichain_wire_shared_v1_provenance, file_multichain_wire_shared_v1_subgraph, file_multichain_wire_shared_v1_wallet_profile]);
+  fileDesc("CjJtdWx0aWNoYWluL3dpcmUvc2hhcmVkL3YxL3ByaW1pdGl2ZV9lbnZlbG9wZS5wcm90bxIZbXVsdGljaGFpbi53aXJlLnNoYXJlZC52MSJpChRXYWxsZXRQcm9maWxlUmVxdWVzdBI8CgVpbnB1dBgBIAEoCzItLm11bHRpY2hhaW4ud2lyZS5zaGFyZWQudjEuV2FsbGV0UHJvZmlsZUlucHV0EhMKC3NuYXBzaG90X2lkGAIgASgJIm8KF0NvbW11bml0eVN1bW1hcnlSZXF1ZXN0Ej8KBWlucHV0GAEgASgLMjAubXVsdGljaGFpbi53aXJlLnNoYXJlZC52MS5Db21tdW5pdHlTdW1tYXJ5SW5wdXQSEwoLc25hcHNob3RfaWQYAiABKAkiZwoTR2V0VG9rZW5JbmZvUmVxdWVzdBI7CgVpbnB1dBgBIAEoCzIsLm11bHRpY2hhaW4ud2lyZS5zaGFyZWQudjEuR2V0VG9rZW5JbmZvSW5wdXQSEwoLc25hcHNob3RfaWQYAiABKAki2wEKGVByaW1pdGl2ZVJlc3BvbnNlRW52ZWxvcGUSJgoFdmFsdWUYASABKAsyFy5nb29nbGUucHJvdG9idWYuU3RydWN0EjwKCnByb3ZlbmFuY2UYAiADKAsyKC5tdWx0aWNoYWluLndpcmUuc2hhcmVkLnYxLlByb3ZlbmFuY2VSZWYSRQoOc3ViZ3JhcGhfc2xpY2UYAyABKAsyKC5tdWx0aWNoYWluLndpcmUuc2hhcmVkLnYxLlN1YmdyYXBoU2xpY2VIAIgBAUIRCg9fc3ViZ3JhcGhfc2xpY2ViBnByb3RvMw", [file_google_protobuf_struct, file_multichain_wire_shared_v1_community_summary, file_multichain_wire_shared_v1_get_token_info, file_multichain_wire_shared_v1_provenance, file_multichain_wire_shared_v1_subgraph, file_multichain_wire_shared_v1_wallet_profile]);
 
 /**
  * Body of `POST /primitive/wallet_profile`. Wraps the WalletProfileInput
@@ -73,6 +75,39 @@ export const CommunitySummaryRequestSchema: GenMessage<CommunitySummaryRequest> 
   messageDesc(file_multichain_wire_shared_v1_primitive_envelope, 1);
 
 /**
+ * Body of `POST /primitive/get_token_info`. Resolves a mint pubkey to
+ * its name / symbol / uri via the lazy-fetch path. The `snapshot_id`
+ * field is carried for envelope-shape consistency with other primitive
+ * requests but is IGNORED by the handler since this lookup is
+ * stateless (doesn't depend on the per-turn 60-second window
+ * snapshot).
+ *
+ * @generated from message multichain.wire.shared.v1.GetTokenInfoRequest
+ */
+export type GetTokenInfoRequest = Message<"multichain.wire.shared.v1.GetTokenInfoRequest"> & {
+  /**
+   * @generated from field: multichain.wire.shared.v1.GetTokenInfoInput input = 1;
+   */
+  input?: GetTokenInfoInput | undefined;
+
+  /**
+   * Ignored by the handler. Pass empty string when calling outside a
+   * turn (e.g. a manual curl debug call); pass the active turn's
+   * snapshot_id when calling from inside a turn for consistency.
+   *
+   * @generated from field: string snapshot_id = 2;
+   */
+  snapshotId: string;
+};
+
+/**
+ * Describes the message multichain.wire.shared.v1.GetTokenInfoRequest.
+ * Use `create(GetTokenInfoRequestSchema)` to create a new message.
+ */
+export const GetTokenInfoRequestSchema: GenMessage<GetTokenInfoRequest> = /*@__PURE__*/
+  messageDesc(file_multichain_wire_shared_v1_primitive_envelope, 2);
+
+/**
  * Generic primitive response envelope. Mirrors `PrimitiveOutput<T>`
  * from the existing primitive trait but flattened for the wire so
  * Python doesn't need to learn about the Rust generic.
@@ -106,5 +141,5 @@ export type PrimitiveResponseEnvelope = Message<"multichain.wire.shared.v1.Primi
  * Use `create(PrimitiveResponseEnvelopeSchema)` to create a new message.
  */
 export const PrimitiveResponseEnvelopeSchema: GenMessage<PrimitiveResponseEnvelope> = /*@__PURE__*/
-  messageDesc(file_multichain_wire_shared_v1_primitive_envelope, 2);
+  messageDesc(file_multichain_wire_shared_v1_primitive_envelope, 3);
 

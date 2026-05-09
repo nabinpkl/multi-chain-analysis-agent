@@ -8,11 +8,10 @@ use tracing::{error, info, warn};
 // Modules live in the library crate so adjacent bins can reach them.
 // The server binary just imports.
 use multichain_engine::{
-    analytics, api, config, graph, ingest, rpc, sinks, snapshot, state, store, stream,
+    analytics, api, config, graph, ingest, sinks, snapshot, state, store, stream,
 };
 
 use config::Config;
-use rpc::RpcClient;
 use sinks::stream_sink::{self, SinkConfig};
 use state::AppState;
 use stream::{
@@ -144,10 +143,15 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    if config.solana_rpc_url.is_empty() {
-        warn!("SOLANA_RPC_URL not set  ingester and tip tracker disabled");
-    } else {
-        let rpc = RpcClient::new(config.solana_rpc_url.clone(), config.rpc_min_interval);
+    if state.rpc.is_none() {
+        warn!("SOLANA_RPC_URL not set; ingester, tip tracker, and RPC-backed primitives disabled");
+    }
+    if let Some(rpc_arc) = state.rpc.clone() {
+        // Reuse the same `Arc<RpcClient>` AppState carries so the
+        // ingester and primitive handlers (e.g. get_token_info) share
+        // the rate limiter rather than running two limiters that don't
+        // know about each other.
+        let rpc = (*rpc_arc).clone();
 
         let edge_producer = EdgeProducer::new(&config.kafka_brokers, &config.kafka_topic_raw_edges)?;
         info!(brokers = %config.kafka_brokers, topic = %config.kafka_topic_raw_edges, "kafka edge producer ready");

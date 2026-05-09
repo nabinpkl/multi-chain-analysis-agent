@@ -127,6 +127,10 @@ pub async fn fetch_token_metadata(
 fn try_metaplex_path(resp: &AccountInfoResponse) -> Option<ParsedMetadata> {
     let value = resp.value.as_ref()?;
     if value.owner != METAPLEX_PROGRAM_ID_B58 {
+        debug!(
+            owner = %value.owner,
+            "try_metaplex_path: PDA exists but owner is not Metaplex"
+        );
         return None;
     }
     decode_metaplex_account(&value.data)
@@ -187,11 +191,17 @@ fn decode_metaplex_account(data: &AccountData) -> Option<ParsedMetadata> {
         // RPC falls through to base64. Encoding tuple shape is
         // `[<base64_string>, "base64"]`. If the bytes fail to decode
         // we treat as no metadata rather than erroring upstream.
-        AccountData::Base64(parts) if !parts.is_empty() => base64::engine::general_purpose::STANDARD
-            .decode(&parts[0])
-            .ok()?,
-        // Anything else (parsed object) is unexpected for Metaplex;
-        // skip silently.
+        AccountData::Base64(parts) if !parts.is_empty() => {
+            match base64::engine::general_purpose::STANDARD.decode(&parts[0]) {
+                Ok(b) => b,
+                Err(e) => {
+                    debug!(error = %e, "decode_metaplex_account: base64 decode failed");
+                    return None;
+                }
+            }
+        }
+        // Parsed shape is unexpected for Metaplex (RPC has no parser
+        // for the program). Skip silently.
         _ => return None,
     };
 
@@ -207,12 +217,19 @@ fn decode_metaplex_account(data: &AccountData) -> Option<ParsedMetadata> {
     }
 
     let mut cursor = std::io::Cursor::new(&bytes[..]);
-    let head = MetaplexAccountHead::deserialize_reader(&mut cursor).ok()?;
+    let head = match MetaplexAccountHead::deserialize_reader(&mut cursor) {
+        Ok(h) => h,
+        Err(e) => {
+            debug!(error = %e, "decode_metaplex_account: borsh deserialize failed");
+            return None;
+        }
+    };
 
     // `Key` enum: 0=Uninitialized, 1=EditionV1, 2=MasterEditionV1,
     // 3=ReservationListV1, 4=MetadataV1, ... (mpl-token-metadata
     // historical enum). Only MetadataV1 carries name/symbol/uri.
     if head.key != 4 {
+        debug!(key = head.key, "decode_metaplex_account: key != MetadataV1");
         return None;
     }
 

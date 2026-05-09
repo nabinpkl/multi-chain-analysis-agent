@@ -24,22 +24,25 @@ _sym_db = _symbol_database.Default()
 
 from google.protobuf import struct_pb2 as google_dot_protobuf_dot_struct__pb2
 from multichain.wire.shared.v1 import community_summary_pb2 as multichain_dot_wire_dot_shared_dot_v1_dot_community__summary__pb2
+from multichain.wire.shared.v1 import get_token_info_pb2 as multichain_dot_wire_dot_shared_dot_v1_dot_get__token__info__pb2
 from multichain.wire.shared.v1 import provenance_pb2 as multichain_dot_wire_dot_shared_dot_v1_dot_provenance__pb2
 from multichain.wire.shared.v1 import subgraph_pb2 as multichain_dot_wire_dot_shared_dot_v1_dot_subgraph__pb2
 from multichain.wire.shared.v1 import wallet_profile_pb2 as multichain_dot_wire_dot_shared_dot_v1_dot_wallet__profile__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n2multichain/wire/shared/v1/primitive_envelope.proto\x12\x19multichain.wire.shared.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x31multichain/wire/shared/v1/community_summary.proto\x1a*multichain/wire/shared/v1/provenance.proto\x1a(multichain/wire/shared/v1/subgraph.proto\x1a.multichain/wire/shared/v1/wallet_profile.proto\"|\n\x14WalletProfileRequest\x12\x43\n\x05input\x18\x01 \x01(\x0b\x32-.multichain.wire.shared.v1.WalletProfileInputR\x05input\x12\x1f\n\x0bsnapshot_id\x18\x02 \x01(\tR\nsnapshotId\"\x82\x01\n\x17\x43ommunitySummaryRequest\x12\x46\n\x05input\x18\x01 \x01(\x0b\x32\x30.multichain.wire.shared.v1.CommunitySummaryInputR\x05input\x12\x1f\n\x0bsnapshot_id\x18\x02 \x01(\tR\nsnapshotId\"\xfd\x01\n\x19PrimitiveResponseEnvelope\x12-\n\x05value\x18\x01 \x01(\x0b\x32\x17.google.protobuf.StructR\x05value\x12H\n\nprovenance\x18\x02 \x03(\x0b\x32(.multichain.wire.shared.v1.ProvenanceRefR\nprovenance\x12T\n\x0esubgraph_slice\x18\x03 \x01(\x0b\x32(.multichain.wire.shared.v1.SubgraphSliceH\x00R\rsubgraphSlice\x88\x01\x01\x42\x11\n\x0f_subgraph_sliceb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n2multichain/wire/shared/v1/primitive_envelope.proto\x12\x19multichain.wire.shared.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x31multichain/wire/shared/v1/community_summary.proto\x1a.multichain/wire/shared/v1/get_token_info.proto\x1a*multichain/wire/shared/v1/provenance.proto\x1a(multichain/wire/shared/v1/subgraph.proto\x1a.multichain/wire/shared/v1/wallet_profile.proto\"|\n\x14WalletProfileRequest\x12\x43\n\x05input\x18\x01 \x01(\x0b\x32-.multichain.wire.shared.v1.WalletProfileInputR\x05input\x12\x1f\n\x0bsnapshot_id\x18\x02 \x01(\tR\nsnapshotId\"\x82\x01\n\x17\x43ommunitySummaryRequest\x12\x46\n\x05input\x18\x01 \x01(\x0b\x32\x30.multichain.wire.shared.v1.CommunitySummaryInputR\x05input\x12\x1f\n\x0bsnapshot_id\x18\x02 \x01(\tR\nsnapshotId\"z\n\x13GetTokenInfoRequest\x12\x42\n\x05input\x18\x01 \x01(\x0b\x32,.multichain.wire.shared.v1.GetTokenInfoInputR\x05input\x12\x1f\n\x0bsnapshot_id\x18\x02 \x01(\tR\nsnapshotId\"\xfd\x01\n\x19PrimitiveResponseEnvelope\x12-\n\x05value\x18\x01 \x01(\x0b\x32\x17.google.protobuf.StructR\x05value\x12H\n\nprovenance\x18\x02 \x03(\x0b\x32(.multichain.wire.shared.v1.ProvenanceRefR\nprovenance\x12T\n\x0esubgraph_slice\x18\x03 \x01(\x0b\x32(.multichain.wire.shared.v1.SubgraphSliceH\x00R\rsubgraphSlice\x88\x01\x01\x42\x11\n\x0f_subgraph_sliceb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'multichain.wire.shared.v1.primitive_envelope_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_WALLETPROFILEREQUEST']._serialized_start=296
-  _globals['_WALLETPROFILEREQUEST']._serialized_end=420
-  _globals['_COMMUNITYSUMMARYREQUEST']._serialized_start=423
-  _globals['_COMMUNITYSUMMARYREQUEST']._serialized_end=553
-  _globals['_PRIMITIVERESPONSEENVELOPE']._serialized_start=556
-  _globals['_PRIMITIVERESPONSEENVELOPE']._serialized_end=809
+  _globals['_WALLETPROFILEREQUEST']._serialized_start=344
+  _globals['_WALLETPROFILEREQUEST']._serialized_end=468
+  _globals['_COMMUNITYSUMMARYREQUEST']._serialized_start=471
+  _globals['_COMMUNITYSUMMARYREQUEST']._serialized_end=601
+  _globals['_GETTOKENINFOREQUEST']._serialized_start=603
+  _globals['_GETTOKENINFOREQUEST']._serialized_end=725
+  _globals['_PRIMITIVERESPONSEENVELOPE']._serialized_start=728
+  _globals['_PRIMITIVERESPONSEENVELOPE']._serialized_end=981
 # @@protoc_insertion_point(module_scope)

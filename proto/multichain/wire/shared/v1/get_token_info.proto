@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package multichain.wire.shared.v1;
+
+// Input to the `get_token_info` primitive. Resolves a Solana mint
+// pubkey to its on-chain `name / symbol / uri` via the lazy-fetch path
+// in `backend::metadata::fetch`. The primitive is stateless (does not
+// depend on the per-turn 60-second window snapshot) so the request
+// envelope's `snapshot_id` is carried for parallelism with other
+// primitives but ignored by the handler.
+message GetTokenInfoInput {
+  // base58 mint pubkey. Both legacy SPL Token mints (Metaplex PDA
+  // path) and SPL Token-2022 mints with the metadata extension are
+  // accepted.
+  string mint = 1;
+}
+
+// Output of the `get_token_info` primitive.
+//
+// Empty `source_program` means the mint exists on chain but has no
+// resolvable metadata via either Metaplex PDA or Token-2022 inline
+// extension. Callers should treat this as "no metadata available"
+// rather than an error.
+//
+// All string fields except `source_program` are `optional` because
+// the same shape carries both "found" and "not found" results: when
+// not found, the four metadata fields are absent and `source_program`
+// is empty.
+message GetTokenInfoOutput {
+  // base58 mint pubkey, echoed for caller convenience.
+  string mint = 1;
+  // Token name. Untrusted text chosen by the mint creator at issue
+  // time. Wrap in `<external_data>` per agent-service convention
+  // before surfacing to the model.
+  optional string name = 2;
+  // Token symbol. Same untrusted-text caveat as `name`.
+  optional string symbol = 3;
+  // URI pointing to off-chain JSON (image, description, etc.).
+  // Off-chain fetch is a separate primitive; this field is the raw
+  // string from the on-chain account.
+  optional string uri = 4;
+  // base58 pubkey of the account authorized to update this metadata.
+  // Useful for the agent narrating "the token issuer can still rename
+  // / re-uri this" vs an immutable mint.
+  optional string update_authority = 5;
+  // Provenance of the resolved metadata. One of:
+  //   "metaplex"   - read from a Metaplex Token Metadata PDA
+  //   "token2022"  - read from a Token-2022 metadata extension on
+  //                  the mint account itself
+  //   ""           - mint exists but has no resolvable metadata
+  string source_program = 6;
+  // true iff the response was served from the existing
+  // `multichain.token_metadata` ClickHouse row (no RPC call this
+  // request); false when this request triggered a fresh fetch and
+  // wrote the row.
+  bool cached = 7;
+}

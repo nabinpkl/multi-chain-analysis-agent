@@ -4,6 +4,7 @@ package multichain.wire.shared.v1;
 
 import "google/protobuf/struct.proto";
 import "multichain/wire/shared/v1/community_summary.proto";
+import "multichain/wire/shared/v1/get_token_info.proto";
 import "multichain/wire/shared/v1/provenance.proto";
 import "multichain/wire/shared/v1/subgraph.proto";
 import "multichain/wire/shared/v1/wallet_profile.proto";
@@ -20,6 +21,20 @@ message WalletProfileRequest {
 // as WalletProfileRequest.
 message CommunitySummaryRequest {
   CommunitySummaryInput input = 1;
+  string snapshot_id = 2;
+}
+
+// Body of `POST /primitive/get_token_info`. Resolves a mint pubkey to
+// its name / symbol / uri via the lazy-fetch path. The `snapshot_id`
+// field is carried for envelope-shape consistency with other primitive
+// requests but is IGNORED by the handler since this lookup is
+// stateless (doesn't depend on the per-turn 60-second window
+// snapshot).
+message GetTokenInfoRequest {
+  GetTokenInfoInput input = 1;
+  // Ignored by the handler. Pass empty string when calling outside a
+  // turn (e.g. a manual curl debug call); pass the active turn's
+  // snapshot_id when calling from inside a turn for consistency.
   string snapshot_id = 2;
 }
 

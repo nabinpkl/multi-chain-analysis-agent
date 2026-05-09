@@ -44,14 +44,17 @@ pub struct AccountInfoValue {
 /// - For everything else it falls through to a base64 string in a
 ///   two-element tuple `[<base64>, "base64"]`.
 ///
-/// `serde(untagged)` picks the right variant automatically based on the
-/// JSON shape. The base64 variant comes second because the parsed
-/// variant has stricter shape (object) so serde tries it first.
+/// `serde(untagged)` picks the right variant automatically. **`Base64`
+/// must come first** because `ParsedAccountData::parsed: Value` accepts
+/// any JSON shape, so untagged ordering with `Parsed` first would
+/// match arrays into the parsed variant via the `Value` greedy match.
+/// Putting `Base64` first means the array case settles on `Base64` and
+/// only object-shaped data flows to `Parsed`.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum AccountData {
-    Parsed(ParsedAccountData),
     Base64(Vec<String>),
+    Parsed(ParsedAccountData),
 }
 
 /// `data` shape when the RPC parses the account natively.

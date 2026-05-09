@@ -31,5 +31,13 @@ pub fn router(state: AppState) -> Router {
             "/primitive/community_summary",
             post(primitives::community_summary_route),
         )
+        // Stateless lookup primitive: resolves a mint pubkey to its
+        // on-chain name / symbol / uri. Does NOT require a snapshot
+        // lease; carries the snapshot_id field for envelope-shape
+        // consistency only (handler ignores it).
+        .route(
+            "/primitive/get_token_info",
+            post(primitives::get_token_info_route),
+        )
         .with_state(state)
 }
