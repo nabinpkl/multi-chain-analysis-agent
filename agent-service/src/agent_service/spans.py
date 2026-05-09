@@ -51,6 +51,7 @@ NARRATIVE_EMITTED: Final = "mcae.narrative.emitted"
 SNAPSHOT_LEASE: Final = "mcae.snapshot.lease"
 PRIMITIVE_WALLET_PROFILE: Final = "mcae.primitive.wallet_profile"
 PRIMITIVE_COMMUNITY_SUMMARY: Final = "mcae.primitive.community_summary"
+PRIMITIVE_GET_TOKEN_INFO: Final = "mcae.primitive.get_token_info"
 
 # Repeat-path machinery.
 REPEAT_DETECTION: Final = "mcae.repeat.detection"
@@ -152,6 +153,9 @@ class Attrs:
     PRIMITIVE_OUTPUT_DIGEST: Final = "mcae.primitive.output_digest"  # sha256-12 of body
     PRIMITIVE_INPUT_ADDR: Final = "mcae.primitive.input.addr"
     PRIMITIVE_INPUT_COMMUNITY_ID: Final = "mcae.primitive.input.community_id"
+    PRIMITIVE_INPUT_MINT: Final = "mcae.primitive.input.mint"
+    PRIMITIVE_GET_TOKEN_INFO_CACHED: Final = "mcae.primitive.get_token_info.cached"
+    PRIMITIVE_GET_TOKEN_INFO_SOURCE: Final = "mcae.primitive.get_token_info.source_program"
     # Full JSON payloads on primitive spans. Typed input attrs above
     # stay because they are cheap to query in SQL; these are the rich
     # debug surface (Langfuse renders them inline) and the future eval

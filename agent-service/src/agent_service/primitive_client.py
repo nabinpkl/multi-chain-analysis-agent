@@ -35,6 +35,7 @@ from opentelemetry import trace
 
 from multichain.wire.shared.v1 import (
     community_summary_pb2 as cs_pb,
+    get_token_info_pb2 as gti_pb,
     primitive_envelope_pb2 as env_pb,
     scope_pb2 as scope_pb,
     snapshot_pb2 as snap_pb,
@@ -79,6 +80,37 @@ class SnapshotLease:
     snapshot_id: str
     expires_at_ms: int
     window_secs: int
+
+
+@dataclass(frozen=True, slots=True)
+class TokenInfo:
+    """Decoded `GetTokenInfoOutput`. Returned by `get_token_info`.
+    Distinct from `PrimitiveResult` because this primitive returns the
+    typed output directly (no `PrimitiveResponseEnvelope` wrapper):
+    metadata lookup has no provenance / subgraph_slice surface to
+    populate, so the generic envelope would be empty noise.
+    """
+
+    mint: str
+    # `name`, `symbol`, `uri`, `update_authority` are absent (None) when
+    # the mint exists on chain but has no resolvable metadata. In that
+    # case `source_program` is empty too.
+    name: str | None
+    symbol: str | None
+    uri: str | None
+    update_authority: str | None
+    # "metaplex" | "token2022" | "" (no metadata)
+    source_program: str
+    # True iff served from the existing multichain.token_metadata
+    # ClickHouse row; false on first-time-asked mints that triggered
+    # a fresh getAccountInfo.
+    cached: bool
+
+    @property
+    def found(self) -> bool:
+        """`True` when the mint has resolvable metadata. Maps to a
+        non-empty source_program."""
+        return bool(self.source_program)
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,6 +357,67 @@ class PrimitiveClient:
                 _proto_to_capped_json(out_env, cap=spans.PRIMITIVE_PAYLOAD_MAX_BYTES),
             )
             return _decode_envelope(resp.content)
+
+    async def get_token_info(self, *, mint: str) -> TokenInfo:
+        """Resolve a mint pubkey to its on-chain `name / symbol / uri`.
+        Stateless lookup; doesn't take a snapshot_id (the Rust handler
+        ignores the field if passed). Returns `TokenInfo` with
+        `source_program == ""` when the mint exists but has no
+        resolvable metadata via either Metaplex PDA or Token-2022
+        inline extension.
+
+        Returned strings are UNTRUSTED text chosen by the token issuer
+        at mint creation. Callers MUST wrap in `<external_data>` (or
+        equivalent boundary marker) before surfacing to the model. The
+        `agent.py` tool wrapper handles this; direct callers of the
+        client must do it themselves.
+        """
+        req = env_pb.GetTokenInfoRequest(
+            input=gti_pb.GetTokenInfoInput(mint=mint),
+            snapshot_id="",
+        )
+        with _tracer.start_as_current_span(spans.PRIMITIVE_GET_TOKEN_INFO) as span:
+            span.set_attribute(spans.Attrs.PRIMITIVE_INPUT_MINT, mint)
+            span.set_attribute(
+                spans.Attrs.PRIMITIVE_INPUT,
+                _proto_to_capped_json(req, cap=spans.PRIMITIVE_PAYLOAD_MAX_BYTES),
+            )
+            t0 = time.monotonic()
+            resp = await self._client.post(
+                "/primitive/get_token_info",
+                content=_encode(req),
+                headers=HEADERS_PROTO,
+            )
+            dur_ms = int((time.monotonic() - t0) * 1000)
+            span.set_attribute(spans.Attrs.PRIMITIVE_DURATION_MS, dur_ms)
+            if resp.status_code >= 400:
+                span.set_attribute("error", True)
+                _raise_from_error(resp)
+            span.set_attribute(spans.Attrs.PRIMITIVE_OUTPUT_DIGEST, _digest12(resp.content))
+            out = gti_pb.GetTokenInfoOutput()
+            out.ParseFromString(resp.content)
+            span.set_attribute(
+                spans.Attrs.PRIMITIVE_OUTPUT,
+                _proto_to_capped_json(out, cap=spans.PRIMITIVE_PAYLOAD_MAX_BYTES),
+            )
+            span.set_attribute(spans.Attrs.PRIMITIVE_GET_TOKEN_INFO_CACHED, out.cached)
+            span.set_attribute(
+                spans.Attrs.PRIMITIVE_GET_TOKEN_INFO_SOURCE, out.source_program
+            )
+            return TokenInfo(
+                mint=out.mint,
+                # proto3 `optional` fields use `HasField` to distinguish
+                # "absent" from "explicitly empty string". Map absent to
+                # None so the agent narration loop can branch on it.
+                name=out.name if out.HasField("name") else None,
+                symbol=out.symbol if out.HasField("symbol") else None,
+                uri=out.uri if out.HasField("uri") else None,
+                update_authority=(
+                    out.update_authority if out.HasField("update_authority") else None
+                ),
+                source_program=out.source_program,
+                cached=out.cached,
+            )
 
 
 def _encode(msg: Message) -> bytes:
