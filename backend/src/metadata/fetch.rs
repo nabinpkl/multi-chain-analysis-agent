@@ -4,9 +4,11 @@ use std::sync::OnceLock;
 
 use base64::Engine;
 use borsh::BorshDeserialize;
+use clickhouse::Client;
 use solana_pubkey::Pubkey;
-use tracing::debug;
+use tracing::{debug, warn};
 
+use crate::metadata::cache;
 use crate::rpc::client::RpcClient;
 use crate::rpc::error::RpcError;
 use crate::rpc::types::{AccountData, AccountInfoResponse};
@@ -73,32 +75,54 @@ fn singleflight() -> &'static Singleflight<String, FetchResult> {
     SF.get_or_init(Singleflight::new)
 }
 
-/// Fetch on-chain metadata for a mint by trying the two known paths
-/// in order:
+/// Lookup context for the cache half of the metadata flow. Bundled
+/// rather than passed as separate args so the call site stays readable.
 ///
-/// 1. Derive the Metaplex PDA from the mint, `getAccountInfo` on it.
-///    If the account exists and is owned by the Metaplex program,
-///    borsh-decode the prefix.
-/// 2. Otherwise `getAccountInfo` on the mint pubkey itself. If owned
+/// `current_slot` should come from `state.tip.current()`; pass `0` when
+/// the tip is not yet known so cached rows are treated as stale and
+/// the next read re-fetches via RPC.
+pub struct CacheCtx<'a> {
+    pub clickhouse: &'a Client,
+    pub current_slot: u64,
+    pub ttl_slots: u64,
+}
+
+/// Fetch on-chain metadata for a mint. Read path:
+///
+/// 1. Check `multichain.token_metadata` for a row whose
+///    `fetched_at_slot` is within `cache.ttl_slots` of `current_slot`.
+///    Return it if so. RPC is not touched on hit.
+/// 2. On miss or stale, derive the Metaplex PDA from the mint and
+///    `getAccountInfo` on it. If the account exists and is owned by
+///    the Metaplex program, borsh-decode the prefix.
+/// 3. Otherwise `getAccountInfo` on the mint pubkey itself. If owned
 ///    by SPL Token-2022 and a `tokenMetadata` extension is present,
 ///    pluck `name / symbol / uri / updateAuthority` from the parsed
 ///    extension state.
+/// 4. On a successful resolution (Some), write-through to the cache
+///    so the next read within TTL is a hit.
 ///
-/// Returns `Ok(None)` when the mint exists but has no resolvable
-/// metadata via either path. `Err` is reserved for actual RPC failure.
+/// Returns `Ok(None)` when the mint exists on chain but has no
+/// resolvable metadata via either path. `Err` is reserved for actual
+/// RPC failure; cache errors (read or write) are logged and downgraded
+/// to a soft fall-through so an unhealthy ClickHouse never breaks
+/// metadata lookups.
 ///
 /// Concurrent calls for the same mint coalesce via per-mint
-/// single-flight: the first caller fires the `getAccountInfo` pair
-/// against the primitive rate-limit lane; subsequent in-flight callers
-/// for the same mint await the leader's result and consume zero
-/// additional limiter tickets.
+/// single-flight: the first caller does the cache check + RPC fetch +
+/// write; subsequent in-flight callers for the same mint await the
+/// leader's result and consume zero additional limiter tickets and
+/// zero additional ClickHouse round-trips.
 pub async fn fetch_token_metadata(
     rpc: &RpcClient,
     mint: &Pubkey,
+    cache_ctx: &CacheCtx<'_>,
 ) -> Result<Option<OnChainMetadata>, RpcError> {
     let mint_b58 = bs58::encode(mint.as_ref()).into_string();
     singleflight()
-        .run(mint_b58.clone(), || fetch_inner(rpc, mint, mint_b58.clone()))
+        .run(mint_b58.clone(), || {
+            fetch_inner(rpc, mint, mint_b58.clone(), cache_ctx)
+        })
         .await
 }
 
@@ -106,7 +130,24 @@ async fn fetch_inner(
     rpc: &RpcClient,
     mint: &Pubkey,
     mint_b58: String,
+    cache_ctx: &CacheCtx<'_>,
 ) -> FetchResult {
+    // Cache read first. CH errors don't propagate; if the table is
+    // unhealthy we degrade to live RPC for this call and try again on
+    // the next.
+    match cache::read_cached(
+        cache_ctx.clickhouse,
+        &mint_b58,
+        cache_ctx.current_slot,
+        cache_ctx.ttl_slots,
+    )
+    .await
+    {
+        Ok(Some(meta)) => return Ok(Some(meta)),
+        Ok(None) => {}
+        Err(e) => warn!(mint = %mint_b58, error = %e, "metadata cache read failed; falling through to RPC"),
+    }
+
     let pda = derive_metaplex_metadata_pda(mint);
     let pda_b58 = bs58::encode(pda.as_ref()).into_string();
 
@@ -114,7 +155,9 @@ async fn fetch_inner(
     let pda_resp = rpc.get_account_info(&pda_b58).await?;
 
     if let Some(parsed) = try_metaplex_path(&pda_resp) {
-        return Ok(Some(make_metadata(parsed, PROGRAM_METAPLEX)));
+        let meta = make_metadata(parsed, PROGRAM_METAPLEX);
+        write_through(cache_ctx, &mint_b58, &meta).await;
+        return Ok(Some(meta));
     }
 
     // PDA missing or owner mismatched. Try the mint account itself
@@ -126,10 +169,26 @@ async fn fetch_inner(
     let mint_resp = rpc.get_account_info(&mint_b58).await?;
 
     if let Some(parsed) = try_token2022_path(&mint_resp) {
-        return Ok(Some(make_metadata(parsed, PROGRAM_TOKEN_2022)));
+        let meta = make_metadata(parsed, PROGRAM_TOKEN_2022);
+        write_through(cache_ctx, &mint_b58, &meta).await;
+        return Ok(Some(meta));
     }
 
+    // Negative result (mint exists on chain, no metadata resolvable
+    // via either path) is NOT cached. The miss is cheap to recompute
+    // and persisting it would be wrong if CDC later observes a
+    // CreateMetadataAccount for this mint; the row would be stale
+    // until the TTL expired. Skip the write, accept the recomputation
+    // cost on subsequent calls until metadata actually appears.
     Ok(None)
+}
+
+async fn write_through(cache_ctx: &CacheCtx<'_>, mint_b58: &str, meta: &OnChainMetadata) {
+    if let Err(e) =
+        cache::write_cached(cache_ctx.clickhouse, mint_b58, meta, cache_ctx.current_slot).await
+    {
+        warn!(mint = %mint_b58, error = %e, "metadata cache write failed; row not persisted");
+    }
 }
 
 fn try_metaplex_path(resp: &AccountInfoResponse) -> Option<ParsedMetadata> {

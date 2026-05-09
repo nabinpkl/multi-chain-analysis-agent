@@ -25,6 +25,13 @@ pub struct Config {
     /// of the ingester lane so heavy agent traffic does not stall
     /// block ingestion. Defaults to a slower cadence than the ingester.
     pub rpc_primitive_min_interval: Duration,
+    /// TTL for cached `token_metadata` rows, in slots. A read whose
+    /// `fetched_at_slot` is more than this many slots behind the chain
+    /// tip is treated as stale and re-fetched from RPC. Default 9000
+    /// (~1 hour at Solana mainnet's 400 ms slot time). Becomes dead
+    /// code once issue #48 (CDC instruction decoding) lands and the
+    /// cache is kept fresh by ingest-time writes.
+    pub metadata_cache_ttl_slots: u64,
     pub kafka_brokers: String,
     pub kafka_topic_raw_edges: String,
     pub kafka_group_ch_sink: String,
@@ -61,6 +68,10 @@ impl Config {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(2000),
             ),
+            metadata_cache_ttl_slots: env::var("METADATA_CACHE_TTL_SLOTS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(9000),
             kafka_brokers: env::var("KAFKA_BROKERS")
                 .unwrap_or_else(|_| "redpanda:9092".into()),
             kafka_topic_raw_edges: env::var("KAFKA_TOPIC_RAW_EDGES")

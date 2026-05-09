@@ -1,9 +1,11 @@
-//! On-demand token-metadata lookup.
+//! On-demand token-metadata lookup with lazy ClickHouse-backed cache.
 //!
 //! When the agent encounters a mint whose metadata isn't already in
-//! `multichain.token_metadata`, it calls `fetch_token_metadata` to
-//! resolve the on-chain state via `getAccountInfo`. One RPC call per
-//! first-time-asked mint, cached forever in ClickHouse afterwards.
+//! `multichain.token_metadata`, `fetch_token_metadata` resolves the
+//! on-chain state via `getAccountInfo`. One RPC call per first-time-
+//! asked mint; subsequent calls within the configured TTL window
+//! (`METADATA_CACHE_TTL_SLOTS`, default ~1 hour) are served from CH
+//! without touching RPC.
 //!
 //! Two source programs are supported:
 //!
@@ -14,12 +16,11 @@
 //!   account itself as a TLV extension. The RPC's `jsonParsed` encoding
 //!   already structures it for us; no borsh needed.
 //!
-//! This is the only path that populates `multichain.token_metadata`. A
-//! prior streaming `getBlock` decode of Metaplex Create instructions was
-//! removed once empirical mainnet sampling showed it caught very little:
-//! most active mints (USDC, BONK, JUP) predate any ingest window, and
-//! current "create" activity has shifted to programs whose metadata
-//! `getAccountInfo` jsonParsed already structures for us. See
-//! `docs/architecture/token-metadata-ingestion.md` for the full story.
+//! The cache here is a stopgap that bounds staleness during the gap
+//! before issue #48 (CDC instruction decoding) lands. After CDC, the
+//! TTL refresh path becomes dead code; the cache is kept fresh by
+//! ingest-time writes driven by `UpdateMetadataAccountV2` /
+//! `TokenMetadataUpdateField` instruction decoding.
 
+pub mod cache;
 pub mod fetch;

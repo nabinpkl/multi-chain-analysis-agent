@@ -354,23 +354,27 @@ pub async fn community_summary_route(State(state): State<AppState>, req: Request
 
 /// `POST /primitive/get_token_info`. Resolves a mint pubkey to its
 /// on-chain `name / symbol / uri` via `crate::metadata::fetch`. The
-/// request envelope's `snapshot_id` is ignored; the gate is the live
-/// 60-second window of the in-memory graph instead.
+/// request envelope's `snapshot_id` is ignored; resolution is stateless
+/// per call.
 ///
-/// Allowlist: the request is rejected unless the mint appears as the
-/// `mint` of at least one edge currently in the live window. This
-/// bounds outbound `getAccountInfo` calls to mints already inside the
-/// agent's analytic surface and removes the "free oracle on arbitrary
-/// chain state" abuse shape. Mints outside the window get 404; the
-/// caller (typically the agent narrating a wallet's window activity)
-/// already saw the mint in the snapshot if the lookup is legitimate.
+/// Lazy ClickHouse-backed cache: the first resolution of a given mint
+/// fires `getAccountInfo` calls (Metaplex PDA, then Token-2022
+/// fallback) and writes the result to `multichain.token_metadata`.
+/// Subsequent calls within `METADATA_CACHE_TTL_SLOTS` of the chain tip
+/// (default 9000 slots, ~1 hour) are served from the cache without
+/// touching RPC. Stale rows trigger a re-fetch on the next read; the
+/// TTL bounds staleness during the gap before issue #48 (CDC
+/// instruction decoding) lands and keeps the cache fresh by ingest-
+/// time writes instead.
 ///
-/// No caching. Each allowed lookup fires fresh `getAccountInfo` calls
-/// (Metaplex PDA, then Token-2022 fallback) and returns the current
-/// on-chain state. Stale cached metadata after issuer-side updates
-/// is therefore impossible by construction; the trade-off is one
-/// rate-limiter ticket per call. See the github issue tracking
-/// per-client request dedup for the planned future improvement.
+/// No allowlist. The route lives on the internal-only HTTP listener
+/// (`internal_router` in `api::mod`), so the only intended caller is
+/// the Python agent-service container on the docker compose network;
+/// browser-side abuse against an arbitrary mint pubkey is not
+/// reachable. The earlier live-window allowlist gate became
+/// counterproductive once the cache returned: blocking reads for
+/// mints not currently in the 60-second window contradicts the
+/// cache's purpose ("we have the metadata but won't tell you").
 ///
 /// Untrusted text (the resolved name/symbol/uri) is NOT sanitized
 /// here. Per the project's tool-output convention, the agent-service
@@ -417,20 +421,6 @@ pub async fn get_token_info_route(State(state): State<AppState>, req: Request) -
         }
     };
 
-    // Allowlist: mint must appear in the live 60s window. Brief read
-    // lock on the graph, scoped tight so the writer (graph consumer)
-    // is not held off on this path.
-    let live_idx = window_index(60).unwrap_or(1);
-    let in_window = state.graph.read().has_window_mint(live_idx, &mint_b58);
-    if !in_window {
-        return error_body(
-            StatusCode::NOT_FOUND,
-            "not_in_window",
-            "mint is not present in the live 60s window; metadata lookup is allowlisted to mints with active transfers",
-            format,
-        );
-    }
-
     let rpc = match state.rpc.clone() {
         Some(r) => r,
         None => {
@@ -443,7 +433,15 @@ pub async fn get_token_info_route(State(state): State<AppState>, req: Request) -
         }
     };
 
-    let metadata_opt = match metadata::fetch::fetch_token_metadata(&rpc, &mint_pk).await {
+    let cache_ctx = metadata::fetch::CacheCtx {
+        clickhouse: &state.clickhouse,
+        // Tip-unknown sentinel = 0; cache::read_cached treats every
+        // row as stale until the first `getSlot` round-trip lands.
+        current_slot: state.tip.current().unwrap_or(0),
+        ttl_slots: state.metadata_cache_ttl_slots,
+    };
+    let metadata_opt = match metadata::fetch::fetch_token_metadata(&rpc, &mint_pk, &cache_ctx).await
+    {
         Ok(o) => o,
         Err(e) => {
             return error_body(

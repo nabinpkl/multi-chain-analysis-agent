@@ -78,6 +78,11 @@ pub struct AppState {
     /// `None` when `SOLANA_RPC_URL` is unset (test/agent-only mode);
     /// any primitive that needs RPC returns 503 in that mode.
     pub rpc: Option<Arc<RpcClient>>,
+    /// TTL for cached `token_metadata` rows, in slots. Sourced from
+    /// `Config::metadata_cache_ttl_slots`. Carried on `AppState` so
+    /// the `get_token_info` handler can pass it to the metadata
+    /// fetcher's `CacheCtx` without re-reading env at each request.
+    pub metadata_cache_ttl_slots: u64,
 }
 
 impl AppState {
@@ -124,6 +129,7 @@ impl AppState {
             graph: Arc::new(RwLock::new(GraphState::default())),
             snapshot_cache: SnapshotCache::new(),
             rpc,
+            metadata_cache_ttl_slots: config.metadata_cache_ttl_slots,
         };
         (state, analytics_senders)
     }

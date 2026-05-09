@@ -62,11 +62,30 @@ pub async fn bootstrap(client: &Client) -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    // The token-metadata cache table was removed when get_token_info
-    // moved to an allowlist + always-fresh shape (no caching, fetched
-    // on every allowed call). Drop any leftover table from prior runs.
+    // Lazy-backfill cache for `/primitive/get_token_info`. First time a
+    // mint is asked about, the handler hits RPC, decodes the metadata,
+    // and writes a row here. Subsequent reads serve from the table
+    // until `fetched_at_slot` falls outside the configured TTL window
+    // (METADATA_CACHE_TTL_SLOTS, ~1 hour by default), at which point
+    // the next read re-fetches and overwrites. ReplacingMergeTree by
+    // `fetched_at_slot` so future CDC writes (issue #48) naturally win
+    // over older lazy-backfill rows for the same mint.
     client
-        .query("DROP TABLE IF EXISTS multichain.token_metadata")
+        .query(
+            r#"
+            CREATE TABLE IF NOT EXISTS multichain.token_metadata (
+                mint             String,
+                name             String,
+                symbol           String,
+                uri              String,
+                update_authority String,
+                source_program   LowCardinality(String),
+                fetched_at_slot  UInt64,
+                updated_at       DateTime DEFAULT now()
+            ) ENGINE = ReplacingMergeTree(fetched_at_slot)
+            ORDER BY mint
+            "#,
+        )
         .execute()
         .await?;
 
