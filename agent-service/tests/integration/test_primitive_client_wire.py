@@ -1,7 +1,18 @@
-"""Wire-level integration smoke. Talks to a REAL Rust API at
-`localhost:8002` over binary protobuf. Skipped automatically when
-the API is not reachable, so it never blocks CI runs that don't
-have docker compose up.
+"""Wire-level integration smoke. Talks to the REAL Rust internal
+listener over binary protobuf. Skipped automatically when the API is
+not reachable, so it never blocks CI runs that don't have docker
+compose up.
+
+The internal listener is NOT host-published (see
+`backend/src/api/mod.rs::internal_router` and the docker-compose `api`
+service block). Run this from inside the docker compose network:
+
+    docker compose up -d --build api
+    docker compose exec agent-service uv run pytest \\
+        tests/integration/test_primitive_client_wire.py -v
+
+Override `LIVE_RUST_URL` if you want to point at a host-exposed port
+during one-off debugging.
 
 This complements `test_snapshot_lease.py` (which uses pytest-httpx
 mocks) by exercising the actual binary wire end-to-end:
@@ -12,11 +23,6 @@ mocks) by exercising the actual binary wire end-to-end:
   proto-encoded response bytes are decodable here.
 - Snapshot lease lifecycle works against a non-mocked snapshot cache.
 - Errors come back JSON-shaped (Rust's design) and parse correctly.
-
-Run only when iterating on the wire layer:
-
-    docker compose up -d --build api
-    uv run pytest tests/integration/test_primitive_client_wire.py -v
 """
 
 from __future__ import annotations
@@ -28,7 +34,7 @@ import pytest
 
 from agent_service.primitive_client import PrimitiveClient, PrimitiveError
 
-LIVE_URL = os.environ.get("LIVE_RUST_URL", "http://localhost:8002")
+LIVE_URL = os.environ.get("LIVE_RUST_URL", "http://api:8004")
 
 
 def _api_alive() -> bool:

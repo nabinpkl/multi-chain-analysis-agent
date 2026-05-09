@@ -43,9 +43,12 @@ async fn main() -> anyhow::Result<()> {
             .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::ACCEPT])
     };
 
-    let app = api::router(state.clone())
+    let public_app = api::public_router(state.clone())
         .layer(cors)
         .layer(TraceLayer::new_for_http());
+
+    let internal_app =
+        api::internal_router(state.clone()).layer(TraceLayer::new_for_http());
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
@@ -149,17 +152,46 @@ async fn main() -> anyhow::Result<()> {
         bg_handles.push(tip_handle);
     }
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    info!(%addr, "server started");
+    let public_addr = SocketAddr::from(([0, 0, 0, 0], config.port));
+    let internal_addr = SocketAddr::from(([0, 0, 0, 0], config.internal_port));
+    let public_listener = tokio::net::TcpListener::bind(public_addr).await?;
+    let internal_listener = tokio::net::TcpListener::bind(internal_addr).await?;
+    info!(
+        %public_addr,
+        %internal_addr,
+        "server started (public + internal listeners)"
+    );
 
-    let server_shutdown = async move {
-        let _ = tokio::signal::ctrl_c().await;
-        info!("ctrl_c received, shutting down");
+    // One ctrl_c arms both servers. Listen once, broadcast to two
+    // graceful-shutdown futures. Without the broadcast, only one
+    // server would race the signal and the other would hang.
+    let (shutdown_signal_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+    {
+        let tx = shutdown_signal_tx.clone();
+        tokio::spawn(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            info!("ctrl_c received, shutting down");
+            let _ = tx.send(());
+        });
+    }
+    let public_shutdown = {
+        let mut rx = shutdown_signal_tx.subscribe();
+        async move {
+            let _ = rx.recv().await;
+        }
     };
-    axum::serve(listener, app)
-        .with_graceful_shutdown(server_shutdown)
-        .await?;
+    let internal_shutdown = {
+        let mut rx = shutdown_signal_tx.subscribe();
+        async move {
+            let _ = rx.recv().await;
+        }
+    };
+
+    tokio::try_join!(
+        axum::serve(public_listener, public_app).with_graceful_shutdown(public_shutdown),
+        axum::serve(internal_listener, internal_app)
+            .with_graceful_shutdown(internal_shutdown),
+    )?;
 
     let _ = shutdown_tx.send(true);
     for handle in bg_handles {

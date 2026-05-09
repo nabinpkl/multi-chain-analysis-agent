@@ -1,4 +1,4 @@
-"""HTTP client wrapping the Rust data plane on :8002.
+"""HTTP client wrapping the Rust data plane internal listener on :8004.
 
 Stage 2 of the proto migration. Every request and response on this
 boundary is **binary protobuf** (`Content-Type: application/x-protobuf`)

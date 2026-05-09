@@ -78,7 +78,7 @@ _PENDING: dict[str, PendingSession] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    base_url = os.environ.get("DATA_PLANE_URL", "http://api:8002")
+    base_url = os.environ.get("DATA_PLANE_URL", "http://api:8004")
     debug_public = os.environ.get("AGENT_DEBUG_PUBLIC", "0") == "1"
     log.info("agent_service_starting", data_plane=base_url, debug_public=debug_public)
 

@@ -1,7 +1,7 @@
 [project]
 name = "agent-service"
 version = "0.1.0"
-description = "Python agent plane for multi-chain-analysis-engine. Pydantic AI orchestration, calls Rust data plane on :8002 for primitives."
+description = "Python agent plane for multi-chain-analysis-engine. Pydantic AI orchestration, calls Rust data plane internal listener on :8004 for primitives."
 requires-python = ">=3.12"
 dependencies = [
     # Pydantic AI native OpenRouter provider lives in this slim install.

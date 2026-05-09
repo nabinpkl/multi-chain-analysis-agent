@@ -4,6 +4,12 @@ use std::time::Duration;
 #[derive(Clone, Debug)]
 pub struct Config {
     pub port: u16,
+    /// Internal HTTP listener port. Carries `/turn/*` and
+    /// `/primitive/*` routes. NOT exposed to the host or the
+    /// cloudflared tunnel; only reachable from sibling containers on
+    /// the docker compose network. The agent-service container is
+    /// the sole intended caller.
+    pub internal_port: u16,
     pub cors_origin: String,
     pub clickhouse_url: String,
     pub clickhouse_db: String,
@@ -32,6 +38,10 @@ impl Config {
     pub fn from_env() -> Self {
         Self {
             port: env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8002),
+            internal_port: env::var("INTERNAL_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(8004),
             cors_origin: env::var("CORS_ORIGIN").unwrap_or_else(|_| "*".into()),
             clickhouse_url: env::var("CLICKHOUSE_URL")
                 .unwrap_or_else(|_| "http://localhost:8123".into()),

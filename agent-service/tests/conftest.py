@@ -6,7 +6,7 @@ OpenRouter call would blow past that and fail loudly.
 
 Two boundaries we mock:
 
-1. Rust data plane (`http://api:8002`): mocked via `pytest-httpx`.
+1. Rust data plane (`http://api:8004`): mocked via `pytest-httpx`.
    Tests register canned responses for `/turn/begin`, `/turn/end`,
    `/primitive/wallet_profile`, `/primitive/community_summary`.
 
@@ -54,7 +54,7 @@ from tests.fixtures import primitive_responses as canned  # noqa: E402
 # Constants
 # ---------------------------------------------------------------------------
 
-DATA_PLANE_BASE = "http://api:8002"
+DATA_PLANE_BASE = "http://api:8004"
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +150,7 @@ def test_app(mock_data_plane) -> Iterator[TestClient]:
     """FastAPI TestClient against the real `agent_service.main:app`.
 
     The app's lifespan handler creates a `PrimitiveClient` pointing
-    at `DATA_PLANE_URL` (default `http://api:8002`). We override
+    at `DATA_PLANE_URL` (default `http://api:8004`). We override
     that env var to match what `mock_data_plane` intercepts.
 
     The lifespan also constructs the Pydantic AI agent. We do NOT

@@ -84,6 +84,12 @@ services:
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
       - KAFKA_BROKERS=redpanda:9092
       - KAFKA_TOPIC_RAW_EDGES=solana.raw-edges
+      # Internal HTTP listener carrying /turn/* and /primitive/*. Bound
+      # inside the container only (NOT in `ports:` above) so the
+      # cloudflared tunnel and host-bound curl cannot reach it; the
+      # agent-service container talks to it via the docker compose
+      # network as http://api:8004. See backend/src/api/mod.rs.
+      - INTERNAL_PORT=8004
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -103,8 +109,12 @@ services:
     env_file:
       - ./.env
     environment:
-      # Rust data plane URL (intra-compose hostname).
-      - DATA_PLANE_URL=http://api:8002
+      # Rust data plane internal listener (intra-compose hostname).
+      # Carries /turn/* and /primitive/*. NOT host-published; only
+      # reachable from the docker compose network. See
+      # backend/src/api/mod.rs::internal_router and the api service's
+      # INTERNAL_PORT env var.
+      - DATA_PLANE_URL=http://api:8004
       # AGENT_API_KEY (OpenRouter) is sourced from the project .env above.
       # CORS origin for browser fetches. Frontend dev runs on :3008
       # (see .claude/launch.json). Override per environment.

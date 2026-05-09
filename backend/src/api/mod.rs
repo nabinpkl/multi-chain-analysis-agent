@@ -8,19 +8,36 @@ use axum::routing::{get, post};
 
 use crate::state::AppState;
 
-/// HTTP surface of the data plane. Phase C deleted the `/agent/*`
-/// routes; the Python agent service on `:8003` owns the agent plane
-/// end-to-end. The data plane keeps the graph + primitive endpoints
-/// the Python orchestrator and the frontend both call into.
-pub fn router(state: AppState) -> Router {
+/// Public HTTP surface. Browser-reachable via the cloudflared tunnel.
+/// Only routes safe for unauthenticated external callers live here:
+/// liveness checks and the read-only graph stream + stats. Bound to
+/// the `PORT` env var (default 8002) and host-published in
+/// docker-compose.
+pub fn public_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health::health))
         .route("/ready", get(health::ready))
         .route("/graph/stream", get(graph_stream::stream))
         .route("/graph/stats", get(graph_stats::stats))
-        // Primitive surface for the Python agent orchestrator.
-        // Snapshot lease pins a consistent view across multiple
-        // primitive calls in one turn.
+        .with_state(state)
+}
+
+/// Internal HTTP surface. Carries the snapshot-lease + primitive
+/// routes the Python agent on `:8003` calls. Bound to the
+/// `INTERNAL_PORT` env var (default 8004) and NOT host-published in
+/// docker-compose, so the only path to it is the docker compose
+/// network. Browsers and external callers cannot reach it.
+///
+/// No CORS layer attached: there is no browser caller, ever.
+///
+/// `/health` and `/ready` are mounted on both listeners so any
+/// docker-network sibling (the agent-service container, an integration
+/// test running inside the compose network, etc.) can liveness-check
+/// the internal port without cross-port plumbing.
+pub fn internal_router(state: AppState) -> Router {
+    Router::new()
+        .route("/health", get(health::health))
+        .route("/ready", get(health::ready))
         .route("/turn/begin", post(primitives::turn_begin))
         .route("/turn/end", post(primitives::turn_end))
         .route(
@@ -31,10 +48,6 @@ pub fn router(state: AppState) -> Router {
             "/primitive/community_summary",
             post(primitives::community_summary_route),
         )
-        // Stateless lookup primitive: resolves a mint pubkey to its
-        // on-chain name / symbol / uri. Does NOT require a snapshot
-        // lease; carries the snapshot_id field for envelope-shape
-        // consistency only (handler ignores it).
         .route(
             "/primitive/get_token_info",
             post(primitives::get_token_info_route),
