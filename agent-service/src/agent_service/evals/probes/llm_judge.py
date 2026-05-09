@@ -49,7 +49,7 @@ from pydantic_ai import Agent
 
 from agent_service.evals.ch import ClickHouseClient
 from agent_service.evals.schema import LlmJudgeSpec, ProbeResult
-from agent_service.llm import judge_model
+from agent_service import llm
 from agent_service.llm_retry import with_provider_retry
 
 log = structlog.get_logger(__name__)
@@ -228,7 +228,7 @@ async def run(
         # mechanism pydantic_ai uses for structured output); using
         # text completion + manual parse opens the model market.
         agent: Agent[None, str] = Agent(
-            model=judge_model(spec.model),
+            model=llm.make_model("judge", model_id=spec.model),
             output_type=str,
             system_prompt=_JUDGE_SYSTEM_PROMPT,
         )

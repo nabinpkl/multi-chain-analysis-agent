@@ -32,6 +32,37 @@ from multichain.wire.shared.v1 import (
 # ---------------------------------------------------------------------------
 
 
+# Production preset for `AgentSwitches` (every defense + every channel
+# ON). The proto defines proto3 false defaults as deliberately unsafe
+# per `switches.proto` so a caller forgetting a field gets a noticeable
+# regression rather than a silently-leaky agent. Tests want the
+# realistic prod path: defenses on, no per-turn `build_agent` rebuild
+# (which `drops_from_switches` triggers when any defend_* flag is off
+# and would bypass any `app.state.handles.primary_agent` overrides
+# tests apply by replacing the agent with a freshly-constructed one).
+_PRODUCTION_SWITCHES: dict = {
+    "stayInRole": {
+        "defendChatTemplateSpoofing": True,
+        "defendConstitutionJudge": True,
+        "defendPersonaSwap": True,
+        "defendDecodeAndExecute": True,
+        "defendIdentityReveal": True,
+        "defendOffDomain": True,
+        "defendMemoInjection": True,
+    },
+    "dontFabricate": True,
+    "crossCheck": {
+        "paraphraseAwareMatch": True,
+        "groundTruthMatch": True,
+    },
+    "dontRepeatYourself": True,
+    "channels": {
+        "narrativeOutputEnabled": True,
+        "externalTextInputEnabled": True,
+    },
+}
+
+
 def make_ask_payload(
     user_question: str = "Profile this wallet",
     focus_addr: str | None = None,
@@ -42,7 +73,13 @@ def make_ask_payload(
     """Build the JSON body for `POST /agent/ask` matching the proto
     `AgentRequest` canonical JSON shape (camelCase, EntityRef oneof
     as `{"wallet":{"id":...}}`). Tests pass through this helper so a
-    future shape change updates one place, not 30 call sites."""
+    future shape change updates one place, not 30 call sites.
+
+    Switches default to the production preset (every defense and
+    channel ON). Tests that need to exercise specific off-states
+    construct the payload directly rather than going through this
+    helper.
+    """
     addr = focus_addr if focus_addr is not None else WALLET_PROFILE_ADDR
     payload: dict = {
         "userQuestion": user_question,
@@ -51,6 +88,7 @@ def make_ask_payload(
             "focus": {"wallet": {"id": addr}},
             "selection": [],
         },
+        "switches": _PRODUCTION_SWITCHES,
         "showTrace": show_trace,
     }
     if thread_id is not None:

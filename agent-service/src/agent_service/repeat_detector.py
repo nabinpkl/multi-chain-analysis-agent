@@ -26,7 +26,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent
 
-from agent_service.llm import policy_model
+from agent_service import llm
 from agent_service.llm_retry import with_provider_retry
 
 log = structlog.get_logger(__name__)
@@ -81,7 +81,7 @@ def build_repeat_agent() -> Agent[None, _RepeatJudgement]:
     """Construct the repeat detector agent. Cheap policy model, no
     tools, structured output."""
     return Agent(
-        model=policy_model(),
+        model=llm.make_model("policy"),
         output_type=_RepeatJudgement,
         system_prompt=_REPEAT_SYSTEM,
     )

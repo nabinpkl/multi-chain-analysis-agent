@@ -30,7 +30,7 @@ from pydantic_ai import Agent, RunContext
 
 from agent_service import spans
 from agent_service.boundary import sanitize_token_info_payload, wrap_external_data
-from agent_service.llm import primary_model
+from agent_service import llm
 from agent_service.policy.binding_store import PrimitiveBindingStore, build_binding
 from agent_service.primitive_client import PrimitiveClient, PrimitiveError
 from agent_service.prompts.composer import compose_system_prompt
@@ -161,7 +161,7 @@ def build_agent(
             rule-id namespace.
     """
     agent: Agent[AgentDeps, str] = Agent(
-        model=primary_model(),
+        model=llm.make_model("primary"),
         deps_type=AgentDeps,
         output_type=str,
         system_prompt=compose_system_prompt(drop_rule_ids=drop_rule_ids),

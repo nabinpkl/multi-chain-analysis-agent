@@ -1,6 +1,8 @@
 """Tests for the snapshot-lease lifecycle end-to-end through the
-FastAPI app. Uses Pydantic AI's `Agent.override(model=TestModel(...))`
-to skip the real LLM call so we can focus on the begin/end wiring.
+FastAPI app. The autouse `_no_live_llm` fixture (in `conftest.py`)
+stubs `agent_service.llm.make_model` so every agent the lifespan
+builds gets a `TestModel` instead of a real OpenRouter-backed model.
+No per-test override plumbing.
 
 What we verify:
 - `POST /turn/begin` is hit exactly once per turn
@@ -11,8 +13,6 @@ What we verify:
 from __future__ import annotations
 
 import json
-
-from pydantic_ai.models.test import TestModel
 
 from agent_service.main import app
 
@@ -42,13 +42,11 @@ def _consume_sse(test_app, session_id: str) -> list[dict]:
 
 def test_turn_begin_called_once_per_turn(test_app, with_happy_path_primitives):
     """Happy path: agent runs, begin hit once, end hit once."""
-    test_model = TestModel(call_tools=[])  # no tool calls; agent just emits final
-    with app.state.handles.primary_agent.override(model=test_model):
-        ask = test_app.post(
-            "/agent/ask",
-            json=canned.make_ask_payload("Profile this wallet"),
-        ).json()
-        events = _consume_sse(test_app, ask["sessionId"])
+    ask = test_app.post(
+        "/agent/ask",
+        json=canned.make_ask_payload("Profile this wallet"),
+    ).json()
+    events = _consume_sse(test_app, ask["sessionId"])
 
     # Final frame is the `Done` event carrying AgentDone.
     assert events[-1]["event"] == "Done"
@@ -69,10 +67,8 @@ def test_turn_end_carries_lease_id(test_app, with_happy_path_primitives):
     (binary protobuf-encoded SnapshotEndRequest)."""
     from multichain.wire.shared.v1 import snapshot_pb2 as snap_pb
 
-    test_model = TestModel(call_tools=[])
-    with app.state.handles.primary_agent.override(model=test_model):
-        ask = test_app.post("/agent/ask", json=canned.make_ask_payload("q")).json()
-        _consume_sse(test_app, ask["sessionId"])
+    ask = test_app.post("/agent/ask", json=canned.make_ask_payload("q")).json()
+    _consume_sse(test_app, ask["sessionId"])
 
     requests = with_happy_path_primitives.get_requests()
     end_calls = [r for r in requests if r.url.path == "/turn/end"]
@@ -84,17 +80,31 @@ def test_turn_end_carries_lease_id(test_app, with_happy_path_primitives):
     assert decoded.snapshot_id == canned.VALID_SNAPSHOT_ID
 
 
-def test_primitive_calls_carry_lease_id(test_app, with_happy_path_primitives):
+def test_primitive_calls_carry_lease_id(
+    test_app, with_happy_path_primitives, monkeypatch
+):
     """Every primitive call in the turn must carry the same leased
     snapshot_id. If the agent dispatches a tool that drops it, every
     real-Rust call would 410 Gone. Bodies are binary-protobuf encoded
     `WalletProfileRequest` / `CommunitySummaryRequest`."""
+    from pydantic_ai.models.test import TestModel
+
     from multichain.wire.shared.v1 import primitive_envelope_pb2 as env_pb
 
-    test_model = TestModel(call_tools=["wallet_profile"])
-    with app.state.handles.primary_agent.override(model=test_model):
-        ask = test_app.post("/agent/ask", json=canned.make_ask_payload("q")).json()
-        _consume_sse(test_app, ask["sessionId"])
+    # The autouse `_no_live_llm` fixture hands every agent a
+    # `TestModel(call_tools=[])`; this test needs the primary agent
+    # to actually invoke `wallet_profile`, so swap its model in. Direct
+    # `agent.model = ...` (instance attribute) survives the
+    # TestClient -> SSE handler thread hop, unlike `Agent.override(...)`
+    # which is contextvar-based and invisible across threads.
+    monkeypatch.setattr(
+        app.state.handles.primary_agent,
+        "model",
+        TestModel(call_tools=["wallet_profile"]),
+    )
+
+    ask = test_app.post("/agent/ask", json=canned.make_ask_payload("q")).json()
+    _consume_sse(test_app, ask["sessionId"])
 
     requests = with_happy_path_primitives.get_requests()
     primitive_calls = [r for r in requests if r.url.path.startswith("/primitive/")]

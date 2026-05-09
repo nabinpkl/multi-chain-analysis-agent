@@ -25,6 +25,7 @@ import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 from pydantic_ai import Agent
+from pydantic_ai.models.test import TestModel
 
 # Set a dummy AGENT_API_KEY + the model-id env vars that
 # `llm.py` reads strict-mode. `setdefault` so a real .env (loaded
@@ -146,7 +147,7 @@ async def primitive_client(mock_data_plane) -> AsyncIterator[PrimitiveClient]:
 
 
 @pytest.fixture
-def test_app(mock_data_plane) -> Iterator[TestClient]:
+def test_app(_no_live_llm, mock_data_plane) -> Iterator[TestClient]:
     """FastAPI TestClient against the real `agent_service.main:app`.
 
     The app's lifespan handler creates a `PrimitiveClient` pointing
@@ -190,7 +191,7 @@ def test_model_factory():
 
 
 @pytest.fixture
-def agent_with_test_model(test_model_factory):
+def agent_with_test_model(_no_live_llm, test_model_factory):
     """Build the project agent with a TestModel substitute. Tests can
     configure tool-call behavior by passing `**kwargs` to the
     factory before this fixture is invoked, but the simplest pattern
@@ -211,3 +212,36 @@ def agent_with_test_model(test_model_factory):
 async def httpx_async_client() -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient() as client:
         yield client
+
+
+# ---------------------------------------------------------------------------
+# No-live-LLM autouse gate
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_live_llm(monkeypatch):
+    """Stub `agent_service.llm.make_model` for every test so any agent
+    constructed during a test run, current or future, gets a `TestModel`
+    instead of a real OpenRouter-backed model. `make_model` is the
+    single gateway every agent and probe uses; intercepting it here is
+    enough to enforce the no-live-LLM rule at the top of this file
+    without per-agent override plumbing.
+
+    `TestModel` synthesizes structured output from each agent's
+    `output_type` schema: it picks the first valid value of every
+    constrained type. For `ConstitutionVerdict.verdict:
+    Literal["approve", "retract", "reject"]` that's `"approve"`, which
+    matches the happy path the snapshot-lease tests expect.
+
+    Tests that need to control tool-call behavior pass a custom
+    TestModel via `Agent.override(model=...)` inside the test body;
+    that still works for unit-level tests not driven through
+    `TestClient`. For the SSE-driven integration tests, this autouse
+    is the only thing that fires.
+    """
+
+    def _stub(role, *, model_id=None):
+        return TestModel(call_tools=[])
+
+    monkeypatch.setattr("agent_service.llm.make_model", _stub)
