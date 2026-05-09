@@ -246,6 +246,7 @@ async def run_one_turn(
         session_id=envelope.correlation_id,
         session_started_at_ms=started_at_ms,
         binding_store=bindings,
+        external_text_input_enabled=envelope.switches.channels.external_text_input_enabled,
     )
     run_kwargs: dict = {"deps": deps, "usage_limits": _USAGE_LIMITS}
     if envelope.history:

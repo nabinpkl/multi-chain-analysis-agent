@@ -20,6 +20,7 @@ from __future__ import annotations
 from google.protobuf import json_format, struct_pb2
 
 from multichain.wire.shared.v1 import (
+    get_token_info_pb2 as gti_pb,
     primitive_envelope_pb2 as env_pb,
     provenance_pb2 as prov_pb,
     snapshot_pb2 as snap_pb,
@@ -218,6 +219,34 @@ def encode_community_summary_response() -> bytes:
         COMMUNITY_SUMMARY_RESPONSE["value"],
         COMMUNITY_SUMMARY_RESPONSE["provenance"],
     )
+
+
+GET_TOKEN_INFO_USDC_RESPONSE = {
+    "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "name": "USD Coin",
+    "symbol": "USDC",
+    "uri": "",
+    "update_authority": "2wmVCSfPxGPjrnMMn7rchp4uaeoTqN39mXFC2zhPdri9",
+    "source_program": "metaplex",
+    "cached": True,
+}
+
+
+def encode_get_token_info_response(payload: dict | None = None) -> bytes:
+    """Binary `GetTokenInfoOutput` for the canned token-info response.
+    Default payload is the USDC happy-path. Tests that want a different
+    shape (e.g. a clearly-injection-shaped name) pass their own dict."""
+    p = payload or GET_TOKEN_INFO_USDC_RESPONSE
+    out = gti_pb.GetTokenInfoOutput(
+        mint=p["mint"],
+        name=p["name"],
+        symbol=p["symbol"],
+        uri=p["uri"],
+        update_authority=p["update_authority"],
+        source_program=p["source_program"],
+        cached=p["cached"],
+    )
+    return out.SerializeToString()
 
 
 def encode_snapshot_begin_response() -> bytes:

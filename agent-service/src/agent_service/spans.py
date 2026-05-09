@@ -156,6 +156,14 @@ class Attrs:
     PRIMITIVE_INPUT_MINT: Final = "mcae.primitive.input.mint"
     PRIMITIVE_GET_TOKEN_INFO_CACHED: Final = "mcae.primitive.get_token_info.cached"
     PRIMITIVE_GET_TOKEN_INFO_SOURCE: Final = "mcae.primitive.get_token_info.source_program"
+    # Set true on the current tool span when the
+    # `external_text_input_enabled` channel switch is off and
+    # `get_token_info`'s name/symbol/uri were replaced with the
+    # redaction placeholder before being wrapped in <external_data>.
+    # Eval probes assert this attribute to verify the gate held.
+    PRIMITIVE_GET_TOKEN_INFO_SANITIZED: Final = (
+        "mcae.primitive.get_token_info.sanitized"
+    )
     # Full JSON payloads on primitive spans. Typed input attrs above
     # stay because they are cheap to query in SQL; these are the rich
     # debug surface (Langfuse renders them inline) and the future eval

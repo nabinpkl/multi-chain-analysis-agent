@@ -20,9 +20,11 @@ import pytest
 from multichain.wire.agent.v1 import entity_pb2 as ent_pb
 
 from agent_service.boundary import (
+    EXTERNAL_TEXT_REDACTED_PLACEHOLDER,
     UnsafeUserInputError,
     build_context_block,
     reject_if_unsafe_user_question,
+    sanitize_token_info_payload,
     wrap_external_data,
 )
 
@@ -180,6 +182,82 @@ def test_wrap_external_data_memo_injection_data_only():
     body = out[body_start + 1 : body_end]
     assert memo in body
     assert not out.startswith(memo)
+
+
+# ---------------------------------------------------------------------------
+# sanitize_token_info_payload  (channel switch: external_text_input_enabled)
+# ---------------------------------------------------------------------------
+
+
+def _full_token_info_payload() -> dict:
+    return {
+        "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "name": "USD Coin",
+        "symbol": "USDC",
+        "uri": "https://example.com/metadata.json",
+        "update_authority": "2wmVCSfPxGPjrnMMn7rchp4uaeoTqN39mXFC2zhPdri9",
+        "source_program": "metaplex",
+        "cached": True,
+        "found": True,
+    }
+
+
+def test_sanitize_token_info_redacts_untrusted_fields():
+    """name / symbol / uri are arbitrary strings the token issuer wrote
+    at mint creation; replaced with the placeholder when the channel
+    switch is off."""
+    out = sanitize_token_info_payload(_full_token_info_payload())
+    assert out["name"] == EXTERNAL_TEXT_REDACTED_PLACEHOLDER
+    assert out["symbol"] == EXTERNAL_TEXT_REDACTED_PLACEHOLDER
+    assert out["uri"] == EXTERNAL_TEXT_REDACTED_PLACEHOLDER
+
+
+def test_sanitize_token_info_preserves_constrained_fields():
+    """Format-constrained fields (base58 pubkeys, enum source_program,
+    bools) pass through unchanged. The mint itself is the user's
+    input echoed back; the gate must not redact it or the model
+    cannot tell which mint the answer was about."""
+    payload = _full_token_info_payload()
+    out = sanitize_token_info_payload(payload)
+    assert out["mint"] == payload["mint"]
+    assert out["update_authority"] == payload["update_authority"]
+    assert out["source_program"] == payload["source_program"]
+    assert out["cached"] is True
+    assert out["found"] is True
+
+
+def test_sanitize_token_info_does_not_redact_empty_strings():
+    """Empty strings are the not_found shape (e.g. mint resolved but no
+    metadata, or wallet pubkey lookup). Replacing "" with the placeholder
+    would mislead the model into thinking real data was hidden when
+    the chain genuinely returned nothing."""
+    payload = _full_token_info_payload()
+    payload["name"] = ""
+    payload["symbol"] = ""
+    payload["uri"] = ""
+    out = sanitize_token_info_payload(payload)
+    assert out["name"] == ""
+    assert out["symbol"] == ""
+    assert out["uri"] == ""
+
+
+def test_sanitize_token_info_does_not_mutate_input():
+    """Caller may need the unredacted payload (e.g. for the replay
+    record in ToolCallRecord). The helper must return a fresh dict."""
+    payload = _full_token_info_payload()
+    snapshot = dict(payload)
+    sanitize_token_info_payload(payload)
+    assert payload == snapshot
+
+
+def test_sanitize_token_info_passes_through_unknown_keys():
+    """Permissive on extra keys so a future tool field rename doesn't
+    crash here. Only the known untrusted-text keys are redacted."""
+    payload = _full_token_info_payload()
+    payload["future_field"] = "some untrusted text"
+    out = sanitize_token_info_payload(payload)
+    assert out["future_field"] == "some untrusted text"
+    assert out["name"] == EXTERNAL_TEXT_REDACTED_PLACEHOLDER
 
 
 # ---------------------------------------------------------------------------

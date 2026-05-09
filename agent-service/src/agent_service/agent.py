@@ -24,10 +24,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
+from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent, RunContext
 
-from agent_service.boundary import wrap_external_data
+from agent_service import spans
+from agent_service.boundary import sanitize_token_info_payload, wrap_external_data
 from agent_service.llm import primary_model
 from agent_service.policy.binding_store import PrimitiveBindingStore, build_binding
 from agent_service.primitive_client import PrimitiveClient, PrimitiveError
@@ -113,6 +115,13 @@ class AgentDeps:
     # driver passes the thread's binding store in here so this turn's
     # primitive outputs land in the same store the gate later reads).
     binding_store: PrimitiveBindingStore
+    # Channel switch: when False, primitive tool outputs that emit
+    # untrusted text (currently only get_token_info's name/symbol/uri)
+    # have those fields replaced with a redaction placeholder before
+    # being wrapped in <external_data>. Default True matches the
+    # production preset; tests and the loop driver pass the value from
+    # the per-turn switch envelope.
+    external_text_input_enabled: bool = True
     # Per-turn tool-call records. Loop driver pulls these out after
     # agent.run() to record into thread state for ship 4 replay.
     tool_call_records: list["ToolCallRecord"] = field(default_factory=list)
@@ -296,6 +305,9 @@ def build_agent(
             "cached": result.cached,
             "found": result.found,
         }
+        # Replay record captures the UNREDACTED payload so ship 4 diff
+        # can compare against future re-fetches. The redaction below
+        # only affects what reaches the LLM via wrap_external_data.
         ctx.deps.tool_call_records.append(
             ToolCallRecord(
                 primitive_name="get_token_info",
@@ -304,6 +316,12 @@ def build_agent(
                 call_id=call_id,
             )
         )
+
+        if not ctx.deps.external_text_input_enabled:
+            payload = sanitize_token_info_payload(payload)
+            trace.get_current_span().set_attribute(
+                spans.Attrs.PRIMITIVE_GET_TOKEN_INFO_SANITIZED, True
+            )
 
         return wrap_external_data("get_token_info", payload)
 

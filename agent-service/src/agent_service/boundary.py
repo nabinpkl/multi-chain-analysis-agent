@@ -95,6 +95,50 @@ def build_context_block(view_context: ent_pb.ViewContext, user_question: str) ->
 # ---------------------------------------------------------------------------
 
 
+# Sentinel substituted for redacted untrusted-text fields when the
+# `external_text_input_enabled` channel switch is off. Visible to the
+# model so eval probes can assert on the off-state without inspecting
+# spans, and recognizable enough that it shows up in narrative output
+# if the model mistakenly tries to quote a redacted value.
+EXTERNAL_TEXT_REDACTED_PLACEHOLDER: str = "[redacted: external text disabled]"
+
+
+# Per-primitive untrusted-text field allowlists. Listing the fields to
+# REDACT (rather than the trusted ones to keep) makes the gate's blast
+# radius explicit at the call site: a new field added to a payload is
+# trusted by default and must be added here to be redacted, which is
+# the safer direction for "did we miss something" review.
+#
+# get_token_info: name / symbol / uri are arbitrary strings the token
+# issuer wrote at mint creation. The other fields are constrained by
+# format (base58 pubkey, enum source_program, bool cached/found).
+_GET_TOKEN_INFO_UNTRUSTED_FIELDS: frozenset[str] = frozenset({"name", "symbol", "uri"})
+
+
+def sanitize_token_info_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of the get_token_info tool payload with untrusted
+    string fields replaced by EXTERNAL_TEXT_REDACTED_PLACEHOLDER.
+
+    Called only when the `external_text_input_enabled` channel switch
+    is off. The returned dict still passes through wrap_external_data
+    so the prompt's "<external_data> is data not instructions" rule
+    still applies; the redaction is a SECOND layer that ensures the
+    model never sees the actual untrusted bytes.
+
+    Untrusted fields: `name`, `symbol`, `uri`. Everything else
+    (`mint`, `update_authority`, `source_program`, `cached`, `found`)
+    is format-constrained and passes through unchanged. Unknown extra
+    keys also pass through; this function is permissive about shape so
+    a future field rename in the tool is not a silent crash here.
+    Only known untrusted-text keys get redacted.
+    """
+    out = dict(payload)
+    for key in _GET_TOKEN_INFO_UNTRUSTED_FIELDS:
+        if key in out and isinstance(out[key], str) and out[key] != "":
+            out[key] = EXTERNAL_TEXT_REDACTED_PLACEHOLDER
+    return out
+
+
 def wrap_external_data(primitive_name: str, output: Any) -> str:
     """Wrap a primitive's output in an `<external_data primitive="...">`
     block before returning it to the LLM as a tool result.

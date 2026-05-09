@@ -135,6 +135,79 @@ async def test_agent_emit_claim_tool_buffers_into_deps(
     assert len(deps.emitted_claims) >= 1
 
 
+async def test_get_token_info_passes_through_text_when_switch_on(
+    primitive_client: PrimitiveClient, mock_data_plane
+):
+    """Production preset (`external_text_input_enabled=True`) leaves the
+    name/symbol/uri intact in the <external_data> wrapper the model sees."""
+    proto_ct = {"Content-Type": "application/x-protobuf"}
+    mock_data_plane.add_response(
+        method="POST",
+        url=f"{DATA_PLANE_BASE}/primitive/get_token_info",
+        content=canned.encode_get_token_info_response(),
+        headers=proto_ct,
+        is_reusable=True,
+    )
+
+    agent = build_agent()
+    test_model = TestModel(call_tools=["get_token_info"])
+    deps = _make_deps(primitive_client)  # default external_text_input_enabled=True
+
+    with agent.override(model=test_model):
+        await agent.run("token info", deps=deps)
+
+    record = next(
+        r for r in deps.tool_call_records if r.primitive_name == "get_token_info"
+    )
+    assert record.output_value["name"] == "USD Coin"
+    assert record.output_value["symbol"] == "USDC"
+
+
+async def test_get_token_info_redacts_text_when_switch_off(
+    primitive_client: PrimitiveClient, mock_data_plane
+):
+    """When `external_text_input_enabled` is False the tool returns a
+    wrapped block whose name/symbol fields are the redaction
+    placeholder, while the replay record keeps the unredacted payload
+    so ship 4 diff stays correct."""
+    from agent_service.boundary import EXTERNAL_TEXT_REDACTED_PLACEHOLDER
+
+    proto_ct = {"Content-Type": "application/x-protobuf"}
+    mock_data_plane.add_response(
+        method="POST",
+        url=f"{DATA_PLANE_BASE}/primitive/get_token_info",
+        content=canned.encode_get_token_info_response(),
+        headers=proto_ct,
+        is_reusable=True,
+    )
+
+    agent = build_agent()
+    test_model = TestModel(call_tools=["get_token_info"])
+    deps = _make_deps(primitive_client)
+    deps.external_text_input_enabled = False
+
+    with agent.override(model=test_model):
+        result = await agent.run("token info", deps=deps)
+
+    # Replay record keeps the truth.
+    record = next(
+        r for r in deps.tool_call_records if r.primitive_name == "get_token_info"
+    )
+    assert record.output_value["name"] == "USD Coin"
+    assert record.output_value["symbol"] == "USDC"
+
+    # The model's view, captured via TestModel's recorded messages, must
+    # contain the redacted placeholder rather than the issuer text.
+    history = result.all_messages()
+    serialized = repr(history)
+    assert EXTERNAL_TEXT_REDACTED_PLACEHOLDER in serialized
+    assert "USD Coin" not in serialized
+    assert "USDC" not in serialized
+    # Constrained-format fields still pass through so the model can
+    # talk about which mint the answer was for.
+    assert "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" in serialized
+
+
 async def test_agent_no_real_network_call(
     primitive_client: PrimitiveClient, with_happy_path_primitives
 ):
