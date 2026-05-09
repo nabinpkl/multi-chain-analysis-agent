@@ -34,6 +34,7 @@ services:
       - "9000:9000"
     volumes:
       - ./data/clickhouse:/var/lib/clickhouse
+      - ./infra/z_clickhouse-overrides.xml:/etc/clickhouse-server/config.d/z_overrides.xml:ro
     environment:
       - CLICKHOUSE_DB=multichain
       - CLICKHOUSE_USER=default
@@ -253,6 +254,7 @@ services:
     volumes:
       - ./data/langfuse-clickhouse:/var/lib/clickhouse
       - ./data/langfuse-clickhouse-logs:/var/log/clickhouse-server
+      - ./infra/z_clickhouse-overrides.xml:/etc/clickhouse-server/config.d/z_overrides.xml:ro
     healthcheck:
       test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
       interval: 5s
