@@ -360,10 +360,9 @@ pub async fn community_summary_route(State(state): State<AppState>, req: Request
 /// `crate::metadata::fetch`. Stateless lookup; ignores `snapshot_id`.
 ///
 /// Cache check goes through ClickHouse first (the
-/// `multichain.token_metadata` table populated by both the streaming
-/// Metaplex decoder and prior lazy-fetch hits). On cache miss, calls
-/// `getAccountInfo` via the shared `RpcClient` rate limiter, inserts
-/// the row, returns it.
+/// `multichain.token_metadata` table, populated entirely from prior
+/// lazy-fetch hits). On cache miss, calls `getAccountInfo` via the
+/// shared `RpcClient` rate limiter, inserts the row, returns it.
 ///
 /// Untrusted text (the resolved name/symbol/uri) is NOT sanitized
 /// here. Per the project's tool-output convention, the agent-service

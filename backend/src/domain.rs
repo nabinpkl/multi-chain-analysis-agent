@@ -25,17 +25,17 @@ pub struct Edge {
     pub version: u64,
 }
 
-/// One Metaplex Token Metadata Program instruction that wrote
-/// `name / symbol / uri` for a mint. Decoded by `ingest::metadata`
-/// from the `data` field of `getBlock` instructions whose program ID
-/// matches the Metaplex Token Metadata Program. See
-/// `docs/architecture/token-metadata-ingestion.md` for the encoding
-/// rationale and which discriminators we handle.
+/// `name / symbol / uri` for a mint, fetched on-demand by
+/// `metadata::fetch::fetch_token_metadata` and cached in
+/// `multichain.token_metadata`. Either decoded from a Metaplex Token
+/// Metadata PDA account or pulled out of the Token-2022 metadata
+/// extension on the mint account itself.
 ///
 /// `name`, `symbol`, and `uri` are user-supplied at mint creation
 /// time and are NOT validated by the runtime; treat them as untrusted
-/// text. The future agent primitive that surfaces these strings to
-/// the agent is gated by `channels.external_text_input_enabled`.
+/// text. The agent tool surfacing these strings is intended to be
+/// gated by `channels.external_text_input_enabled`; the gate itself
+/// is not yet wired.
 #[derive(Debug, Clone, Row, Serialize, Deserialize)]
 pub struct TokenMetadataEvent {
     /// SPL/Token-2022 mint pubkey the metadata describes. Joins to
@@ -56,19 +56,16 @@ pub struct TokenMetadataEvent {
     pub is_inner: bool,
     /// Which on-chain program emitted this metadata write.
     /// `LowCardinality(String)` on the ClickHouse side. One of
-    /// `"metaplex"` (Metaplex Token Metadata Program) or
+    /// `"metaplex"` (Metaplex Token Metadata PDA) or
     /// `"token2022"` (SPL Token-2022 metadata extension). Distinct
     /// from `op` so a query can filter by source program without
     /// enumerating per-op string values.
     pub program: String,
-    /// Which instruction wrote this. `LowCardinality(String)` on
-    /// the ClickHouse side. Program-scoped so values don't collide
-    /// between programs: Metaplex emits `"create_v2"` / `"create_v3"`,
-    /// Token-2022 emits `"t22_initialize"` / `"t22_update_field"`.
-    /// More variants land as Update support is wired in.
+    /// Lazy-fetch path always emits `"fetch"`. Kept as a
+    /// `LowCardinality(String)` column so the row schema can carry
+    /// future op variants without a migration.
     pub op: String,
-    /// `name` field from `DataV2`. Capped at 32 bytes by Metaplex.
-    /// Empty if absent (Update with `data: None`, currently unused).
+    /// `name` field. Capped at 32 bytes by Metaplex.
     pub name: String,
     /// `symbol` field. Capped at 10 bytes.
     pub symbol: String,
@@ -76,8 +73,8 @@ pub struct TokenMetadataEvent {
     /// somewhere on the internet (HTTPS, IPFS, Arweave, custom
     /// gateways). Off-chain fetch is a separate ingestion leg.
     pub uri: String,
-    /// Account that can sign future updates. Reads from `account[4]`
-    /// for Create instructions.
+    /// Account that can sign future updates. Read from the Metaplex
+    /// PDA's `update_authority` field, or empty for Token-2022 paths.
     pub update_authority: String,
     /// `ReplacingMergeTree` version, set to ingest epoch_ms.
     pub version: u64,

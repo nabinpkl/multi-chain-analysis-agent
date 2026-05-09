@@ -14,9 +14,7 @@ use multichain_engine::{
 use config::Config;
 use sinks::stream_sink::{self, SinkConfig};
 use state::AppState;
-use stream::{
-    EdgeProducer, EdgeStream, MetadataProducer, MetadataStream, consumer::build_consumer,
-};
+use stream::{EdgeProducer, EdgeStream, consumer::build_consumer};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -79,32 +77,6 @@ async fn main() -> anyhow::Result<()> {
     };
     bg_handles.push(edge_sink_handle);
 
-    // token-metadata-sink: persists Metaplex (and future Token-2022)
-    // metadata writes to ClickHouse. Parallel task to edge-sink against
-    // the metadata topic, isolated so a metadata-side stall does not
-    // block edge ingestion.
-    let metadata_sink_handle = {
-        let consumer = build_consumer(
-            &config.kafka_brokers,
-            "token-metadata-sink",
-            &config.kafka_topic_token_metadata,
-            &config.kafka_auto_offset_reset,
-        )?;
-        info!(group = "token-metadata-sink", topic = %config.kafka_topic_token_metadata, "token-metadata-sink consumer ready");
-        let store = state.store.clone();
-        let cfg = SinkConfig {
-            batch_size: config.ch_sink_batch_size,
-            flush_interval: config.ch_sink_flush,
-        };
-        let rx = shutdown_rx.clone();
-        tokio::spawn(async move {
-            if let Err(e) = stream_sink::run::<MetadataStream>(consumer, store, cfg, rx).await {
-                error!(error = %e, "token-metadata-sink exited with error");
-            }
-        })
-    };
-    bg_handles.push(metadata_sink_handle);
-
     // graph-engine: sole live ingest path. Builds in-memory graph and
     // dispatches GraphDelta batches per-window to /graph/stream
     // subscribers.
@@ -156,25 +128,13 @@ async fn main() -> anyhow::Result<()> {
         let edge_producer = EdgeProducer::new(&config.kafka_brokers, &config.kafka_topic_raw_edges)?;
         info!(brokers = %config.kafka_brokers, topic = %config.kafka_topic_raw_edges, "kafka edge producer ready");
 
-        let metadata_producer = MetadataProducer::new(
-            &config.kafka_brokers,
-            &config.kafka_topic_token_metadata,
-        )?;
-        info!(
-            brokers = %config.kafka_brokers,
-            topic = %config.kafka_topic_token_metadata,
-            "kafka token-metadata producer ready"
-        );
-
         let ingest_handle = {
             let store = state.store.clone();
             let rpc = rpc.clone();
             let tip = state.tip.clone();
             let rx = shutdown_rx.clone();
             tokio::spawn(async move {
-                if let Err(e) = ingest::run(rpc, store, edge_producer, metadata_producer, tip, rx)
-                    .await
-                {
+                if let Err(e) = ingest::run(rpc, store, edge_producer, tip, rx).await {
                     error!(error = %e, "ingester exited with error");
                 }
             })

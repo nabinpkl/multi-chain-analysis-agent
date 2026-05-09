@@ -1,9 +1,34 @@
 # Token metadata ingestion (on-chain leg)
 
-Status: in progress. Phase 0 spike + phases 1 + 2 (domain type +
-Metaplex stream decoder) shipped 2026-05-08. Token-2022 stream
-decoder is next, mirroring the Metaplex shape. Runner wiring,
-producer, and ClickHouse sink (phases 3 to 5) follow.
+Status (2026-05-08): **stream-decode was removed; lazy fetch is the only
+path.** `multichain.token_metadata` is populated entirely by
+`backend/src/metadata/fetch.rs`, which runs on demand when the agent
+asks `get_token_info` for a mint not yet cached. Three confirmations
+drove the rip-out:
+
+- Most active mints (USDC, BONK, JUP) were created before any plausible
+  ingest window, so a stream decoder never sees them. The agent only
+  cares about mints it asks about; lazy-on-demand exactly matches that
+  shape.
+- Empirical mainnet sampling showed `CreateMetadataAccountV2/V3`
+  (discriminators 16 / 33) is rare in 2026; most current "create"
+  activity has shifted to pump.fun / Token-2022 / Metaplex Core.
+- For Token-2022 in particular, `getAccountInfo` jsonParsed already
+  structures the metadata extension; a stream decoder for that program
+  added zero value over the lazy-fetch path.
+
+What remains in the codebase: the row schema (`TokenMetadataEvent`),
+the ClickHouse table, the lazy-fetch module, the `/primitive/get_token_info`
+endpoint, and the agent tool. What was removed: `ingest::metadata`
+(Metaplex borsh decoder), `MetadataStream` / `MetadataProducer`,
+`token-metadata-sink` Kafka consumer, `KAFKA_TOPIC_TOKEN_METADATA`.
+
+Everything below is preserved as historical context for the design
+investigation; treat references to "stream decode in `parser.rs`",
+`parse_token_metadata`, the Metaplex producer, etc. as describing a
+state of the world that no longer exists.
+
+---
 
 ## What we're capturing
 

@@ -20,17 +20,12 @@ const METAPLEX_PROGRAM_ID_B58: &str = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x
 /// the inline metadata extension.
 const TOKEN_2022_PROGRAM_ID_B58: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 
-/// Program-label values written into the row's `program` column. Stay
-/// consistent with the labels used by `ingest::metadata` for stream-
-/// decode rows so a query that filters by program covers both access
-/// paths.
+/// Program-label values written into the row's `program` column.
 const PROGRAM_METAPLEX: &str = "metaplex";
 const PROGRAM_TOKEN_2022: &str = "token2022";
 
-/// Sentinel `op` value for rows produced by lazy fetch (not tied to a
-/// specific instruction). Stream-decode rows use `"create_v2"` /
-/// `"create_v3"`; the lazy path uses `"lazy_fetch"` so a query can
-/// distinguish provenance.
+/// `op` value for rows produced by lazy fetch. The single producer of
+/// rows in this table; the column stays for forward compatibility.
 const OP_LAZY_FETCH: &str = "lazy_fetch";
 
 fn metaplex_program_id() -> &'static Pubkey {
@@ -156,9 +151,7 @@ fn make_event(
     TokenMetadataEvent {
         mint,
         metadata_pda,
-        // Lazy fetch isn't tied to a specific tx; leave empty. Stream-
-        // decoded rows for the same mint will have non-empty signature
-        // values and dominate on `ORDER BY slot DESC` if they exist.
+        // Lazy fetch isn't tied to a specific tx; leave empty.
         signature: String::new(),
         slot,
         block_time,
