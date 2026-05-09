@@ -3,15 +3,15 @@ syntax = "proto3";
 package multichain.wire.shared.v1;
 
 // Input to the `get_token_info` primitive. Resolves a Solana mint
-// pubkey to its on-chain `name / symbol / uri` via the lazy-fetch path
-// in `backend::metadata::fetch`. The primitive is stateless (does not
-// depend on the per-turn 60-second window snapshot) so the request
-// envelope's `snapshot_id` is carried for parallelism with other
-// primitives but ignored by the handler.
+// pubkey to its on-chain `name / symbol / uri` via the lazy-fetch
+// path in `backend::metadata::fetch`. Allowlisted to mints actually
+// transferred inside the agent's live 60-second window so a request
+// for an out-of-window pubkey does not authorize an outbound RPC.
 message GetTokenInfoInput {
   // base58 mint pubkey. Both legacy SPL Token mints (Metaplex PDA
   // path) and SPL Token-2022 mints with the metadata extension are
-  // accepted.
+  // accepted, provided the mint appears in at least one live-window
+  // edge.
   string mint = 1;
 }
 
@@ -26,6 +26,10 @@ message GetTokenInfoInput {
 // the same shape carries both "found" and "not found" results: when
 // not found, the four metadata fields are absent and `source_program`
 // is empty.
+//
+// Reserved field 7 was a `cached` bool when the primitive was backed
+// by a ClickHouse cache. Removed when the cache was dropped in favor
+// of an allowlist + always-fresh shape.
 message GetTokenInfoOutput {
   // base58 mint pubkey, echoed for caller convenience.
   string mint = 1;
@@ -49,9 +53,7 @@ message GetTokenInfoOutput {
   //                  the mint account itself
   //   ""           - mint exists but has no resolvable metadata
   string source_program = 6;
-  // true iff the response was served from the existing
-  // `multichain.token_metadata` ClickHouse row (no RPC call this
-  // request); false when this request triggered a fresh fetch and
-  // wrote the row.
-  bool cached = 7;
+
+  reserved 7;
+  reserved "cached";
 }

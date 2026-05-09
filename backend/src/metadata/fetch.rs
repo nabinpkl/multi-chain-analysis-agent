@@ -7,7 +7,6 @@ use borsh::BorshDeserialize;
 use solana_pubkey::Pubkey;
 use tracing::debug;
 
-use crate::domain::TokenMetadataEvent;
 use crate::rpc::client::RpcClient;
 use crate::rpc::error::RpcError;
 use crate::rpc::types::{AccountData, AccountInfoResponse};
@@ -20,13 +19,24 @@ const METAPLEX_PROGRAM_ID_B58: &str = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x
 /// the inline metadata extension.
 const TOKEN_2022_PROGRAM_ID_B58: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 
-/// Program-label values written into the row's `program` column.
+/// Provenance label surfaced through the proto response's
+/// `source_program` field.
 const PROGRAM_METAPLEX: &str = "metaplex";
 const PROGRAM_TOKEN_2022: &str = "token2022";
 
-/// `op` value for rows produced by lazy fetch. The single producer of
-/// rows in this table; the column stays for forward compatibility.
-const OP_LAZY_FETCH: &str = "lazy_fetch";
+/// On-chain metadata for a mint. Slim shape carrying only the fields
+/// surfaced by `/primitive/get_token_info`. Nothing here is persisted;
+/// callers re-fetch on every request.
+#[derive(Debug, Clone)]
+pub struct OnChainMetadata {
+    pub name: String,
+    pub symbol: String,
+    pub uri: String,
+    pub update_authority: String,
+    /// `"metaplex"` (Metaplex Token Metadata PDA) or `"token2022"`
+    /// (SPL Token-2022 metadata extension on the mint account itself).
+    pub program: &'static str,
+}
 
 fn metaplex_program_id() -> &'static Pubkey {
     static PID: OnceLock<Pubkey> = OnceLock::new();
@@ -70,10 +80,7 @@ pub fn derive_metaplex_metadata_pda(mint: &Pubkey) -> Pubkey {
 pub async fn fetch_token_metadata(
     rpc: &RpcClient,
     mint: &Pubkey,
-    slot_hint: u64,
-    block_time_hint: u32,
-    version: u64,
-) -> Result<Option<TokenMetadataEvent>, RpcError> {
+) -> Result<Option<OnChainMetadata>, RpcError> {
     let mint_b58 = bs58::encode(mint.as_ref()).into_string();
     let pda = derive_metaplex_metadata_pda(mint);
     let pda_b58 = bs58::encode(pda.as_ref()).into_string();
@@ -82,15 +89,7 @@ pub async fn fetch_token_metadata(
     let pda_resp = rpc.get_account_info(&pda_b58).await?;
 
     if let Some(parsed) = try_metaplex_path(&pda_resp) {
-        return Ok(Some(make_event(
-            mint_b58,
-            pda_b58,
-            parsed,
-            PROGRAM_METAPLEX,
-            slot_hint,
-            block_time_hint,
-            version,
-        )));
+        return Ok(Some(make_metadata(parsed, PROGRAM_METAPLEX)));
     }
 
     // PDA missing or owner mismatched. Try the mint account itself
@@ -102,18 +101,7 @@ pub async fn fetch_token_metadata(
     let mint_resp = rpc.get_account_info(&mint_b58).await?;
 
     if let Some(parsed) = try_token2022_path(&mint_resp) {
-        return Ok(Some(make_event(
-            mint_b58,
-            // Token-2022 stores metadata inline on the mint; there's
-            // no separate PDA to record. Empty string sentinel matches
-            // the existing row convention for "no PDA applicable".
-            String::new(),
-            parsed,
-            PROGRAM_TOKEN_2022,
-            slot_hint,
-            block_time_hint,
-            version,
-        )));
+        return Ok(Some(make_metadata(parsed, PROGRAM_TOKEN_2022)));
     }
 
     Ok(None)
@@ -139,31 +127,13 @@ fn try_token2022_path(resp: &AccountInfoResponse) -> Option<ParsedMetadata> {
     decode_token2022_metadata(&value.data)
 }
 
-fn make_event(
-    mint: String,
-    metadata_pda: String,
-    parsed: ParsedMetadata,
-    program: &str,
-    slot: u64,
-    block_time: u32,
-    version: u64,
-) -> TokenMetadataEvent {
-    TokenMetadataEvent {
-        mint,
-        metadata_pda,
-        // Lazy fetch isn't tied to a specific tx; leave empty.
-        signature: String::new(),
-        slot,
-        block_time,
-        instruction_idx: 0,
-        is_inner: false,
-        program: program.to_string(),
-        op: OP_LAZY_FETCH.to_string(),
+fn make_metadata(parsed: ParsedMetadata, program: &'static str) -> OnChainMetadata {
+    OnChainMetadata {
         name: parsed.name,
         symbol: parsed.symbol,
         uri: parsed.uri,
         update_authority: parsed.update_authority,
-        version,
+        program,
     }
 }
 

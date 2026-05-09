@@ -101,10 +101,6 @@ class TokenInfo:
     update_authority: str | None
     # "metaplex" | "token2022" | "" (no metadata)
     source_program: str
-    # True iff served from the existing multichain.token_metadata
-    # ClickHouse row; false on first-time-asked mints that triggered
-    # a fresh getAccountInfo.
-    cached: bool
 
     @property
     def found(self) -> bool:
@@ -400,7 +396,6 @@ class PrimitiveClient:
                 spans.Attrs.PRIMITIVE_OUTPUT,
                 _proto_to_capped_json(out, cap=spans.PRIMITIVE_PAYLOAD_MAX_BYTES),
             )
-            span.set_attribute(spans.Attrs.PRIMITIVE_GET_TOKEN_INFO_CACHED, out.cached)
             span.set_attribute(
                 spans.Attrs.PRIMITIVE_GET_TOKEN_INFO_SOURCE, out.source_program
             )
@@ -416,7 +411,6 @@ class PrimitiveClient:
                     out.update_authority if out.HasField("update_authority") else None
                 ),
                 source_program=out.source_program,
-                cached=out.cached,
             )
 
 

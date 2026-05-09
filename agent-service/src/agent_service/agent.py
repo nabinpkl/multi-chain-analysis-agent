@@ -302,7 +302,6 @@ def build_agent(
             "uri": result.uri,
             "update_authority": result.update_authority,
             "source_program": result.source_program,
-            "cached": result.cached,
             "found": result.found,
         }
         # Replay record captures the UNREDACTED payload so ship 4 diff

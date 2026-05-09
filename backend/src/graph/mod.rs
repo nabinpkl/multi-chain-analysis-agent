@@ -529,6 +529,35 @@ impl GraphState {
         self.interner.lookup_idx(pubkey)
     }
 
+    /// True if at least one edge in window `window_idx` carries
+    /// `mint_pubkey` as its mint. Allowlist gate for
+    /// `/primitive/get_token_info`: only mints actually transferred
+    /// inside the agent's analytic surface are eligible for on-chain
+    /// metadata resolution. Out-of-window mints get rejected, which
+    /// bounds outbound `getAccountInfo` calls to mints we already
+    /// narrate live activity for and removes the "free oracle on
+    /// arbitrary chain state" abuse shape.
+    ///
+    /// Returns `false` when the pubkey was never interned (mint never
+    /// observed by ingest) or when no live edge in the window points
+    /// at it. Walks the window's `edges_by_time` deque; cost is O(W)
+    /// in window size, which the get_token_info handler pays once per
+    /// request. Worst-case current load is ~10k edges in the 60s
+    /// window, dominated by the on-chain RPC the gate authorizes.
+    pub fn has_window_mint(&self, window_idx: usize, mint_pubkey: &str) -> bool {
+        let Some(mint_idx) = self.mint_interner.lookup_idx(mint_pubkey) else {
+            return false;
+        };
+        self.windows[window_idx]
+            .edges_by_time
+            .iter()
+            .any(|id| {
+                self.get_edge(id)
+                    .and_then(|e| e.mint)
+                    .is_some_and(|m| m == mint_idx)
+            })
+    }
+
     /// Is there at least one live edge in either direction between
     /// `a` and `b`? Used to detect first-edge-for-this-pair so we can
     /// bump unique_degree only when the pair becomes connected.

@@ -228,7 +228,6 @@ GET_TOKEN_INFO_USDC_RESPONSE = {
     "uri": "",
     "update_authority": "2wmVCSfPxGPjrnMMn7rchp4uaeoTqN39mXFC2zhPdri9",
     "source_program": "metaplex",
-    "cached": True,
 }
 
 
@@ -244,7 +243,6 @@ def encode_get_token_info_response(payload: dict | None = None) -> bytes:
         uri=p["uri"],
         update_authority=p["update_authority"],
         source_program=p["source_program"],
-        cached=p["cached"],
     )
     return out.SerializeToString()
 

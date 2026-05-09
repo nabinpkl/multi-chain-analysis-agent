@@ -111,7 +111,7 @@ EXTERNAL_TEXT_REDACTED_PLACEHOLDER: str = "[redacted: external text disabled]"
 #
 # get_token_info: name / symbol / uri are arbitrary strings the token
 # issuer wrote at mint creation. The other fields are constrained by
-# format (base58 pubkey, enum source_program, bool cached/found).
+# format (base58 pubkey, enum source_program, bool found).
 _GET_TOKEN_INFO_UNTRUSTED_FIELDS: frozenset[str] = frozenset({"name", "symbol", "uri"})
 
 
@@ -126,8 +126,8 @@ def sanitize_token_info_payload(payload: dict[str, Any]) -> dict[str, Any]:
     model never sees the actual untrusted bytes.
 
     Untrusted fields: `name`, `symbol`, `uri`. Everything else
-    (`mint`, `update_authority`, `source_program`, `cached`, `found`)
-    is format-constrained and passes through unchanged. Unknown extra
+    (`mint`, `update_authority`, `source_program`, `found`) is
+    format-constrained and passes through unchanged. Unknown extra
     keys also pass through; this function is permissive about shape so
     a future field rename in the tool is not a silent crash here.
     Only known untrusted-text keys get redacted.

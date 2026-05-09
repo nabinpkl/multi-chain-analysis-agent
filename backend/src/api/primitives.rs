@@ -29,12 +29,9 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 use buffa::Message;
-use serde::Deserialize;
 use serde_json::json;
 use solana_pubkey::Pubkey;
-use tracing::warn;
 
-use crate::domain::TokenMetadataEvent;
 use crate::metadata;
 use crate::primitives::{
     PrimitiveError, PrimitiveOutput, community_summary, wallet_profile,
@@ -356,19 +353,31 @@ pub async fn community_summary_route(State(state): State<AppState>, req: Request
 }
 
 /// `POST /primitive/get_token_info`. Resolves a mint pubkey to its
-/// on-chain `name / symbol / uri` via the lazy-fetch path in
-/// `crate::metadata::fetch`. Stateless lookup; ignores `snapshot_id`.
+/// on-chain `name / symbol / uri` via `crate::metadata::fetch`. The
+/// request envelope's `snapshot_id` is ignored; the gate is the live
+/// 60-second window of the in-memory graph instead.
 ///
-/// Cache check goes through ClickHouse first (the
-/// `multichain.token_metadata` table, populated entirely from prior
-/// lazy-fetch hits). On cache miss, calls `getAccountInfo` via the
-/// shared `RpcClient` rate limiter, inserts the row, returns it.
+/// Allowlist: the request is rejected unless the mint appears as the
+/// `mint` of at least one edge currently in the live window. This
+/// bounds outbound `getAccountInfo` calls to mints already inside the
+/// agent's analytic surface and removes the "free oracle on arbitrary
+/// chain state" abuse shape. Mints outside the window get 404; the
+/// caller (typically the agent narrating a wallet's window activity)
+/// already saw the mint in the snapshot if the lookup is legitimate.
+///
+/// No caching. Each allowed lookup fires fresh `getAccountInfo` calls
+/// (Metaplex PDA, then Token-2022 fallback) and returns the current
+/// on-chain state. Stale cached metadata after issuer-side updates
+/// is therefore impossible by construction; the trade-off is one
+/// rate-limiter ticket per call. See the github issue tracking
+/// per-client request dedup for the planned future improvement.
 ///
 /// Untrusted text (the resolved name/symbol/uri) is NOT sanitized
 /// here. Per the project's tool-output convention, the agent-service
 /// `get_token_info` tool wraps the returned strings in
 /// `<external_data primitive="get_token_info">...</external_data>`
-/// before they reach the model.
+/// before they reach the model, gated additionally by the
+/// `external_text_input_enabled` channel switch.
 pub async fn get_token_info_route(State(state): State<AppState>, req: Request) -> Response {
     let format = match WireFormat::from_headers(req.headers()) {
         Ok(f) => f,
@@ -408,18 +417,20 @@ pub async fn get_token_info_route(State(state): State<AppState>, req: Request) -
         }
     };
 
-    // Cache check.
-    match cache_lookup(&state, &mint_b58).await {
-        Ok(Some(cached)) => {
-            return encode_response(format, &cached, StatusCode::OK);
-        }
-        Ok(None) => {}
-        Err(e) => {
-            warn!(error = %e, mint = %mint_b58, "get_token_info: cache lookup failed; falling through to RPC");
-        }
+    // Allowlist: mint must appear in the live 60s window. Brief read
+    // lock on the graph, scoped tight so the writer (graph consumer)
+    // is not held off on this path.
+    let live_idx = window_index(60).unwrap_or(1);
+    let in_window = state.graph.read().has_window_mint(live_idx, &mint_b58);
+    if !in_window {
+        return error_body(
+            StatusCode::NOT_FOUND,
+            "not_in_window",
+            "mint is not present in the live 60s window; metadata lookup is allowlisted to mints with active transfers",
+            format,
+        );
     }
 
-    // Cache miss: lazy fetch via RPC.
     let rpc = match state.rpc.clone() {
         Some(r) => r,
         None => {
@@ -432,22 +443,7 @@ pub async fn get_token_info_route(State(state): State<AppState>, req: Request) -
         }
     };
 
-    // Lazy-fetch rows aren't tied to a specific tx, so signature stays
-    // empty downstream. slot_hint, block_time_hint, version are
-    // best-known-at-fetch-time values used for the inserted row.
-    let slot_hint = state.tip.current().unwrap_or(0);
-    let block_time_hint = (current_time_ms() / 1000) as u32;
-    let version = current_time_ms();
-
-    let event_opt = match metadata::fetch::fetch_token_metadata(
-        &rpc,
-        &mint_pk,
-        slot_hint,
-        block_time_hint,
-        version,
-    )
-    .await
-    {
+    let metadata_opt = match metadata::fetch::fetch_token_metadata(&rpc, &mint_pk).await {
         Ok(o) => o,
         Err(e) => {
             return error_body(
@@ -459,35 +455,22 @@ pub async fn get_token_info_route(State(state): State<AppState>, req: Request) -
         }
     };
 
-    let event: TokenMetadataEvent = match event_opt {
-        Some(ev) => ev,
-        None => {
-            // Mint exists but has no metadata. Return a "not found"
-            // shape (empty source_program, no name/symbol/uri).
-            let resp = proto::GetTokenInfoOutput {
-                mint: mint_b58.clone(),
-                source_program: String::new(),
-                cached: false,
-                ..Default::default()
-            };
-            return encode_response(format, &resp, StatusCode::OK);
-        }
-    };
-
-    // Persist for next request.
-    if let Err(e) = state.store.insert_token_metadata(&[event.clone()]).await {
-        warn!(error = %e, mint = %mint_b58, "get_token_info: cache insert failed; serving response anyway");
-    }
-
-    let resp = proto::GetTokenInfoOutput {
-        mint: mint_b58,
-        name: Some(event.name),
-        symbol: Some(event.symbol),
-        uri: Some(event.uri),
-        update_authority: Some(event.update_authority),
-        source_program: event.program,
-        cached: false,
-        ..Default::default()
+    let resp = match metadata_opt {
+        Some(meta) => proto::GetTokenInfoOutput {
+            mint: mint_b58,
+            name: Some(meta.name),
+            symbol: Some(meta.symbol),
+            uri: Some(meta.uri),
+            update_authority: Some(meta.update_authority),
+            source_program: meta.program.to_string(),
+            ..Default::default()
+        },
+        // Mint exists on chain but has no metadata via either path.
+        None => proto::GetTokenInfoOutput {
+            mint: mint_b58,
+            source_program: String::new(),
+            ..Default::default()
+        },
     };
     encode_response(format, &resp, StatusCode::OK)
 }
@@ -503,44 +486,5 @@ fn parse_pubkey(s: &str) -> Result<Pubkey, String> {
         ));
     }
     Ok(Pubkey::new_from_array(bytes))
-}
-
-/// `multichain.token_metadata` row shape, just the columns needed to
-/// rebuild a `GetTokenInfoOutput`.
-#[derive(::clickhouse::Row, Deserialize)]
-struct CachedMetadataRow {
-    name: String,
-    symbol: String,
-    uri: String,
-    update_authority: String,
-    program: String,
-}
-
-async fn cache_lookup(
-    state: &AppState,
-    mint_b58: &str,
-) -> Result<Option<proto::GetTokenInfoOutput>, clickhouse::error::Error> {
-    let row: Option<CachedMetadataRow> = state
-        .clickhouse
-        .query(
-            "SELECT name, symbol, uri, update_authority, program \
-             FROM multichain.token_metadata \
-             WHERE mint = ? \
-             ORDER BY slot DESC, instruction_idx DESC \
-             LIMIT 1",
-        )
-        .bind(mint_b58)
-        .fetch_optional()
-        .await?;
-    Ok(row.map(|r| proto::GetTokenInfoOutput {
-        mint: mint_b58.to_string(),
-        name: Some(r.name),
-        symbol: Some(r.symbol),
-        uri: Some(r.uri),
-        update_authority: Some(r.update_authority),
-        source_program: r.program,
-        cached: true,
-        ..Default::default()
-    }))
 }
 

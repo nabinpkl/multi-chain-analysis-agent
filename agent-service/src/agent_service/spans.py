@@ -154,7 +154,6 @@ class Attrs:
     PRIMITIVE_INPUT_ADDR: Final = "mcae.primitive.input.addr"
     PRIMITIVE_INPUT_COMMUNITY_ID: Final = "mcae.primitive.input.community_id"
     PRIMITIVE_INPUT_MINT: Final = "mcae.primitive.input.mint"
-    PRIMITIVE_GET_TOKEN_INFO_CACHED: Final = "mcae.primitive.get_token_info.cached"
     PRIMITIVE_GET_TOKEN_INFO_SOURCE: Final = "mcae.primitive.get_token_info.source_program"
     # Set true on the current tool span when the
     # `external_text_input_enabled` channel switch is off and

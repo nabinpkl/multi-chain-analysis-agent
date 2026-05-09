@@ -197,7 +197,6 @@ def _full_token_info_payload() -> dict:
         "uri": "https://example.com/metadata.json",
         "update_authority": "2wmVCSfPxGPjrnMMn7rchp4uaeoTqN39mXFC2zhPdri9",
         "source_program": "metaplex",
-        "cached": True,
         "found": True,
     }
 
@@ -222,7 +221,6 @@ def test_sanitize_token_info_preserves_constrained_fields():
     assert out["mint"] == payload["mint"]
     assert out["update_authority"] == payload["update_authority"]
     assert out["source_program"] == payload["source_program"]
-    assert out["cached"] is True
     assert out["found"] is True
 
 

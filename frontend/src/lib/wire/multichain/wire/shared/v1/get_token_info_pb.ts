@@ -10,15 +10,14 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file multichain/wire/shared/v1/get_token_info.proto.
  */
 export const file_multichain_wire_shared_v1_get_token_info: GenFile = /*@__PURE__*/
-  fileDesc("Ci5tdWx0aWNoYWluL3dpcmUvc2hhcmVkL3YxL2dldF90b2tlbl9pbmZvLnByb3RvEhltdWx0aWNoYWluLndpcmUuc2hhcmVkLnYxIiEKEUdldFRva2VuSW5mb0lucHV0EgwKBG1pbnQYASABKAki1AEKEkdldFRva2VuSW5mb091dHB1dBIMCgRtaW50GAEgASgJEhEKBG5hbWUYAiABKAlIAIgBARITCgZzeW1ib2wYAyABKAlIAYgBARIQCgN1cmkYBCABKAlIAogBARIdChB1cGRhdGVfYXV0aG9yaXR5GAUgASgJSAOIAQESFgoOc291cmNlX3Byb2dyYW0YBiABKAkSDgoGY2FjaGVkGAcgASgIQgcKBV9uYW1lQgkKB19zeW1ib2xCBgoEX3VyaUITChFfdXBkYXRlX2F1dGhvcml0eWIGcHJvdG8z");
+  fileDesc("Ci5tdWx0aWNoYWluL3dpcmUvc2hhcmVkL3YxL2dldF90b2tlbl9pbmZvLnByb3RvEhltdWx0aWNoYWluLndpcmUuc2hhcmVkLnYxIiEKEUdldFRva2VuSW5mb0lucHV0EgwKBG1pbnQYASABKAki0gEKEkdldFRva2VuSW5mb091dHB1dBIMCgRtaW50GAEgASgJEhEKBG5hbWUYAiABKAlIAIgBARITCgZzeW1ib2wYAyABKAlIAYgBARIQCgN1cmkYBCABKAlIAogBARIdChB1cGRhdGVfYXV0aG9yaXR5GAUgASgJSAOIAQESFgoOc291cmNlX3Byb2dyYW0YBiABKAlCBwoFX25hbWVCCQoHX3N5bWJvbEIGCgRfdXJpQhMKEV91cGRhdGVfYXV0aG9yaXR5SgQIBxAIUgZjYWNoZWRiBnByb3RvMw");
 
 /**
  * Input to the `get_token_info` primitive. Resolves a Solana mint
- * pubkey to its on-chain `name / symbol / uri` via the lazy-fetch path
- * in `backend::metadata::fetch`. The primitive is stateless (does not
- * depend on the per-turn 60-second window snapshot) so the request
- * envelope's `snapshot_id` is carried for parallelism with other
- * primitives but ignored by the handler.
+ * pubkey to its on-chain `name / symbol / uri` via the lazy-fetch
+ * path in `backend::metadata::fetch`. Allowlisted to mints actually
+ * transferred inside the agent's live 60-second window so a request
+ * for an out-of-window pubkey does not authorize an outbound RPC.
  *
  * @generated from message multichain.wire.shared.v1.GetTokenInfoInput
  */
@@ -26,7 +25,8 @@ export type GetTokenInfoInput = Message<"multichain.wire.shared.v1.GetTokenInfoI
   /**
    * base58 mint pubkey. Both legacy SPL Token mints (Metaplex PDA
    * path) and SPL Token-2022 mints with the metadata extension are
-   * accepted.
+   * accepted, provided the mint appears in at least one live-window
+   * edge.
    *
    * @generated from field: string mint = 1;
    */
@@ -52,6 +52,10 @@ export const GetTokenInfoInputSchema: GenMessage<GetTokenInfoInput> = /*@__PURE_
  * the same shape carries both "found" and "not found" results: when
  * not found, the four metadata fields are absent and `source_program`
  * is empty.
+ *
+ * Reserved field 7 was a `cached` bool when the primitive was backed
+ * by a ClickHouse cache. Removed when the cache was dropped in favor
+ * of an allowlist + always-fresh shape.
  *
  * @generated from message multichain.wire.shared.v1.GetTokenInfoOutput
  */
@@ -107,16 +111,6 @@ export type GetTokenInfoOutput = Message<"multichain.wire.shared.v1.GetTokenInfo
    * @generated from field: string source_program = 6;
    */
   sourceProgram: string;
-
-  /**
-   * true iff the response was served from the existing
-   * `multichain.token_metadata` ClickHouse row (no RPC call this
-   * request); false when this request triggered a fresh fetch and
-   * wrote the row.
-   *
-   * @generated from field: bool cached = 7;
-   */
-  cached: boolean;
 };
 
 /**

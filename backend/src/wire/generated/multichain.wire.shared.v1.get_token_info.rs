@@ -2,18 +2,18 @@
 // source: multichain/wire/shared/v1/get_token_info.proto
 
 /// Input to the `get_token_info` primitive. Resolves a Solana mint
-/// pubkey to its on-chain `name / symbol / uri` via the lazy-fetch path
-/// in `backend::metadata::fetch`. The primitive is stateless (does not
-/// depend on the per-turn 60-second window snapshot) so the request
-/// envelope's `snapshot_id` is carried for parallelism with other
-/// primitives but ignored by the handler.
+/// pubkey to its on-chain `name / symbol / uri` via the lazy-fetch
+/// path in `backend::metadata::fetch`. Allowlisted to mints actually
+/// transferred inside the agent's live 60-second window so a request
+/// for an out-of-window pubkey does not authorize an outbound RPC.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct GetTokenInfoInput {
     /// base58 mint pubkey. Both legacy SPL Token mints (Metaplex PDA
     /// path) and SPL Token-2022 mints with the metadata extension are
-    /// accepted.
+    /// accepted, provided the mint appears in at least one live-window
+    /// edge.
     ///
     /// Field 1: `mint`
     #[serde(
@@ -151,6 +151,10 @@ pub const __GET_TOKEN_INFO_INPUT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry 
 /// the same shape carries both "found" and "not found" results: when
 /// not found, the four metadata fields are absent and `source_program`
 /// is empty.
+///
+/// Reserved field 7 was a `cached` bool when the primitive was backed
+/// by a ClickHouse cache. Removed when the cache was dropped in favor
+/// of an allowlist + always-fresh shape.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
@@ -210,18 +214,6 @@ pub struct GetTokenInfoOutput {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
     )]
     pub source_program: ::buffa::alloc::string::String,
-    /// true iff the response was served from the existing
-    /// `multichain.token_metadata` ClickHouse row (no RPC call this
-    /// request); false when this request triggered a fresh fetch and
-    /// wrote the row.
-    ///
-    /// Field 7: `cached`
-    #[serde(
-        rename = "cached",
-        with = "::buffa::json_helpers::proto_bool",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
-    )]
-    pub cached: bool,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -235,7 +227,6 @@ impl ::core::fmt::Debug for GetTokenInfoOutput {
             .field("uri", &self.uri)
             .field("update_authority", &self.update_authority)
             .field("source_program", &self.source_program)
-            .field("cached", &self.cached)
             .finish()
     }
 }
@@ -282,9 +273,6 @@ impl ::buffa::Message for GetTokenInfoOutput {
             size
                 += 1u32
                     + ::buffa::types::string_encoded_len(&self.source_program) as u32;
-        }
-        if self.cached {
-            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
@@ -343,11 +331,6 @@ impl ::buffa::Message for GetTokenInfoOutput {
                 )
                 .encode(buf);
             ::buffa::types::encode_string(&self.source_program, buf);
-        }
-        if self.cached {
-            ::buffa::encoding::Tag::new(7u32, ::buffa::encoding::WireType::Varint)
-                .encode(buf);
-            ::buffa::types::encode_bool(self.cached, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -436,16 +419,6 @@ impl ::buffa::Message for GetTokenInfoOutput {
                 }
                 ::buffa::types::merge_string(&mut self.source_program, buf)?;
             }
-            7u32 => {
-                if tag.wire_type() != ::buffa::encoding::WireType::Varint {
-                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
-                        field_number: 7u32,
-                        expected: 0u8,
-                        actual: tag.wire_type() as u8,
-                    });
-                }
-                self.cached = ::buffa::types::decode_bool(buf)?;
-            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, depth)?);
@@ -460,7 +433,6 @@ impl ::buffa::Message for GetTokenInfoOutput {
         self.uri = ::core::option::Option::None;
         self.update_authority = ::core::option::Option::None;
         self.source_program.clear();
-        self.cached = false;
         self.__buffa_unknown_fields.clear();
     }
 }

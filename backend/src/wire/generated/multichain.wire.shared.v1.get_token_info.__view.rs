@@ -2,16 +2,16 @@
 // source: multichain/wire/shared/v1/get_token_info.proto
 
 /// Input to the `get_token_info` primitive. Resolves a Solana mint
-/// pubkey to its on-chain `name / symbol / uri` via the lazy-fetch path
-/// in `backend::metadata::fetch`. The primitive is stateless (does not
-/// depend on the per-turn 60-second window snapshot) so the request
-/// envelope's `snapshot_id` is carried for parallelism with other
-/// primitives but ignored by the handler.
+/// pubkey to its on-chain `name / symbol / uri` via the lazy-fetch
+/// path in `backend::metadata::fetch`. Allowlisted to mints actually
+/// transferred inside the agent's live 60-second window so a request
+/// for an out-of-window pubkey does not authorize an outbound RPC.
 #[derive(Clone, Debug, Default)]
 pub struct GetTokenInfoInputView<'a> {
     /// base58 mint pubkey. Both legacy SPL Token mints (Metaplex PDA
     /// path) and SPL Token-2022 mints with the metadata extension are
-    /// accepted.
+    /// accepted, provided the mint appears in at least one live-window
+    /// edge.
     ///
     /// Field 1: `mint`
     pub mint: &'a str,
@@ -157,6 +157,10 @@ impl<'v> ::buffa::DefaultViewInstance for GetTokenInfoInputView<'v> {
 /// the same shape carries both "found" and "not found" results: when
 /// not found, the four metadata fields are absent and `source_program`
 /// is empty.
+///
+/// Reserved field 7 was a `cached` bool when the primitive was backed
+/// by a ClickHouse cache. Removed when the cache was dropped in favor
+/// of an allowlist + always-fresh shape.
 #[derive(Clone, Debug, Default)]
 pub struct GetTokenInfoOutputView<'a> {
     /// base58 mint pubkey, echoed for caller convenience.
@@ -195,13 +199,6 @@ pub struct GetTokenInfoOutputView<'a> {
     ///
     /// Field 6: `source_program`
     pub source_program: &'a str,
-    /// true iff the response was served from the existing
-    /// `multichain.token_metadata` ClickHouse row (no RPC call this
-    /// request); false when this request triggered a fresh fetch and
-    /// wrote the row.
-    ///
-    /// Field 7: `cached`
-    pub cached: bool,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> GetTokenInfoOutputView<'a> {
@@ -302,16 +299,6 @@ impl<'a> GetTokenInfoOutputView<'a> {
                     }
                     view.source_program = ::buffa::types::borrow_str(&mut cur)?;
                 }
-                7u32 => {
-                    if tag.wire_type() != ::buffa::encoding::WireType::Varint {
-                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
-                            field_number: 7u32,
-                            expected: 0u8,
-                            actual: tag.wire_type() as u8,
-                        });
-                    }
-                    view.cached = ::buffa::types::decode_bool(&mut cur)?;
-                }
                 _ => {
                     ::buffa::encoding::skip_field_depth(tag, &mut cur, depth)?;
                     let span_len = before_tag.len() - cur.len();
@@ -346,7 +333,6 @@ impl<'a> ::buffa::MessageView<'a> for GetTokenInfoOutputView<'a> {
             uri: self.uri.map(|s| s.to_string()),
             update_authority: self.update_authority.map(|s| s.to_string()),
             source_program: self.source_program.to_string(),
-            cached: self.cached,
             __buffa_unknown_fields: self
                 .__buffa_unknown_fields
                 .to_owned()
@@ -381,9 +367,6 @@ impl<'a> ::buffa::ViewEncode<'a> for GetTokenInfoOutputView<'a> {
             size
                 += 1u32
                     + ::buffa::types::string_encoded_len(&self.source_program) as u32;
-        }
-        if self.cached {
-            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
@@ -443,11 +426,6 @@ impl<'a> ::buffa::ViewEncode<'a> for GetTokenInfoOutputView<'a> {
                 )
                 .encode(buf);
             ::buffa::types::encode_string(&self.source_program, buf);
-        }
-        if self.cached {
-            ::buffa::encoding::Tag::new(7u32, ::buffa::encoding::WireType::Varint)
-                .encode(buf);
-            ::buffa::types::encode_bool(self.cached, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
