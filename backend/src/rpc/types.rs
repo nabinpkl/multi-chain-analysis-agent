@@ -8,6 +8,67 @@ pub struct JsonRpcResponse<T> {
     pub error: Option<JsonRpcError>,
 }
 
+/// `getAccountInfo` response. Wraps the per-account state in a context
+/// object that also carries the slot the read was performed at.
+#[derive(Debug, Deserialize)]
+pub struct AccountInfoResponse {
+    /// `null` when the account does not exist at the queried pubkey.
+    pub value: Option<AccountInfoValue>,
+}
+
+/// One account's state as returned by `getAccountInfo`. Fields beyond
+/// what we need (`executable`, `rentEpoch`) are dropped.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountInfoValue {
+    /// base58 pubkey of the program that owns this account. The owner
+    /// determines how to interpret `data`.
+    pub owner: String,
+    /// Native SOL balance held by the account, in lamports.
+    #[serde(default)]
+    pub lamports: u64,
+    /// Account data. With `encoding=jsonParsed` this is either a
+    /// structured object (when the owner is in the RPC's parser
+    /// allowlist, e.g. SPL Token-2022) or a `[base64_string, "base64"]`
+    /// fallthrough for everything else (e.g. Metaplex Token Metadata).
+    pub data: AccountData,
+}
+
+/// Polymorphic `data` field. The RPC returns one of two shapes per the
+/// jsonParsed encoding:
+///
+/// - For programs in its allowlist (System, SPL Token, SPL Token-2022,
+///   Stake, Vote, Address Lookup Table, ComputeBudget, BPF Loader, etc.)
+///   it walks the bytes into a structured object: `{ parsed, program,
+///   space }`.
+/// - For everything else it falls through to a base64 string in a
+///   two-element tuple `[<base64>, "base64"]`.
+///
+/// `serde(untagged)` picks the right variant automatically based on the
+/// JSON shape. The base64 variant comes second because the parsed
+/// variant has stricter shape (object) so serde tries it first.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum AccountData {
+    Parsed(ParsedAccountData),
+    Base64(Vec<String>),
+}
+
+/// `data` shape when the RPC parses the account natively.
+#[derive(Debug, Deserialize)]
+pub struct ParsedAccountData {
+    /// The parsed object. Shape varies by program; opaque `Value` here
+    /// because each owner program has its own layout. Consumers that
+    /// know the owner navigate this themselves.
+    pub parsed: Value,
+    /// Owner-program label, e.g. `"spl-token-2022"`.
+    #[serde(default)]
+    pub program: String,
+    /// Allocated account size in bytes.
+    #[serde(default)]
+    pub space: u64,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct JsonRpcError {
     pub code: i64,

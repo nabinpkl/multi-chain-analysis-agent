@@ -28,6 +28,22 @@ bs58 = "0.5"
 # SDK and its solana_program transitive weight. Schema is stable
 # since 2021; we re-derive only the slice of types we read.
 borsh = { version = "1", features = ["derive"] }
+# Standard base64 codec; used by `metadata::fetch` to decode the
+# base64-encoded `data` field returned by `getAccountInfo` for accounts
+# whose owner program is outside the RPC's `jsonParsed` allowlist
+# (e.g. the Metaplex Token Metadata Program).
+base64 = "0.22"
+# Solana account-address type and PDA derivation. Re-export of the
+# `solana-address` crate; gives us `Pubkey` and
+# `Pubkey::find_program_address` for deriving the Metaplex metadata
+# PDA from a mint pubkey. The `curve25519` feature is required for
+# `find_program_address` (which iterates bumps until finding one whose
+# hash is NOT on the ed25519 curve, ensuring no corresponding private
+# key exists). `sha2` is the hashing dep used inside the same path.
+# Anza-maintained, real-human PRs, passes the AGENTS.md library bar
+# (4.2.0 from 2026-04-07, 7.8M downloads, 234 stars on
+# anza-xyz/solana-sdk).
+solana-pubkey = { version = "4", features = ["curve25519", "sha2"] }
 # `EdgeStore` trait in store/mod.rs needs async fn in trait via async-trait
 # (still the most ergonomic option pre-stable async-fn-in-trait).
 async-trait = "0.1"

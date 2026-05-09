@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tracing::info;
 
 use super::error::RpcError;
-use super::types::{Block, JsonRpcResponse};
+use super::types::{AccountInfoResponse, Block, JsonRpcResponse};
 
 type Limiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
@@ -113,6 +113,32 @@ impl RpcClient {
                     "rewards": false,
                     "commitment": "confirmed",
                     "maxSupportedTransactionVersion": 0
+                }
+            ]),
+        )
+        .await
+    }
+
+    /// Read one account's state by base58 pubkey. Goes through the
+    /// same governor rate limiter as `get_block`, so heavy use of this
+    /// method (e.g. by the agent's `get_token_info` primitive) shares
+    /// the RPC budget with the ingester rather than starving either.
+    ///
+    /// Uses `encoding=jsonParsed` so the RPC returns structured data
+    /// for accounts owned by allowlisted programs (notably Token-2022
+    /// mints with the metadata extension); falls through to base64 for
+    /// everything else (e.g. Metaplex Token Metadata PDAs).
+    pub async fn get_account_info(
+        &self,
+        pubkey: &str,
+    ) -> Result<AccountInfoResponse, RpcError> {
+        self.call(
+            "getAccountInfo",
+            json!([
+                pubkey,
+                {
+                    "encoding": "jsonParsed",
+                    "commitment": "confirmed"
                 }
             ]),
         )
