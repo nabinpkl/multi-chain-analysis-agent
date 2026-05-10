@@ -18,6 +18,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from google.protobuf import json_format
+
 from multichain.wire.shared.v1 import provenance_pb2
 
 from agent_service.policy.crosscheck import ExtractedNumber, UnitClass
@@ -37,6 +39,21 @@ class BindingEntities:
     communities: set[int] = field(default_factory=set)
     has_time_range: bool = False
 
+    def to_dict(self) -> dict:
+        return {
+            "wallets": sorted(self.wallets),
+            "communities": sorted(self.communities),
+            "has_time_range": self.has_time_range,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BindingEntities":
+        return cls(
+            wallets=set(data.get("wallets", [])),
+            communities={int(c) for c in data.get("communities", [])},
+            has_time_range=bool(data.get("has_time_range", False)),
+        )
+
 
 @dataclass(slots=True)
 class PrimitiveBinding:
@@ -49,6 +66,35 @@ class PrimitiveBinding:
     provenance: list[provenance_pb2.ProvenanceRef]
     numbers: list[ExtractedNumber]
     entities: BindingEntities
+
+    def to_dict(self) -> dict:
+        return {
+            "call_id": self.call_id,
+            "primitive": self.primitive,
+            "captured_at_ms": self.captured_at_ms,
+            "provenance": [
+                json_format.MessageToJson(p, preserving_proto_field_name=False)
+                for p in self.provenance
+            ],
+            "numbers": [n.to_dict() for n in self.numbers],
+            "entities": self.entities.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PrimitiveBinding":
+        provenance: list[provenance_pb2.ProvenanceRef] = []
+        for p_json in data.get("provenance", []):
+            ref = provenance_pb2.ProvenanceRef()
+            json_format.Parse(p_json, ref, ignore_unknown_fields=True)
+            provenance.append(ref)
+        return cls(
+            call_id=data["call_id"],
+            primitive=data["primitive"],
+            captured_at_ms=int(data["captured_at_ms"]),
+            provenance=provenance,
+            numbers=[ExtractedNumber.from_dict(n) for n in data.get("numbers", [])],
+            entities=BindingEntities.from_dict(data.get("entities", {})),
+        )
 
 
 class PrimitiveBindingStore:
@@ -102,6 +148,22 @@ class PrimitiveBindingStore:
         Useful for "what primitives did this turn rely on" queries
         from spans or eval probes."""
         return [b.call_id for b in self._bindings]
+
+    def to_dict(self) -> dict:
+        """Serialize the full store to a JSON-shaped dict. Used by
+        `AgentThread.to_state_dict` for on-disk thread persistence."""
+        return {"bindings": [b.to_dict() for b in self._bindings]}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PrimitiveBindingStore":
+        """Reconstruct the store from a `to_dict` payload. Preserves
+        chronological order and the FIFO cap."""
+        store = cls()
+        for b in data.get("bindings", []):
+            store._bindings.append(PrimitiveBinding.from_dict(b))
+        while len(store._bindings) > MAX_THREAD_BINDINGS:
+            store._bindings.popleft()
+        return store
 
 
 def build_binding(

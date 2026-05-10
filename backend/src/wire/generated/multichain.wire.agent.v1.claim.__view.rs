@@ -10,8 +10,12 @@ pub struct ClaimView<'a> {
     ///
     /// Field 1: `id`
     pub id: &'a str,
-    /// Field 2: `session_id`
-    pub session_id: &'a str,
+    /// Conversation handle this claim belongs to. Stamped server-side at
+    /// emission; lets SQL / analytics group claims by conversation
+    /// without re-joining through the emitting turn.
+    ///
+    /// Field 2: `thread_id`
+    pub thread_id: &'a str,
     /// Field 3: `kind`
     pub kind: ::buffa::EnumValue<super::super::ClaimKind>,
     /// One-line plaintext headline.
@@ -113,7 +117,7 @@ impl<'a> ClaimView<'a> {
                             actual: tag.wire_type() as u8,
                         });
                     }
-                    view.session_id = ::buffa::types::borrow_str(&mut cur)?;
+                    view.thread_id = ::buffa::types::borrow_str(&mut cur)?;
                 }
                 3u32 => {
                     if tag.wire_type() != ::buffa::encoding::WireType::Varint {
@@ -294,7 +298,7 @@ impl<'a> ::buffa::MessageView<'a> for ClaimView<'a> {
         use ::buffa::alloc::string::ToString as _;
         super::super::Claim {
             id: self.id.to_string(),
-            session_id: self.session_id.to_string(),
+            thread_id: self.thread_id.to_string(),
             kind: self.kind,
             headline: self.headline.to_string(),
             body_markdown: self.body_markdown.to_string(),
@@ -344,8 +348,8 @@ impl<'a> ::buffa::ViewEncode<'a> for ClaimView<'a> {
         if !self.id.is_empty() {
             size += 1u32 + ::buffa::types::string_encoded_len(&self.id) as u32;
         }
-        if !self.session_id.is_empty() {
-            size += 1u32 + ::buffa::types::string_encoded_len(&self.session_id) as u32;
+        if !self.thread_id.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.thread_id) as u32;
         }
         {
             let val = self.kind.to_i32();
@@ -422,13 +426,13 @@ impl<'a> ::buffa::ViewEncode<'a> for ClaimView<'a> {
                 .encode(buf);
             ::buffa::types::encode_string(&self.id, buf);
         }
-        if !self.session_id.is_empty() {
+        if !self.thread_id.is_empty() {
             ::buffa::encoding::Tag::new(
                     2u32,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )
                 .encode(buf);
-            ::buffa::types::encode_string(&self.session_id, buf);
+            ::buffa::types::encode_string(&self.thread_id, buf);
         }
         {
             let val = self.kind.to_i32();
@@ -705,7 +709,7 @@ impl<'v> ::buffa::DefaultViewInstance for StubMarkerView<'v> {
     }
 }
 /// Input shape the model sends when calling `emit_claim`. Matches
-/// Claim minus the runtime-stamped fields (id, session_id,
+/// Claim minus the runtime-stamped fields (id, thread_id,
 /// emitted_at_ms, policy_verdict, stubs_active are all controlled by
 /// the runtime).
 #[derive(Clone, Debug, Default)]

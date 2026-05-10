@@ -26,7 +26,10 @@ enum ClaimKind {
 message Claim {
   // ULID, sortable by emission order.
   string id = 1;
-  string session_id = 2;
+  // Conversation handle this claim belongs to. Stamped server-side at
+  // emission; lets SQL / analytics group claims by conversation
+  // without re-joining through the emitting turn.
+  string thread_id = 2;
   ClaimKind kind = 3;
   // One-line plaintext headline.
   string headline = 4;
@@ -55,7 +58,7 @@ message StubMarker {
 }
 
 // Input shape the model sends when calling `emit_claim`. Matches
-// Claim minus the runtime-stamped fields (id, session_id,
+// Claim minus the runtime-stamped fields (id, thread_id,
 // emitted_at_ms, policy_verdict, stubs_active are all controlled by
 // the runtime).
 message EmitClaimInput {

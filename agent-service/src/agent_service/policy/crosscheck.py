@@ -50,6 +50,21 @@ class ExtractedNumber:
     unit_class: UnitClass
     hedged: bool = False
 
+    def to_dict(self) -> dict:
+        return {
+            "value": self.value,
+            "unit_class": self.unit_class.value,
+            "hedged": self.hedged,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ExtractedNumber":
+        return cls(
+            value=float(data["value"]),
+            unit_class=UnitClass(data["unit_class"]),
+            hedged=bool(data.get("hedged", False)),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class RetractReason:

@@ -20,21 +20,22 @@ from tests.conftest import DATA_PLANE_BASE
 from tests.fixtures import primitive_responses as canned
 
 
-def _consume_sse(test_app, session_id: str) -> list[dict]:
-    """Drain the SSE stream and return the parsed events."""
+def _post_turn_and_consume(test_app, payload: dict) -> list[dict]:
+    """POST /agent/turn and drain the SSE response body. Returns the
+    parsed events list."""
     events: list[dict] = []
-    with test_app.stream("GET", f"/agent/stream/{session_id}") as resp:
+    with test_app.stream("POST", "/agent/turn", json=payload) as resp:
         assert resp.status_code == 200
         current_event: str | None = None
         for line in resp.iter_lines():
             if line.startswith("event:"):
                 current_event = line.split(":", 1)[1].strip()
             elif line.startswith("data:") and current_event:
-                payload = line.split(":", 1)[1].strip()
+                payload_str = line.split(":", 1)[1].strip()
                 try:
-                    parsed = json.loads(payload)
+                    parsed = json.loads(payload_str)
                 except json.JSONDecodeError:
-                    parsed = {"_raw": payload}
+                    parsed = {"_raw": payload_str}
                 events.append({"event": current_event, "data": parsed})
                 current_event = None
     return events
@@ -42,16 +43,13 @@ def _consume_sse(test_app, session_id: str) -> list[dict]:
 
 def test_turn_begin_called_once_per_turn(test_app, with_happy_path_primitives):
     """Happy path: agent runs, begin hit once, end hit once."""
-    ask = test_app.post(
-        "/agent/ask",
-        json=canned.make_ask_payload("Profile this wallet"),
-    ).json()
-    events = _consume_sse(test_app, ask["sessionId"])
+    events = _post_turn_and_consume(
+        test_app, canned.make_ask_payload("Profile this wallet")
+    )
 
     # Final frame is the `Done` event carrying AgentDone.
     assert events[-1]["event"] == "Done"
     done_payload = events[-1]["data"]
-    assert done_payload["sessionId"] == ask["sessionId"]
     assert isinstance(done_payload.get("elapsedMs", 0), int)
     assert done_payload.get("elapsedMs", 0) >= 0
 
@@ -67,8 +65,7 @@ def test_turn_end_carries_lease_id(test_app, with_happy_path_primitives):
     (binary protobuf-encoded SnapshotEndRequest)."""
     from multichain.wire.shared.v1 import snapshot_pb2 as snap_pb
 
-    ask = test_app.post("/agent/ask", json=canned.make_ask_payload("q")).json()
-    _consume_sse(test_app, ask["sessionId"])
+    _post_turn_and_consume(test_app, canned.make_ask_payload("q"))
 
     requests = with_happy_path_primitives.get_requests()
     end_calls = [r for r in requests if r.url.path == "/turn/end"]
@@ -103,8 +100,7 @@ def test_primitive_calls_carry_lease_id(
         TestModel(call_tools=["wallet_profile"]),
     )
 
-    ask = test_app.post("/agent/ask", json=canned.make_ask_payload("q")).json()
-    _consume_sse(test_app, ask["sessionId"])
+    _post_turn_and_consume(test_app, canned.make_ask_payload("q"))
 
     requests = with_happy_path_primitives.get_requests()
     primitive_calls = [r for r in requests if r.url.path.startswith("/primitive/")]
@@ -142,8 +138,7 @@ def test_turn_end_fires_even_when_agent_raises(test_app, mock_data_plane, monkey
 
     monkeypatch.setattr(app.state.handles.primary_agent, "run", _boom)
 
-    ask = test_app.post("/agent/ask", json=canned.make_ask_payload("q")).json()
-    events = _consume_sse(test_app, ask["sessionId"])
+    events = _post_turn_and_consume(test_app, canned.make_ask_payload("q"))
 
     # Event stream got an Error frame followed by Done.
     error_events = [e for e in events if e["event"] == "Error"]

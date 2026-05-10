@@ -25,8 +25,7 @@ def _make_deps(client: PrimitiveClient, snapshot_id: str = canned.VALID_SNAPSHOT
     return AgentDeps(
         primitive_client=client,
         snapshot_id=snapshot_id,
-        session_id="test-session",
-        session_started_at_ms=0,
+        turn_started_at_ms=0,
         binding_store=PrimitiveBindingStore(),
     )
 

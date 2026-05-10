@@ -16,7 +16,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file multichain/wire/agent/v1/session.proto.
  */
 export const file_multichain_wire_agent_v1_session: GenFile = /*@__PURE__*/
-  fileDesc("CiZtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc2Vzc2lvbi5wcm90bxIYbXVsdGljaGFpbi53aXJlLmFnZW50LnYxIqECCgxBZ2VudFJlcXVlc3QSFQoNdXNlcl9xdWVzdGlvbhgBIAEoCRI2Cgdjb250ZXh0GAIgASgLMiUubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLlZpZXdDb250ZXh0EhYKCXRocmVhZF9pZBgDIAEoCUgAiAEBEjkKCHN3aXRjaGVzGAQgASgLMicubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkFnZW50U3dpdGNoZXMSEgoKc2hvd190cmFjZRgFIAEoCBIQCghydW5fdHlwZRgGIAEoCRI7CgxsbG1fb3ZlcnJpZGUYByABKAsyJS5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuTGxtT3ZlcnJpZGVCDAoKX3RocmVhZF9pZCJKChNBZ2VudFNlc3Npb25TdGFydGVkEhIKCnNlc3Npb25faWQYASABKAkSEQoJdGhyZWFkX2lkGAIgASgJEgwKBHR1cm4YAyABKA0iggEKCUFnZW50RG9uZRISCgpzZXNzaW9uX2lkGAEgASgJEhIKCmVsYXBzZWRfbXMYAiABKA0SEAoIdHJhY2VfaWQYAyABKAkSOwoMcm9sZV90aW1pbmdzGAQgASgLMiUubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLlJvbGVUaW1pbmdzIkYKC1JvbGVUaW1pbmdzEhIKCnByaW1hcnlfbXMYASABKA0SEQoJcG9saWN5X21zGAIgASgNEhAKCGp1ZGdlX21zGAMgASgNYgZwcm90bzM", [file_multichain_wire_agent_v1_entity, file_multichain_wire_agent_v1_llm, file_multichain_wire_agent_v1_switches]);
+  fileDesc("CiZtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc2Vzc2lvbi5wcm90bxIYbXVsdGljaGFpbi53aXJlLmFnZW50LnYxIqECCgxBZ2VudFJlcXVlc3QSFQoNdXNlcl9xdWVzdGlvbhgBIAEoCRI2Cgdjb250ZXh0GAIgASgLMiUubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLlZpZXdDb250ZXh0EhYKCXRocmVhZF9pZBgDIAEoCUgAiAEBEjkKCHN3aXRjaGVzGAQgASgLMicubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkFnZW50U3dpdGNoZXMSEgoKc2hvd190cmFjZRgFIAEoCBIQCghydW5fdHlwZRgGIAEoCRI7CgxsbG1fb3ZlcnJpZGUYByABKAsyJS5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuTGxtT3ZlcnJpZGVCDAoKX3RocmVhZF9pZCJuCglBZ2VudERvbmUSEgoKZWxhcHNlZF9tcxgBIAEoDRIQCgh0cmFjZV9pZBgCIAEoCRI7Cgxyb2xlX3RpbWluZ3MYAyABKAsyJS5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuUm9sZVRpbWluZ3MiRgoLUm9sZVRpbWluZ3MSEgoKcHJpbWFyeV9tcxgBIAEoDRIRCglwb2xpY3lfbXMYAiABKA0SEAoIanVkZ2VfbXMYAyABKA1iBnByb3RvMw", [file_multichain_wire_agent_v1_entity, file_multichain_wire_agent_v1_llm, file_multichain_wire_agent_v1_switches]);
 
 /**
  * User question + ViewContext. `thread_id` is None on the first
@@ -88,38 +88,6 @@ export const AgentRequestSchema: GenMessage<AgentRequest> = /*@__PURE__*/
   messageDesc(file_multichain_wire_agent_v1_session, 0);
 
 /**
- * Returned synchronously from POST /agent/ask. `session_id` is
- * per-turn (drives the SSE GET, ledger row group). `thread_id`
- * is the persistent conversation handle. `turn` is 0 on the first
- * turn, increments on follow-ups.
- *
- * @generated from message multichain.wire.agent.v1.AgentSessionStarted
- */
-export type AgentSessionStarted = Message<"multichain.wire.agent.v1.AgentSessionStarted"> & {
-  /**
-   * @generated from field: string session_id = 1;
-   */
-  sessionId: string;
-
-  /**
-   * @generated from field: string thread_id = 2;
-   */
-  threadId: string;
-
-  /**
-   * @generated from field: uint32 turn = 3;
-   */
-  turn: number;
-};
-
-/**
- * Describes the message multichain.wire.agent.v1.AgentSessionStarted.
- * Use `create(AgentSessionStartedSchema)` to create a new message.
- */
-export const AgentSessionStartedSchema: GenMessage<AgentSessionStarted> = /*@__PURE__*/
-  messageDesc(file_multichain_wire_agent_v1_session, 1);
-
-/**
  * Final SSE event payload. Emitted as the `done` event by the SSE
  * handler. `elapsed_ms` is u32 (caps at ~50 days). `trace_id` is the
  * 32-hex-char OTel trace id for this turn (Ship 1 of agent-
@@ -140,22 +108,17 @@ export const AgentSessionStartedSchema: GenMessage<AgentSessionStarted> = /*@__P
  */
 export type AgentDone = Message<"multichain.wire.agent.v1.AgentDone"> & {
   /**
-   * @generated from field: string session_id = 1;
-   */
-  sessionId: string;
-
-  /**
-   * @generated from field: uint32 elapsed_ms = 2;
+   * @generated from field: uint32 elapsed_ms = 1;
    */
   elapsedMs: number;
 
   /**
-   * @generated from field: string trace_id = 3;
+   * @generated from field: string trace_id = 2;
    */
   traceId: string;
 
   /**
-   * @generated from field: multichain.wire.agent.v1.RoleTimings role_timings = 4;
+   * @generated from field: multichain.wire.agent.v1.RoleTimings role_timings = 3;
    */
   roleTimings?: RoleTimings | undefined;
 };
@@ -165,7 +128,7 @@ export type AgentDone = Message<"multichain.wire.agent.v1.AgentDone"> & {
  * Use `create(AgentDoneSchema)` to create a new message.
  */
 export const AgentDoneSchema: GenMessage<AgentDone> = /*@__PURE__*/
-  messageDesc(file_multichain_wire_agent_v1_session, 2);
+  messageDesc(file_multichain_wire_agent_v1_session, 1);
 
 /**
  * Per-role wall-time tally for one turn. Values are integer
@@ -196,5 +159,5 @@ export type RoleTimings = Message<"multichain.wire.agent.v1.RoleTimings"> & {
  * Use `create(RoleTimingsSchema)` to create a new message.
  */
 export const RoleTimingsSchema: GenMessage<RoleTimings> = /*@__PURE__*/
-  messageDesc(file_multichain_wire_agent_v1_session, 3);
+  messageDesc(file_multichain_wire_agent_v1_session, 2);
 

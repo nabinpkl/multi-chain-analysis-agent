@@ -2,24 +2,25 @@
 
 Routes:
 - `GET  /health` -> `{"status": "ok"}`
-- `POST /agent/ask` -> `AgentSessionStarted` (proto canonical JSON;
-  stashes pending session)
-- `GET  /agent/stream/{session_id}` -> SSE stream of all 9 frame
+- `POST /agent/turn` -> `text/event-stream` of the 9 SSE frame
   variants (Claim, NarrativeWithRefs, NarrativeRetracted, Progress,
-  Error, Done, NoMovement, ChangedSince, GatePath)
+  Error, Done, NoMovement, ChangedSince, GatePath). Returns 404 when
+  the request carries a `thread_id` that no longer exists (stale
+  localStorage on the client; frontend retries without).
 
-Two-call handoff matches the Rust pattern. Frontend wiring is one
-env-var (`NEXT_PUBLIC_AGENT_URL=http://localhost:8003`).
+Single streaming POST; the request body is parsed, the loop driver
+runs, and its events stream back as the response body. Frontend
+wiring is one env-var (`NEXT_PUBLIC_AGENT_URL=http://localhost:8003`).
 
 Wire format per AGENTS.md "Wire format per hop": browser hops carry
 proto canonical JSON. Inbound `AgentRequest` parses via
-`json_format.Parse`; outbound responses serialize via
+`json_format.Parse`; outbound SSE event `data:` payloads serialize via
 `json_format.MessageToJson(preserving_proto_field_name=False)` for
 camelCase field names.
 
 Loop orchestration lives in `loop_driver.run_turn`; this module
-handles HTTP wiring, session handoff, lifespan setup of the long-lived
-clients (Pydantic AI agents, primitive client, thread registry). The
+handles HTTP wiring + lifespan setup of the long-lived clients
+(Pydantic AI agents, primitive client, thread registry). The
 prior bespoke `agent_ledger` table was deleted in Ship 1 of the
 agent-observability foundation (ADR 13); OTel spans are now the
 single source of truth, fanned out by the otel-collector to CH-A's
@@ -30,15 +31,14 @@ from __future__ import annotations
 
 import asyncio
 import os
-import secrets
 import time
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 import structlog
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from google.protobuf import json_format
 from sse_starlette.sse import EventSourceResponse
@@ -54,22 +54,6 @@ from agent_service.repeat_detector import build_repeat_agent
 from agent_service.thread_state import ThreadRegistry
 
 log = structlog.get_logger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# In-memory pending-session map for /agent/ask -> /agent/stream handoff.
-# Per-turn, single-consumer; the handler pops on read.
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class PendingSession:
-    request: sess_pb.AgentRequest
-    thread_id: str
-    session_started_at_ms: int
-
-
-_PENDING: dict[str, PendingSession] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +74,12 @@ async def lifespan(app: FastAPI):
     init_otel("multichain-agent")
 
     primitive_client = PrimitiveClient(base_url=base_url)
-    threads = ThreadRegistry()
+    # ThreadRegistry persists `<thread_root>/threads/<thread_id>/state.json`
+    # on every turn end. `THREAD_ROOT` defaults to a local `.cache`
+    # directory so the service runs fine outside docker; in docker the
+    # compose file bind-mounts a real volume into `/var/threads`.
+    thread_root = Path(os.environ.get("THREAD_ROOT", "./.cache/threads"))
+    threads = ThreadRegistry(thread_root=thread_root)
 
     handles = LoopHandles(
         primary_agent=build_agent(),
@@ -149,14 +138,6 @@ else:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _proto_to_camel_json(msg) -> str:
-    """Serialize a proto message to canonical JSON with camelCase field
-    names, no indentation, no whitespace."""
-    return json_format.MessageToJson(
-        msg, preserving_proto_field_name=False, indent=None
-    )
 
 
 def _validate_request(req: sess_pb.AgentRequest) -> None:
@@ -342,81 +323,77 @@ async def openrouter_models() -> dict:
         return {"reachable": False, "models": []}
 
 
-@app.post("/agent/ask")
-async def ask(request: Request) -> Response:
-    """Stash the request under a fresh session_id; the SSE handler
-    picks it up and runs the loop driver. Inbound is proto canonical
-    JSON `AgentRequest`; outbound is proto canonical JSON
-    `AgentSessionStarted`."""
+@app.post("/agent/turn")
+async def agent_turn(request: Request) -> EventSourceResponse:
+    """Single streaming POST. The request body is a proto canonical
+    JSON `AgentRequest`; the response body is `text/event-stream`
+    carrying every SSE frame variant the loop driver emits.
+
+    Thread lifecycle:
+      * `thread_id` absent  mint a fresh UUID, run as turn 0.
+      * `thread_id` present + thread exists (memory or disk)  run as
+        the next turn in that conversation.
+      * `thread_id` present + thread does NOT exist  HTTP 404. The
+        frontend recovers by clearing its localStorage entry and
+        retrying without `thread_id`.
+
+    No per-POST handoff token (the prior `session_id` / `_PENDING`
+    pattern). The persistent identity is the conversation, which is
+    `thread_id`; per-turn correlation is `f"{thread_id}:{turn}"` and
+    lives inside the trace, not on the wire.
+    """
     raw = await request.body()
     req = sess_pb.AgentRequest()
     try:
         json_format.Parse(raw, req, ignore_unknown_fields=True)
     except json_format.ParseError as e:
-        raise HTTPException(status_code=400, detail=f"invalid AgentRequest: {e}") from None
+        raise HTTPException(
+            status_code=400, detail=f"invalid AgentRequest: {e}"
+        ) from None
 
     _validate_request(req)
 
-    session_id = secrets.token_urlsafe(16)
-    thread_id = req.thread_id or str(uuid.uuid4())
-
-    # Look up the prospective thread to surface the per-turn count back
-    # in the AgentSessionStarted response. ThreadRegistry doesn't yet
-    # have an entry; we reflect the caller's view (turn count is the
-    # turn this request will run as).
-    thread = request.app.state.handles.threads.get(thread_id)
-    turn = thread.turn_count if thread is not None else 0
-
-    _PENDING[session_id] = PendingSession(
-        request=req,
-        thread_id=thread_id,
-        session_started_at_ms=int(time.time() * 1000),
-    )
-    log.info(
-        "agent_ask",
-        session_id=session_id,
-        thread_id=thread_id,
-        turn=turn,
-        focus_kind=req.context.focus.WhichOneof("entity") if req.context.HasField("focus") else None,
-    )
-    started = sess_pb.AgentSessionStarted(
-        session_id=session_id, thread_id=thread_id, turn=turn
-    )
-    return Response(
-        content=_proto_to_camel_json(started),
-        media_type="application/json",
-    )
-
-
-@app.get("/agent/stream/{session_id}")
-async def stream(session_id: str, request: Request) -> EventSourceResponse:
-    """SSE stream that runs one turn through the loop driver and emits
-    every frame variant."""
-    pending = _PENDING.pop(session_id, None)
-    if pending is None:
-        raise HTTPException(status_code=404, detail="session not found or already consumed")
-
     handles: LoopHandles = request.app.state.handles
+
+    # Validate thread_id: present + unknown -> 404 so the client can
+    # transparently retry without it (the frontend handles 404 by
+    # clearing localStorage and retrying with thread_id absent).
+    if req.thread_id and not handles.threads.exists(req.thread_id):
+        raise HTTPException(status_code=404, detail="thread_id not found")
+
+    thread_id = req.thread_id or str(uuid.uuid4())
+    turn_started_at_ms = int(time.time() * 1000)
+
+    log.info(
+        "agent_turn_start",
+        thread_id=thread_id,
+        focus_kind=req.context.focus.WhichOneof("entity")
+        if req.context.HasField("focus")
+        else None,
+    )
 
     async def event_iter():
         try:
             async for frame in run_turn(
                 handles=handles,
-                request=pending.request,
-                session_id=session_id,
-                thread_id=pending.thread_id,
-                session_started_at_ms=pending.session_started_at_ms,
+                request=req,
+                thread_id=thread_id,
+                turn_started_at_ms=turn_started_at_ms,
             ):
                 yield frame
         except asyncio.CancelledError:
-            log.info("agent_stream_cancelled", session_id=session_id)
+            log.info("agent_stream_cancelled", thread_id=thread_id)
             raise
 
     # Critical SSE headers: nginx / cloudflared / browsers won't buffer
-    # if these are set. Plan risk #1.
+    # if these are set. `X-Mca-Thread-Id` lets the frontend learn the
+    # server-minted thread_id when the client posted with no id, so
+    # it can persist to localStorage without parsing a synthetic
+    # bootstrap event off the stream.
     headers = {
         "Cache-Control": "no-cache",
         "X-Accel-Buffering": "no",
         "Connection": "keep-alive",
+        "X-Mca-Thread-Id": thread_id,
     }
     return EventSourceResponse(event_iter(), headers=headers)

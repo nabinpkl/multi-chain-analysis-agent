@@ -1,12 +1,12 @@
 """Invokes the production agent over HTTP and captures the OTel
 trace id of the resulting turn.
 
-Eval-driven invocation goes through the same `/agent/ask` +
-`/agent/stream/{session_id}` path that production users hit. The
-runner sets `runType="eval"` on every request so the resulting
-`mcae.turn` span carries `mcae.run.type=eval`, letting analytics
-queries discriminate eval volume from real-user traffic in the
-shared `otel.otel_traces` table.
+Eval-driven invocation hits the same `POST /agent/turn` streaming
+endpoint that production users hit. The runner sets `runType="eval"`
+on every request so the resulting `mcae.turn` span carries
+`mcae.run.type=eval`, letting analytics queries discriminate eval
+volume from real-user traffic in the shared `otel.otel_traces`
+table.
 
 The trace id is delivered by the agent service inside the
 `AgentDone` SSE frame (added in Ship 1 of agent-observability,
@@ -41,14 +41,14 @@ class AgentRun:
     """
 
     trace_id: str
-    session_id: str
+    thread_id: str
     elapsed_ms: int
     started_at: datetime
     finished_at: datetime
 
 
 async def _consume_until_done(
-    stream_resp: httpx.Response, session_id: str
+    stream_resp: httpx.Response, thread_id: str
 ) -> dict:
     """Iterate the SSE stream until the AgentDone frame arrives.
     Returns the frame dict. Caller is responsible for the timeout
@@ -67,7 +67,7 @@ async def _consume_until_done(
             return frame
 
     raise RuntimeError(
-        f"agent stream for session {session_id} closed without "
+        f"agent stream for thread {thread_id} closed without "
         "an AgentDone frame; no trace id captured"
     )
 
@@ -79,8 +79,8 @@ async def invoke_agent_get_trace_id(
     http: httpx.AsyncClient,
     stream_timeout_s: float = 180.0,
 ) -> AgentRun:
-    """POST `inputs` to /agent/ask, follow the SSE stream until the
-    AgentDone frame arrives, return the trace id.
+    """POST `inputs` to /agent/turn, follow the streaming SSE response
+    until the AgentDone frame arrives, return the trace id.
 
     `inputs` is shallow-copied with `runType=eval` set if not
     already present. Production traffic doesn't set runType;
@@ -105,21 +105,21 @@ async def invoke_agent_get_trace_id(
     inputs.setdefault("runType", "eval")
     started = datetime.now(timezone.utc)
 
-    ask_resp = await http.post(f"{base_url}/agent/ask", json=inputs)
-    ask_resp.raise_for_status()
-    session_id = ask_resp.json()["sessionId"]
-
-    stream_url = f"{base_url}/agent/stream/{session_id}"
-    async with http.stream("GET", stream_url) as stream_resp:
+    async with http.stream("POST", f"{base_url}/agent/turn", json=inputs) as stream_resp:
         stream_resp.raise_for_status()
+        # The server echoes the (possibly minted) thread_id in a
+        # response header so the runner can identify the turn for
+        # logging even though the AgentDone frame no longer carries
+        # session_id on the wire.
+        thread_id = stream_resp.headers.get("x-mca-thread-id", "")
         try:
             frame = await asyncio.wait_for(
-                _consume_until_done(stream_resp, session_id),
+                _consume_until_done(stream_resp, thread_id),
                 timeout=stream_timeout_s,
             )
         except asyncio.TimeoutError as e:
             raise TimeoutError(
-                f"agent stream for session {session_id} did not emit "
+                f"agent stream for thread {thread_id} did not emit "
                 f"AgentDone within {stream_timeout_s:.0f}s; the agent "
                 "is likely stuck (provider throttling? gate hang?). "
                 "Increase stream_timeout_s if this is a known long turn."
@@ -128,14 +128,14 @@ async def invoke_agent_get_trace_id(
     trace_id = frame["traceId"]
     if not trace_id:
         raise RuntimeError(
-            f"agent for session {session_id} returned an empty traceId; "
+            f"agent for thread {thread_id} returned an empty traceId; "
             "OTel emission is disabled or broken. Eval cannot probe a "
             "trace that does not exist; check OTEL_SDK_DISABLED and "
             "the otel-collector connection."
         )
     return AgentRun(
         trace_id=trace_id,
-        session_id=session_id,
+        thread_id=thread_id,
         elapsed_ms=int(frame["elapsedMs"]),
         started_at=started,
         finished_at=datetime.now(timezone.utc),

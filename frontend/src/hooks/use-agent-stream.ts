@@ -6,9 +6,7 @@ import { create, fromJsonString, toJsonString } from "@bufbuild/protobuf";
 import {
   AgentDoneSchema,
   AgentRequestSchema,
-  AgentSessionStartedSchema,
   type AgentRequest,
-  type AgentSessionStarted,
 } from "@/lib/wire/multichain/wire/agent/v1/session_pb";
 import {
   ClaimSchema,
@@ -30,6 +28,12 @@ import {
 } from "@/lib/wire/multichain/wire/agent/v1/narrative_pb";
 import { type ProvenanceRef } from "@/lib/wire/multichain/wire/shared/v1/provenance_pb";
 import { useRoleTimings } from "@/stores/use-role-timings";
+import { parseSseStream } from "@/lib/sse-parser";
+import {
+  clearThreadId,
+  getThreadId,
+  setThreadId as persistThreadId,
+} from "@/lib/session";
 
 import type { ProgressEvent } from "@/components/agent/progress-format";
 
@@ -49,10 +53,10 @@ function agentUrl(): string {
 export type AgentStatus =
   | { kind: "idle" }
   | { kind: "sending" }
-  | { kind: "streaming"; sessionId: string }
+  | { kind: "streaming"; threadId: string }
   | {
       kind: "done";
-      sessionId: string;
+      threadId: string;
       elapsedMs: number;
       /**
        * 32-hex-char OTel trace id stamped on the Done frame by the
@@ -122,26 +126,44 @@ export interface ChatTurn {
 }
 
 /**
- * Owns the agent thread for the lifetime of the page.
+ * Owns the agent thread across the browser's lifetime (not just the
+ * tab session).
  *
- * Per ship 1.5: each `ask()` either starts a fresh thread (no
- * `currentThreadId`) or continues an existing one (echoes the stored
- * id). The backend mints/echoes a `threadId` on the POST response;
- * we keep it across turns. `reset()` clears it ("new" button); page
- * refresh drops it (component unmount).
+ * `threadId` lives in `localStorage["mca:threadId"]` so a page refresh
+ * resumes the same conversation; the server reads its persisted
+ * `state.json` and the next turn carries prior `message_history`,
+ * `claims`, and `bindings`. `reset()` clears the local thread_id
+ * ("new chat" button). On a 404 from the server (stale thread, e.g.
+ * because backing state.json was reaped), we clear our thread_id and
+ * retry the POST once so the user transparently lands on a fresh
+ * thread.
  */
 export function useAgentStream() {
   const [status, setStatus] = useState<AgentStatus>({ kind: "idle" });
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
+  // threadId state mirrors localStorage; SSR-guarded initial null,
+  // hydrated on mount via the useEffect below. Writes go through
+  // `setLocalThreadId` which updates both this state and localStorage
+  // so the next page load picks the same id up.
   const [threadId, setThreadId] = useState<string | null>(null);
-  const [turn, setTurn] = useState<number>(0);
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Hydrate from localStorage after mount (SSR-safe).
+  useEffect(() => {
+    const id = getThreadId();
+    if (id) setThreadId(id);
+  }, []);
+
+  const setLocalThreadId = useCallback((id: string) => {
+    setThreadId(id);
+    persistThreadId(id);
+  }, []);
 
   const cleanup = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
     }
   }, []);
 
@@ -153,7 +175,7 @@ export function useAgentStream() {
     setTurns([]);
     setProgress(null);
     setThreadId(null);
-    setTurn(0);
+    clearThreadId();
   }, [cleanup]);
 
   const ask = useCallback(
@@ -182,274 +204,11 @@ export function useAgentStream() {
       setTurns((prev) => [...prev, newTurn]);
       setStatus({ kind: "sending" });
 
-      const requestWithThread = create(AgentRequestSchema, {
-        ...request,
-        threadId: threadId ?? undefined,
-      });
-
-      let sessionStart: AgentSessionStarted;
-      try {
-        const res = await fetch(`${agentUrl()}/agent/ask`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: toJsonString(AgentRequestSchema, requestWithThread),
-        });
-        if (!res.ok) {
-          const message = await res.text();
-          markTurnError(turnId, `ask failed: ${res.status} ${message}`);
-          setStatus({
-            kind: "error",
-            message: `ask failed: ${res.status} ${message}`,
-          });
-          return;
-        }
-        sessionStart = fromJsonString(AgentSessionStartedSchema, await res.text());
-      } catch (e) {
-        const msg = `ask failed: ${e instanceof Error ? e.message : String(e)}`;
-        markTurnError(turnId, msg);
-        setStatus({ kind: "error", message: msg });
-        return;
-      }
-
-      const sessionId = sessionStart.sessionId;
-      setThreadId(sessionStart.threadId);
-      setTurn(sessionStart.turn);
-      setStatus({ kind: "streaming", sessionId });
-
-      const es = new EventSource(`${agentUrl()}/agent/stream/${sessionId}`);
-      eventSourceRef.current = es;
-
-      es.addEventListener("Claim", (ev) => {
-        const data = (ev as MessageEvent<string>).data;
-        try {
-          const claim = fromJsonString(ClaimSchema, data);
-          setTurns((prev) => {
-            const idx = prev.findIndex((t) => t.id === turnId);
-            if (idx === -1) return prev;
-            const next = prev.slice();
-            if (next[idx].claim === null) {
-              next[idx] = { ...next[idx], claim };
-            }
-            return next;
-          });
-        } catch {
-          // skip malformed payloads in v0
-        }
-      });
-
-      es.addEventListener("Progress", (ev) => {
-        const data = (ev as MessageEvent<string>).data;
-        try {
-          // Progress is a tiny wire shape ({phase, detail}); the
-          // ProgressEvent UI type accepts any string phase, so a
-          // direct JSON.parse is fine here.
-          const evt = JSON.parse(data) as ProgressEvent;
-          setProgress(evt);
-        } catch {
-          // ignore
-        }
-      });
-
-      es.addEventListener("Narrative", (ev) => {
-        const data = (ev as MessageEvent<string>).data;
-        try {
-          const parsed = fromJsonString(NarrativeWithRefsSchema, data);
-          const text = parsed.text ?? "";
-          const provenance = parsed.provenance ?? [];
-          if (!text) return;
-          setTurns((prev) => {
-            const idx = prev.findIndex((t) => t.id === turnId);
-            if (idx === -1) return prev;
-            const next = prev.slice();
-            // First Narrative wins for a turn.
-            if (next[idx].narrative === null) {
-              next[idx] = {
-                ...next[idx],
-                narrative: text,
-                narrativeProvenance: provenance,
-              };
-            }
-            return next;
-          });
-        } catch {
-          // skip malformed payloads
-        }
-      });
-
-      es.addEventListener("NarrativeRetracted", (ev) => {
-        const data = (ev as MessageEvent<string>).data;
-        try {
-          const parsed = fromJsonString(NarrativeRetractedSchema, data);
-          const text = parsed.text ?? "";
-          const reason = parsed.reason || "Interpretation withheld.";
-          const debugReason = parsed.debugReason ?? null;
-          if (!text) return;
-          setTurns((prev) => {
-            const idx = prev.findIndex((t) => t.id === turnId);
-            if (idx === -1) return prev;
-            const next = prev.slice();
-            if (next[idx].narrative === null) {
-              next[idx] = {
-                ...next[idx],
-                narrative: text,
-                narrativeRetractedReason: reason,
-                narrativeRetractedDebug: debugReason,
-              };
-            }
-            return next;
-          });
-        } catch {
-          // skip malformed payloads
-        }
-      });
-
-      es.addEventListener("Error", (ev) => {
-        const data = (ev as MessageEvent<string>).data;
-        let msg = "Couldn't produce a valid response. Try rephrasing or try again.";
-        let debug: string | null = null;
-        try {
-          // Error frames may also be naive JSON {"error","kind"}
-          // (Python proxies the Rust error shape). Tolerate both.
-          const parsed = JSON.parse(data) as {
-            message?: string;
-            debugMessage?: string;
-            error?: string;
-          };
-          if (parsed.message) msg = parsed.message;
-          else if (parsed.error) msg = parsed.error;
-          if (parsed.debugMessage) debug = parsed.debugMessage;
-        } catch {
-          // keep defaults
-        }
-        markTurnError(turnId, msg, debug);
-      });
-
-      es.addEventListener("GatePath", (ev) => {
-        const data = (ev as MessageEvent<string>).data;
-        try {
-          const path = fromJsonString(GatePathSchema, data);
-          setTurns((prev) => {
-            const idx = prev.findIndex((t) => t.id === turnId);
-            if (idx === -1) return prev;
-            const next = prev.slice();
-            next[idx] = {
-              ...next[idx],
-              gatePaths: [...next[idx].gatePaths, path],
-            };
-            return next;
-          });
-        } catch {
-          // skip malformed payloads
-        }
-      });
-
-      es.addEventListener("NoMovement", (ev) => {
-        const data = (ev as MessageEvent<string>).data;
-        try {
-          const payload = fromJsonString(NoMovementSchema, data);
-          setTurns((prev) => {
-            const idx = prev.findIndex((t) => t.id === turnId);
-            if (idx === -1) return prev;
-            const next = prev.slice();
-            if (next[idx].diffReply === null) {
-              next[idx] = {
-                ...next[idx],
-                diffReply: { kind: "no-movement", payload },
-              };
-            }
-            return next;
-          });
-        } catch {
-          // skip malformed payloads
-        }
-      });
-
-      es.addEventListener("ChangedSince", (ev) => {
-        const data = (ev as MessageEvent<string>).data;
-        try {
-          const payload = fromJsonString(ChangedSinceSchema, data);
-          setTurns((prev) => {
-            const idx = prev.findIndex((t) => t.id === turnId);
-            if (idx === -1) return prev;
-            const next = prev.slice();
-            if (next[idx].diffReply === null) {
-              next[idx] = {
-                ...next[idx],
-                diffReply: { kind: "changed-since", payload },
-              };
-            }
-            return next;
-          });
-        } catch {
-          // skip malformed payloads
-        }
-      });
-
-      es.addEventListener("Done", (ev) => {
-        const data = (ev as MessageEvent<string>).data;
-        try {
-          const done = fromJsonString(AgentDoneSchema, data);
-          const timings = {
-            // proto3 default for an unset sub-message is a
-            // zero-filled instance, so reading the fields is
-            // safe even when the backend omits the message.
-            primaryMs: done.roleTimings?.primaryMs ?? 0,
-            policyMs: done.roleTimings?.policyMs ?? 0,
-            judgeMs: done.roleTimings?.judgeMs ?? 0,
-          };
-          // Publish timings to the dedicated store so the
-          // sibling ModelsPanel can read without prop-drilling
-          // through the agent sheet.
-          useRoleTimings.getState().setLatest(timings);
-          setStatus({
-            kind: "done",
-            sessionId: done.sessionId,
-            elapsedMs: done.elapsedMs,
-            traceId: done.traceId ?? "",
-            roleTimings: timings,
-          });
-        } catch {
-          setStatus({
-            kind: "done",
-            sessionId,
-            elapsedMs: 0,
-            traceId: "",
-            roleTimings: { primaryMs: 0, policyMs: 0, judgeMs: 0 },
-          });
-        }
-        // Defensive: if the loop ended without emitting anything,
-        // mark the turn errored so the spinner doesn't hang.
-        setTurns((prev) => {
-          const idx = prev.findIndex((t) => t.id === turnId);
-          if (idx === -1) return prev;
-          const t = prev[idx];
-          if (
-            t.claim !== null ||
-            t.narrative !== null ||
-            t.error !== null ||
-            t.diffReply !== null
-          ) {
-            return prev;
-          }
-          const next = prev.slice();
-          next[idx] = { ...t, error: "agent ended without a response" };
-          return next;
-        });
-        cleanup();
-      });
-
-      es.onerror = () => {
-        setStatus((prev) => {
-          if (prev.kind === "streaming") {
-            markTurnError(turnId, "stream interrupted");
-            return { kind: "error", message: "stream interrupted" };
-          }
-          return prev;
-        });
-        cleanup();
-      };
-
-      function markTurnError(id: string, msg: string, debug: string | null = null) {
+      const markTurnError = (
+        id: string,
+        msg: string,
+        debug: string | null = null,
+      ) => {
         setTurns((prev) => {
           const idx = prev.findIndex((t) => t.id === id);
           if (idx === -1) return prev;
@@ -459,10 +218,270 @@ export function useAgentStream() {
           }
           return next;
         });
+      };
+
+      // Build the request body, optionally carrying the saved
+      // thread_id so the server resumes the conversation.
+      const buildBody = (tid: string | null): string => {
+        const req = create(AgentRequestSchema, {
+          ...request,
+          threadId: tid ?? undefined,
+        });
+        return toJsonString(AgentRequestSchema, req);
+      };
+
+      // Open the streaming POST. On a 404 (stale thread) clear local
+      // thread_id and retry once; on a true error mark the turn and
+      // bail.
+      let resp: Response;
+      try {
+        const controller = new AbortController();
+        abortRef.current = controller;
+        resp = await fetch(`${agentUrl()}/agent/turn`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: buildBody(threadId),
+          signal: controller.signal,
+        });
+        if (resp.status === 404 && threadId) {
+          // Stale thread id (server reaped its state.json or never
+          // saw this id). Retry once without it so the server mints
+          // a fresh thread; the user just sees "starting fresh."
+          clearThreadId();
+          setThreadId(null);
+          resp = await fetch(`${agentUrl()}/agent/turn`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: buildBody(null),
+            signal: controller.signal,
+          });
+        }
+        if (!resp.ok || !resp.body) {
+          const message = await resp.text().catch(() => `${resp.status}`);
+          markTurnError(turnId, `turn failed: ${resp.status} ${message}`);
+          setStatus({
+            kind: "error",
+            message: `turn failed: ${resp.status} ${message}`,
+          });
+          cleanup();
+          return;
+        }
+      } catch (e) {
+        const msg = `turn failed: ${e instanceof Error ? e.message : String(e)}`;
+        markTurnError(turnId, msg);
+        setStatus({ kind: "error", message: msg });
+        cleanup();
+        return;
+      }
+
+      // Server echoes the (possibly minted) thread_id in a response
+      // header so we can persist before draining the SSE body.
+      const serverThreadId = resp.headers.get("x-mca-thread-id");
+      if (serverThreadId) {
+        setLocalThreadId(serverThreadId);
+      }
+      const activeThreadId = serverThreadId ?? threadId ?? "";
+      setStatus({ kind: "streaming", threadId: activeThreadId });
+
+      // Drain the SSE stream until the upstream closes (Done frame)
+      // or the AbortController fires (cleanup / new turn / unmount).
+      const updateTurn = (mut: (t: ChatTurn) => ChatTurn) => {
+        setTurns((prev) => {
+          const idx = prev.findIndex((t) => t.id === turnId);
+          if (idx === -1) return prev;
+          const next = prev.slice();
+          next[idx] = mut(next[idx]);
+          return next;
+        });
+      };
+
+      try {
+        for await (const evt of parseSseStream(resp.body)) {
+          dispatchEvent(evt.event, evt.data);
+        }
+      } catch (e) {
+        if ((e as { name?: string })?.name === "AbortError") {
+          // User-initiated cancel; status is already updated.
+          return;
+        }
+        const msg = `stream interrupted: ${e instanceof Error ? e.message : String(e)}`;
+        markTurnError(turnId, msg);
+        setStatus({ kind: "error", message: msg });
+        cleanup();
+        return;
+      }
+
+      function dispatchEvent(name: string, data: string) {
+        if (name === "Claim") {
+          try {
+            const claim = fromJsonString(ClaimSchema, data);
+            updateTurn((t) => (t.claim === null ? { ...t, claim } : t));
+          } catch {
+            // skip malformed payloads in v0
+          }
+          return;
+        }
+        if (name === "Progress") {
+          try {
+            const evt = JSON.parse(data) as ProgressEvent;
+            setProgress(evt);
+          } catch {
+            // ignore
+          }
+          return;
+        }
+        if (name === "Narrative") {
+          try {
+            const parsed = fromJsonString(NarrativeWithRefsSchema, data);
+            const text = parsed.text ?? "";
+            const provenance = parsed.provenance ?? [];
+            if (!text) return;
+            updateTurn((t) =>
+              t.narrative === null
+                ? { ...t, narrative: text, narrativeProvenance: provenance }
+                : t,
+            );
+          } catch {
+            // skip malformed payloads
+          }
+          return;
+        }
+        if (name === "NarrativeRetracted") {
+          try {
+            const parsed = fromJsonString(NarrativeRetractedSchema, data);
+            const text = parsed.text ?? "";
+            const reason = parsed.reason || "Interpretation withheld.";
+            const debugReason = parsed.debugReason ?? null;
+            if (!text) return;
+            updateTurn((t) =>
+              t.narrative === null
+                ? {
+                    ...t,
+                    narrative: text,
+                    narrativeRetractedReason: reason,
+                    narrativeRetractedDebug: debugReason,
+                  }
+                : t,
+            );
+          } catch {
+            // skip malformed payloads
+          }
+          return;
+        }
+        if (name === "Error") {
+          let msg =
+            "Couldn't produce a valid response. Try rephrasing or try again.";
+          let debug: string | null = null;
+          try {
+            const parsed = JSON.parse(data) as {
+              message?: string;
+              debugMessage?: string;
+              error?: string;
+            };
+            if (parsed.message) msg = parsed.message;
+            else if (parsed.error) msg = parsed.error;
+            if (parsed.debugMessage) debug = parsed.debugMessage;
+          } catch {
+            // keep defaults
+          }
+          markTurnError(turnId, msg, debug);
+          return;
+        }
+        if (name === "GatePath") {
+          try {
+            const path = fromJsonString(GatePathSchema, data);
+            updateTurn((t) => ({ ...t, gatePaths: [...t.gatePaths, path] }));
+          } catch {
+            // skip malformed payloads
+          }
+          return;
+        }
+        if (name === "NoMovement") {
+          try {
+            const payload = fromJsonString(NoMovementSchema, data);
+            updateTurn((t) =>
+              t.diffReply === null
+                ? { ...t, diffReply: { kind: "no-movement", payload } }
+                : t,
+            );
+          } catch {
+            // skip malformed payloads
+          }
+          return;
+        }
+        if (name === "ChangedSince") {
+          try {
+            const payload = fromJsonString(ChangedSinceSchema, data);
+            updateTurn((t) =>
+              t.diffReply === null
+                ? { ...t, diffReply: { kind: "changed-since", payload } }
+                : t,
+            );
+          } catch {
+            // skip malformed payloads
+          }
+          return;
+        }
+        if (name === "Done") {
+          try {
+            const done = fromJsonString(AgentDoneSchema, data);
+            const timings = {
+              // proto3 default for an unset sub-message is a
+              // zero-filled instance, so reading the fields is
+              // safe even when the backend omits the message.
+              primaryMs: done.roleTimings?.primaryMs ?? 0,
+              policyMs: done.roleTimings?.policyMs ?? 0,
+              judgeMs: done.roleTimings?.judgeMs ?? 0,
+            };
+            // Publish timings to the dedicated store so the
+            // sibling ModelsPanel can read without prop-drilling
+            // through the agent sheet.
+            useRoleTimings.getState().setLatest(timings);
+            setStatus({
+              kind: "done",
+              threadId: activeThreadId,
+              elapsedMs: done.elapsedMs,
+              traceId: done.traceId ?? "",
+              roleTimings: timings,
+            });
+          } catch {
+            setStatus({
+              kind: "done",
+              threadId: activeThreadId,
+              elapsedMs: 0,
+              traceId: "",
+              roleTimings: { primaryMs: 0, policyMs: 0, judgeMs: 0 },
+            });
+          }
+          // Defensive: if the loop ended without emitting anything,
+          // mark the turn errored so the spinner doesn't hang.
+          setTurns((prev) => {
+            const idx = prev.findIndex((t) => t.id === turnId);
+            if (idx === -1) return prev;
+            const t = prev[idx];
+            if (
+              t.claim !== null ||
+              t.narrative !== null ||
+              t.error !== null ||
+              t.diffReply !== null
+            ) {
+              return prev;
+            }
+            const next = prev.slice();
+            next[idx] = { ...t, error: "agent ended without a response" };
+            return next;
+          });
+        }
       }
     },
-    [cleanup, threadId],
+    [cleanup, setLocalThreadId, threadId],
   );
+
+  // `turn` was an explicit field on the deleted `AgentSessionStarted`
+  // proto. The frontend used it only to render a chip indicator. We
+  // derive it from the local turns array length now (one entry per
+  // user message); preserves the existing prop shape consumers see.
+  const turn = turns.length;
 
   return { status, turns, progress, threadId, turn, ask, reset };
 }

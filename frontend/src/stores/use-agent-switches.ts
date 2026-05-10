@@ -1,4 +1,5 @@
 import { create as createStore } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
 import { create } from "@bufbuild/protobuf";
 
 import {
@@ -8,6 +9,7 @@ import {
   StayInRoleSwitchesSchema,
   type AgentSwitches,
 } from "@/lib/wire/multichain/wire/agent/v1/switches_pb";
+import { namespacedStoreName } from "@/lib/session";
 
 /**
  * Ship 3.5 ablation switches + Ship 4 dontRepeatYourself + Ship 5a
@@ -205,18 +207,64 @@ export type SwitchKey =
 
 const PRODUCTION_PRESET = PRESETS.find((p) => p.id === "with-dont-repeat-yourself")!;
 
-export const useAgentSwitches = createStore<AgentSwitchesStore>((set) => ({
-  switches: PRODUCTION_PRESET.switches,
-  builderViewOn: false,
-  setBuilderViewOn: (builderViewOn) => set({ builderViewOn }),
-  setSwitch: (key, on) =>
-    set((s) => ({ switches: applySwitchKey(s.switches, key, on) })),
-  applyPreset: (id) => {
-    const preset = PRESETS.find((p) => p.id === id);
-    if (!preset) return;
-    set({ switches: preset.switches });
-  },
-}));
+/**
+ * Persisted under a session-scoped name so a future per-user
+ * isolation migration (auth) can derive the namespace from the
+ * authenticated user id without losing in-flight state. Today the
+ * session id is browser-stable via `localStorage["mca:sessionId"]`
+ * (see `frontend/src/lib/session.ts`).
+ *
+ * `partialize` keeps only the state fields (drops the action fns,
+ * which can't round-trip through JSON anyway). `merge` rebuilds
+ * the `switches` proto wrapper from the parsed-JSON shape so the
+ * hydrated value satisfies the typed `AgentSwitches` contract used
+ * by `toJsonString(AgentSwitchesSchema, ...)` in `use-agent-stream`.
+ */
+export const useAgentSwitches = createStore<AgentSwitchesStore>()(
+  persist(
+    (set) => ({
+      switches: PRODUCTION_PRESET.switches,
+      builderViewOn: false,
+      setBuilderViewOn: (builderViewOn) => set({ builderViewOn }),
+      setSwitch: (key, on) =>
+        set((s) => ({ switches: applySwitchKey(s.switches, key, on) })),
+      applyPreset: (id) => {
+        const preset = PRESETS.find((p) => p.id === id);
+        if (!preset) return;
+        set({ switches: preset.switches });
+      },
+    }),
+    {
+      name: namespacedStoreName("agent-switches"),
+      storage: createJSONStorage(() => localStorage),
+      version: 1,
+      partialize: (state) => ({
+        switches: state.switches,
+        builderViewOn: state.builderViewOn,
+      }),
+      merge: (persisted, current) => {
+        const p = (persisted as Partial<AgentSwitchesStore>) ?? {};
+        // Rebuild the proto wrapper from the JSON-parsed shape so
+        // the hydrated value is a valid `AgentSwitches` (carries
+        // `$typeName`, sub-message wrappers, etc.). Falling back
+        // to the production preset on any structural mismatch is
+        // safer than crashing the app on a stale localStorage
+        // shape; the user re-toggles if needed.
+        let switches: AgentSwitches;
+        try {
+          switches = create(AgentSwitchesSchema, p.switches as AgentSwitches);
+        } catch {
+          switches = PRODUCTION_PRESET.switches;
+        }
+        return {
+          ...current,
+          switches,
+          builderViewOn: p.builderViewOn ?? current.builderViewOn,
+        };
+      },
+    },
+  ),
+);
 
 function applySwitchKey(
   s: AgentSwitches,

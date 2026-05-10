@@ -140,8 +140,8 @@ async def _run_repeat_path(
     thread: AgentThread,
     repeat_of_turn: int,
     snapshot_id: str,
-    session_id: str,
-    session_started_at_ms: int,
+    thread_id: str,
+    turn_started_at_ms: int,
 ) -> AsyncIterator[dict[str, str]]:
     """Replay the prior turn's tool calls against the fresh snapshot,
     diff outputs, emit NoMovement or ChangedSince. No LLM narrative
@@ -243,9 +243,8 @@ async def run_turn(
     *,
     handles: LoopHandles,
     request,  # session_pb2.AgentRequest
-    session_id: str,
     thread_id: str,
-    session_started_at_ms: int,
+    turn_started_at_ms: int,
 ) -> AsyncIterator[dict[str, str]]:
     """One turn of one chat session. Yields SSE frame dicts.
 
@@ -262,6 +261,12 @@ async def run_turn(
     # each role row.
     role_timings = begin_role_timing_capture()
     snapshot_id: str | None = None
+    # Thread reference for the post-turn `finally` persist. Stays
+    # None when an exception fires before `get_or_create` returns
+    # (rare; only thread-registry init / lookup errors). On every
+    # other path we end up writing `state.json` so disk and memory
+    # stay in sync regardless of success or failure.
+    thread_for_persist: AgentThread | None = None
     # Resolve per-turn agents up front. When the request carries an
     # `llm_override`, build fresh agents pinned to the requested
     # provider for this turn; otherwise reuse the lifespan-cached
@@ -295,6 +300,7 @@ async def run_turn(
     )
     try:
         thread, lock = await handles.threads.get_or_create(thread_id)
+        thread_for_persist = thread
         async with lock:
             # Root span for this turn. Carries the four turn-scoped
             # attrs (session/thread/turn-index/run-type) so SQL filters
@@ -317,7 +323,13 @@ async def run_turn(
                 # per-turn aggregates). RUN_TYPE is also stamped here
                 # in case the core never gets called (repeat path
                 # short-circuit) and downstream queries expect it.
-                turn_span.set_attribute(spans.Attrs.SESSION_ID, session_id)
+                # OTel `session.id` is the standard Langfuse session-
+                # grouping key. We stamp it with `thread_id` so all
+                # turns of one conversation land under one Langfuse
+                # session. (Pre-cleanup, this stamped the per-POST
+                # session token which made every turn a separate
+                # session in Langfuse, which was wrong.)
+                turn_span.set_attribute(spans.Attrs.SESSION_ID, thread_id)
                 turn_span.set_attribute(spans.Attrs.THREAD_ID, thread_id)
                 turn_span.set_attribute(spans.Attrs.TURN_INDEX, turn)
                 turn_span.set_attribute(
@@ -369,7 +381,7 @@ async def run_turn(
                         ):
                             log.info(
                                 "repeat_detected",
-                                session_id=session_id,
+                                thread_id=thread_id,
                                 repeat_of_turn=outcome.repeat_of_turn,
                                 reason=outcome.reason,
                             )
@@ -380,12 +392,12 @@ async def run_turn(
                                 thread=thread,
                                 repeat_of_turn=outcome.repeat_of_turn,
                                 snapshot_id=snapshot_id,
-                                session_id=session_id,
-                                session_started_at_ms=session_started_at_ms,
+                                thread_id=thread_id,
+                                turn_started_at_ms=turn_started_at_ms,
                             ):
                                 yield frame
                             yield _terminal_done(
-                                session_id, session_started_at_ms, role_timings
+                                turn_started_at_ms, role_timings
                             )
                             return
 
@@ -394,7 +406,7 @@ async def run_turn(
                 snapshot_id = lease.snapshot_id
                 log.info(
                     "turn_begin",
-                    session_id=session_id,
+                    thread_id=thread_id,
                     snapshot_id=snapshot_id,
                     turn=turn,
                 )
@@ -409,8 +421,13 @@ async def run_turn(
                 # prior context.
                 prior_claims_snapshot = list(thread.claims)
                 envelope = TurnEnvelope(
-                    turn_id=f"{session_id}:{turn}",
-                    correlation_id=session_id,
+                    # turn_id names this specific turn (unique across
+                    # the system because thread_id is unique and turn
+                    # is monotone within a thread).
+                    turn_id=f"{thread_id}:{turn}",
+                    # correlation_id groups related turns; for chat
+                    # that is the conversation handle = thread_id.
+                    correlation_id=thread_id,
                     switches=request.switches,
                     run_type=request.run_type,
                     intent=request.user_question,
@@ -431,7 +448,7 @@ async def run_turn(
                             envelope=envelope,
                             bindings=thread.bindings,
                             snapshot_id=snapshot_id,
-                            started_at_ms=session_started_at_ms,
+                            started_at_ms=turn_started_at_ms,
                             sink=sink,
                             debug_public=handles.debug_public,
                             prior_claims=prior_claims_snapshot,
@@ -472,28 +489,41 @@ async def run_turn(
                 for claim in outcome.approved_claims:
                     thread.record_claim(claim)
 
-                yield _terminal_done(
-                    session_id, session_started_at_ms, role_timings
-                )
+                yield _terminal_done(turn_started_at_ms, role_timings)
 
     except asyncio.CancelledError:
-        log.info("agent_stream_cancelled", session_id=session_id)
+        log.info("agent_stream_cancelled", thread_id=thread_id)
         raise
     except Exception as e:  # noqa: BLE001
-        log.exception("loop_driver_failed", session_id=session_id)
+        log.exception("loop_driver_failed", thread_id=thread_id)
         yield _emit_error(e, debug_public=handles.debug_public)
-        yield _terminal_done(session_id, session_started_at_ms, role_timings)
+        yield _terminal_done(turn_started_at_ms, role_timings)
     finally:
+        # Persist thread state regardless of success or failure so
+        # disk and memory match. On the error path the thread has
+        # the incremented turn_count and the recorded user_question
+        # but no claims / message_history update; persisting that
+        # partial-but-accurate state is better than leaving disk
+        # stale (next turn would otherwise re-run as the same turn
+        # index after a restart, breaking repeat detection and OTel
+        # turn correlation). Wrapped in try/except so a write
+        # failure can't mask the original error.
+        if thread_for_persist is not None:
+            try:
+                handles.threads.persist(thread_for_persist)
+            except Exception:  # noqa: BLE001
+                log.exception(
+                    "thread_persist_failed", thread_id=thread_id
+                )
         if snapshot_id is not None:
             await handles.primitive_client.end_turn(snapshot_id)
 
 
 def _terminal_done(
-    session_id: str,
-    session_started_at_ms: int,
+    turn_started_at_ms: int,
     role_timings: dict[str, float],
 ) -> dict[str, str]:
-    elapsed_ms = max(0, int(time.time() * 1000) - session_started_at_ms)
+    elapsed_ms = max(0, int(time.time() * 1000) - turn_started_at_ms)
     # Stamp the active OTel trace id onto the Done frame so the
     # frontend can deep-link into Langfuse / SQL the trace by id.
     # Empty string when the SDK is disabled (tests) or no active span.
@@ -510,7 +540,6 @@ def _terminal_done(
     return _frame(
         "Done",
         session_pb2.AgentDone(
-            session_id=session_id,
             elapsed_ms=min(elapsed_ms, 0xFFFFFFFF),
             trace_id=trace_id_hex,
             role_timings=timings_proto,

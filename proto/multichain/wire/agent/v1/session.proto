@@ -36,16 +36,6 @@ message AgentRequest {
   LlmOverride llm_override = 7;
 }
 
-// Returned synchronously from POST /agent/ask. `session_id` is
-// per-turn (drives the SSE GET, ledger row group). `thread_id`
-// is the persistent conversation handle. `turn` is 0 on the first
-// turn, increments on follow-ups.
-message AgentSessionStarted {
-  string session_id = 1;
-  string thread_id = 2;
-  uint32 turn = 3;
-}
-
 // Final SSE event payload. Emitted as the `done` event by the SSE
 // handler. `elapsed_ms` is u32 (caps at ~50 days). `trace_id` is the
 // 32-hex-char OTel trace id for this turn (Ship 1 of agent-
@@ -62,10 +52,9 @@ message AgentSessionStarted {
 // each role row, so a dev sees which role is dragging a turn
 // without trawling docker logs.
 message AgentDone {
-  string session_id = 1;
-  uint32 elapsed_ms = 2;
-  string trace_id = 3;
-  RoleTimings role_timings = 4;
+  uint32 elapsed_ms = 1;
+  string trace_id = 2;
+  RoleTimings role_timings = 3;
 }
 
 // Per-role wall-time tally for one turn. Values are integer

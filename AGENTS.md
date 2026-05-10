@@ -51,6 +51,16 @@ Bias toward proposing the cleanup in the same change that needs the touch. Don't
 
 When unsure whether to flag a pattern: err on the side of flagging. Cheap to dismiss, expensive to live with.
 
+# Planning vs coding scope
+
+The "Existing code is not authoritative" rule applies more loosely during the conversation / planning phase than during the coding phase. Where the existing rule says "in the same change you're making, don't preserve mess to be polite," this one says "in the chat that scopes the change, don't defend mess to be polite either."
+
+**During planning,** the agent should audit the adjacent code shape and surface patterns that don't fit, even when they're outside the strict ask. The cost of surfacing a "while we're in here, the existing X looks like a workaround, here's a cleaner shape" idea is one paragraph; the cost of NOT surfacing it is that the workaround gets entrenched as the new feature builds on top of it. Conservatism here ("the existing shape works, let's not expand scope") is the failure mode this rule corrects. If the agent finds itself recommending the option that touches less existing code purely because it touches less existing code, that is the signal to surface the alternative instead and let the user decide.
+
+**During coding,** stay scoped to what was agreed in chat. Ride-along improvements that are small (a few lines, one file, no new abstractions) land in the same change. Improvements that are large (multi-file refactor, new abstraction, requires re-deciding a design choice) get filed as a tracked GitHub issue with enough context for a future session to act on, not silently deferred to "follow-up tickets that never get filed."
+
+The split: chat is for surfacing options including ones that touch existing surfaces; coding is for executing the agreed option without scope creep.
+
 # Idiomatic-first (top priority for consistency with industry)
 
 Each language uses its own idiom. Never impose one language's conventions on another. When in conflict between "easier for our codebase" and "what the language community does," pick the community idiom.

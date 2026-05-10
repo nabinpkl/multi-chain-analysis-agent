@@ -1,6 +1,8 @@
 import { create as createStore } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
+import { namespacedStoreName } from "@/lib/session";
+
 /**
  * Per-developer LLM provider override for each agent role. Pinned via
  * the builder view's Models section, persisted to localStorage so the
@@ -48,7 +50,7 @@ export const useLlmOverride = createStore<LlmOverrideStore>()(
       reset: () => set({ primary: EMPTY, policy: EMPTY, judge: EMPTY }),
     }),
     {
-      name: "mca:llm-override",
+      name: namespacedStoreName("llm-override"),
       storage: createJSONStorage(() => localStorage),
       version: 1,
     },

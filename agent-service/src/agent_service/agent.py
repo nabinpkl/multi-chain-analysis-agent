@@ -109,8 +109,7 @@ class AgentDeps:
 
     primitive_client: PrimitiveClient
     snapshot_id: str
-    session_id: str
-    session_started_at_ms: int
+    turn_started_at_ms: int
     # Live binding store (thread-scoped, persists across turns; loop
     # driver passes the thread's binding store in here so this turn's
     # primitive outputs land in the same store the gate later reads).

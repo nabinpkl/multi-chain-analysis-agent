@@ -180,14 +180,18 @@ pub struct Claim {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
     )]
     pub id: ::buffa::alloc::string::String,
-    /// Field 2: `session_id`
+    /// Conversation handle this claim belongs to. Stamped server-side at
+    /// emission; lets SQL / analytics group claims by conversation
+    /// without re-joining through the emitting turn.
+    ///
+    /// Field 2: `thread_id`
     #[serde(
-        rename = "sessionId",
-        alias = "session_id",
+        rename = "threadId",
+        alias = "thread_id",
         with = "::buffa::json_helpers::proto_string",
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
     )]
-    pub session_id: ::buffa::alloc::string::String,
+    pub thread_id: ::buffa::alloc::string::String,
     /// Field 3: `kind`
     #[serde(
         rename = "kind",
@@ -275,7 +279,7 @@ impl ::core::fmt::Debug for Claim {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("Claim")
             .field("id", &self.id)
-            .field("session_id", &self.session_id)
+            .field("thread_id", &self.thread_id)
             .field("kind", &self.kind)
             .field("headline", &self.headline)
             .field("body_markdown", &self.body_markdown)
@@ -315,8 +319,8 @@ impl ::buffa::Message for Claim {
         if !self.id.is_empty() {
             size += 1u32 + ::buffa::types::string_encoded_len(&self.id) as u32;
         }
-        if !self.session_id.is_empty() {
-            size += 1u32 + ::buffa::types::string_encoded_len(&self.session_id) as u32;
+        if !self.thread_id.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.thread_id) as u32;
         }
         {
             let val = self.kind.to_i32();
@@ -392,13 +396,13 @@ impl ::buffa::Message for Claim {
                 .encode(buf);
             ::buffa::types::encode_string(&self.id, buf);
         }
-        if !self.session_id.is_empty() {
+        if !self.thread_id.is_empty() {
             ::buffa::encoding::Tag::new(
                     2u32,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )
                 .encode(buf);
-            ::buffa::types::encode_string(&self.session_id, buf);
+            ::buffa::types::encode_string(&self.thread_id, buf);
         }
         {
             let val = self.kind.to_i32();
@@ -505,7 +509,7 @@ impl ::buffa::Message for Claim {
                         actual: tag.wire_type() as u8,
                     });
                 }
-                ::buffa::types::merge_string(&mut self.session_id, buf)?;
+                ::buffa::types::merge_string(&mut self.thread_id, buf)?;
             }
             3u32 => {
                 if tag.wire_type() != ::buffa::encoding::WireType::Varint {
@@ -620,7 +624,7 @@ impl ::buffa::Message for Claim {
     }
     fn clear(&mut self) {
         self.id.clear();
-        self.session_id.clear();
+        self.thread_id.clear();
         self.kind = ::buffa::EnumValue::from(0);
         self.headline.clear();
         self.body_markdown.clear();
@@ -857,7 +861,7 @@ pub const __STUB_MARKER_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa
     is_wkt: false,
 };
 /// Input shape the model sends when calling `emit_claim`. Matches
-/// Claim minus the runtime-stamped fields (id, session_id,
+/// Claim minus the runtime-stamped fields (id, thread_id,
 /// emitted_at_ms, policy_verdict, stubs_active are all controlled by
 /// the runtime).
 #[derive(Clone, PartialEq, Default)]

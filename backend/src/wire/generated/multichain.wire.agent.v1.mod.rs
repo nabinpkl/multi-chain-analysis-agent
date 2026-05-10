@@ -118,7 +118,6 @@ pub mod __buffa {
         reg.register_json_any(super::__STAY_IN_ROLE_SWITCHES_JSON_ANY);
         reg.register_json_any(super::__CROSS_CHECK_SWITCHES_JSON_ANY);
         reg.register_json_any(super::__AGENT_REQUEST_JSON_ANY);
-        reg.register_json_any(super::__AGENT_SESSION_STARTED_JSON_ANY);
         reg.register_json_any(super::__AGENT_DONE_JSON_ANY);
         reg.register_json_any(super::__ROLE_TIMINGS_JSON_ANY);
         reg.register_json_any(super::__PROGRESS_JSON_ANY);

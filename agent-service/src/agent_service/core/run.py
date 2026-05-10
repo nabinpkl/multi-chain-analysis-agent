@@ -243,8 +243,7 @@ async def run_one_turn(
     deps = AgentDeps(
         primitive_client=primitive_client,
         snapshot_id=snapshot_id,
-        session_id=envelope.correlation_id,
-        session_started_at_ms=started_at_ms,
+        turn_started_at_ms=started_at_ms,
         binding_store=bindings,
         external_text_input_enabled=envelope.switches.channels.external_text_input_enabled,
     )
@@ -295,8 +294,8 @@ async def run_one_turn(
     for ec in deps.emitted_claims:
         claim = _build_claim(
             input_=ec,
-            session_id=envelope.correlation_id,
-            session_started_at_ms=started_at_ms,
+            thread_id=envelope.correlation_id,
+            turn_started_at_ms=started_at_ms,
         )
 
         with _tracer.start_as_current_span(spans.CLAIM_EMITTED) as claim_span:
@@ -639,8 +638,8 @@ def _map_provenance(refs: list) -> list[provenance_pb2.ProvenanceRef]:
 def _build_claim(
     *,
     input_: EmitClaimInput,
-    session_id: str,
-    session_started_at_ms: int,
+    thread_id: str,
+    turn_started_at_ms: int,
 ) -> claim_pb2.Claim:
     """Stamp the runtime-controlled fields onto a Claim drafted by
     the model. Verdict starts Approved; gates may downgrade to
@@ -648,10 +647,10 @@ def _build_claim(
     kind_enum = _CLAIM_KIND_MAP.get(
         input_.kind.upper(), claim_pb2.CLAIM_KIND_UNSPECIFIED
     )
-    elapsed = max(0, int(time.time() * 1000) - session_started_at_ms)
+    elapsed = max(0, int(time.time() * 1000) - turn_started_at_ms)
     claim = claim_pb2.Claim(
         id=str(uuid.uuid4()),
-        session_id=session_id,
+        thread_id=thread_id,
         kind=kind_enum,
         headline=input_.headline,
         body_markdown=input_.body_markdown,

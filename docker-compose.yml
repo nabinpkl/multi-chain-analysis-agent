@@ -134,6 +134,15 @@ services:
       # this here means the agent-service Python code does not need
       # to know the endpoint; otel.py reads OTEL_EXPORTER_OTLP_ENDPOINT.
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+      # Filesystem root for persisted thread state. ThreadRegistry
+      # writes `<THREAD_ROOT>/threads/<thread_id>/state.json` at the
+      # end of every turn so a container restart can reload the
+      # conversation. Bind-mounted to `./data/agent-service/threads`
+      # on the host so state survives `docker compose down` and is
+      # inspectable from the host with `ls`.
+      - THREAD_ROOT=/var/threads
+    volumes:
+      - ./data/agent-service/threads:/var/threads
     depends_on:
       api:
         condition: service_started

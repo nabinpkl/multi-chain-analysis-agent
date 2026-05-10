@@ -386,190 +386,6 @@ impl<'v> ::buffa::DefaultViewInstance for AgentRequestView<'v> {
             ))
     }
 }
-/// Returned synchronously from POST /agent/ask. `session_id` is
-/// per-turn (drives the SSE GET, ledger row group). `thread_id`
-/// is the persistent conversation handle. `turn` is 0 on the first
-/// turn, increments on follow-ups.
-#[derive(Clone, Debug, Default)]
-pub struct AgentSessionStartedView<'a> {
-    /// Field 1: `session_id`
-    pub session_id: &'a str,
-    /// Field 2: `thread_id`
-    pub thread_id: &'a str,
-    /// Field 3: `turn`
-    pub turn: u32,
-    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
-}
-impl<'a> AgentSessionStartedView<'a> {
-    /// Decode from `buf`, enforcing a recursion depth limit for nested messages.
-    ///
-    /// Called by [`::buffa::MessageView::decode_view`] with [`::buffa::RECURSION_LIMIT`]
-    /// and by generated sub-message decode arms with `depth - 1`.
-    ///
-    /// **Not part of the public API.** Named with a leading underscore to
-    /// signal that it is for generated-code use only.
-    #[doc(hidden)]
-    pub fn _decode_depth(
-        buf: &'a [u8],
-        depth: u32,
-    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
-        let mut view = Self::default();
-        view._merge_into_view(buf, depth)?;
-        ::core::result::Result::Ok(view)
-    }
-    /// Merge fields from `buf` into this view (proto merge semantics).
-    ///
-    /// Repeated fields append; singular fields last-wins; singular
-    /// MESSAGE fields merge recursively. Used by sub-message decode
-    /// arms when the same field appears multiple times on the wire.
-    ///
-    /// **Not part of the public API.**
-    #[doc(hidden)]
-    pub fn _merge_into_view(
-        &mut self,
-        buf: &'a [u8],
-        depth: u32,
-    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
-        let _ = depth;
-        #[allow(unused_variables)]
-        let view = self;
-        let mut cur: &'a [u8] = buf;
-        while !cur.is_empty() {
-            let before_tag = cur;
-            let tag = ::buffa::encoding::Tag::decode(&mut cur)?;
-            match tag.field_number() {
-                1u32 => {
-                    if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
-                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
-                            field_number: 1u32,
-                            expected: 2u8,
-                            actual: tag.wire_type() as u8,
-                        });
-                    }
-                    view.session_id = ::buffa::types::borrow_str(&mut cur)?;
-                }
-                2u32 => {
-                    if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
-                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
-                            field_number: 2u32,
-                            expected: 2u8,
-                            actual: tag.wire_type() as u8,
-                        });
-                    }
-                    view.thread_id = ::buffa::types::borrow_str(&mut cur)?;
-                }
-                3u32 => {
-                    if tag.wire_type() != ::buffa::encoding::WireType::Varint {
-                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
-                            field_number: 3u32,
-                            expected: 0u8,
-                            actual: tag.wire_type() as u8,
-                        });
-                    }
-                    view.turn = ::buffa::types::decode_uint32(&mut cur)?;
-                }
-                _ => {
-                    ::buffa::encoding::skip_field_depth(tag, &mut cur, depth)?;
-                    let span_len = before_tag.len() - cur.len();
-                    view.__buffa_unknown_fields.push_raw(&before_tag[..span_len]);
-                }
-            }
-        }
-        ::core::result::Result::Ok(())
-    }
-}
-impl<'a> ::buffa::MessageView<'a> for AgentSessionStartedView<'a> {
-    type Owned = super::super::AgentSessionStarted;
-    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
-        Self::_decode_depth(buf, ::buffa::RECURSION_LIMIT)
-    }
-    fn decode_view_with_limit(
-        buf: &'a [u8],
-        depth: u32,
-    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
-        Self::_decode_depth(buf, depth)
-    }
-    /// Convert this view to the owned message type.
-    #[allow(clippy::redundant_closure, clippy::useless_conversion)]
-    #[allow(clippy::needless_update)]
-    fn to_owned_message(&self) -> super::super::AgentSessionStarted {
-        #[allow(unused_imports)]
-        use ::buffa::alloc::string::ToString as _;
-        super::super::AgentSessionStarted {
-            session_id: self.session_id.to_string(),
-            thread_id: self.thread_id.to_string(),
-            turn: self.turn,
-            __buffa_unknown_fields: self
-                .__buffa_unknown_fields
-                .to_owned()
-                .unwrap_or_default()
-                .into(),
-            ..::core::default::Default::default()
-        }
-    }
-}
-impl<'a> ::buffa::ViewEncode<'a> for AgentSessionStartedView<'a> {
-    #[allow(clippy::needless_borrow, clippy::let_and_return)]
-    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        let mut size = 0u32;
-        if !self.session_id.is_empty() {
-            size += 1u32 + ::buffa::types::string_encoded_len(&self.session_id) as u32;
-        }
-        if !self.thread_id.is_empty() {
-            size += 1u32 + ::buffa::types::string_encoded_len(&self.thread_id) as u32;
-        }
-        if self.turn != 0u32 {
-            size += 1u32 + ::buffa::types::uint32_encoded_len(self.turn) as u32;
-        }
-        size += self.__buffa_unknown_fields.encoded_len() as u32;
-        size
-    }
-    #[allow(clippy::needless_borrow)]
-    fn write_to(
-        &self,
-        _cache: &mut ::buffa::SizeCache,
-        buf: &mut impl ::buffa::bytes::BufMut,
-    ) {
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        if !self.session_id.is_empty() {
-            ::buffa::encoding::Tag::new(
-                    1u32,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )
-                .encode(buf);
-            ::buffa::types::encode_string(&self.session_id, buf);
-        }
-        if !self.thread_id.is_empty() {
-            ::buffa::encoding::Tag::new(
-                    2u32,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )
-                .encode(buf);
-            ::buffa::types::encode_string(&self.thread_id, buf);
-        }
-        if self.turn != 0u32 {
-            ::buffa::encoding::Tag::new(3u32, ::buffa::encoding::WireType::Varint)
-                .encode(buf);
-            ::buffa::types::encode_uint32(self.turn, buf);
-        }
-        self.__buffa_unknown_fields.write_to(buf);
-    }
-}
-impl<'v> ::buffa::DefaultViewInstance for AgentSessionStartedView<'v> {
-    fn default_view_instance<'a>() -> &'a Self
-    where
-        Self: 'a,
-    {
-        static VALUE: ::buffa::__private::OnceBox<AgentSessionStartedView<'static>> = ::buffa::__private::OnceBox::new();
-        VALUE
-            .get_or_init(|| ::buffa::alloc::boxed::Box::new(
-                <AgentSessionStartedView<'static>>::default(),
-            ))
-    }
-}
 /// Final SSE event payload. Emitted as the `done` event by the SSE
 /// handler. `elapsed_ms` is u32 (caps at ~50 days). `trace_id` is the
 /// 32-hex-char OTel trace id for this turn (Ship 1 of agent-
@@ -587,13 +403,11 @@ impl<'v> ::buffa::DefaultViewInstance for AgentSessionStartedView<'v> {
 /// without trawling docker logs.
 #[derive(Clone, Debug, Default)]
 pub struct AgentDoneView<'a> {
-    /// Field 1: `session_id`
-    pub session_id: &'a str,
-    /// Field 2: `elapsed_ms`
+    /// Field 1: `elapsed_ms`
     pub elapsed_ms: u32,
-    /// Field 3: `trace_id`
+    /// Field 2: `trace_id`
     pub trace_id: &'a str,
-    /// Field 4: `role_timings`
+    /// Field 3: `role_timings`
     pub role_timings: ::buffa::MessageFieldView<
         super::super::__buffa::view::RoleTimingsView<'a>,
     >,
@@ -638,39 +452,29 @@ impl<'a> AgentDoneView<'a> {
             let tag = ::buffa::encoding::Tag::decode(&mut cur)?;
             match tag.field_number() {
                 1u32 => {
-                    if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
-                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
-                            field_number: 1u32,
-                            expected: 2u8,
-                            actual: tag.wire_type() as u8,
-                        });
-                    }
-                    view.session_id = ::buffa::types::borrow_str(&mut cur)?;
-                }
-                2u32 => {
                     if tag.wire_type() != ::buffa::encoding::WireType::Varint {
                         return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
-                            field_number: 2u32,
+                            field_number: 1u32,
                             expected: 0u8,
                             actual: tag.wire_type() as u8,
                         });
                     }
                     view.elapsed_ms = ::buffa::types::decode_uint32(&mut cur)?;
                 }
-                3u32 => {
+                2u32 => {
                     if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
                         return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
-                            field_number: 3u32,
+                            field_number: 2u32,
                             expected: 2u8,
                             actual: tag.wire_type() as u8,
                         });
                     }
                     view.trace_id = ::buffa::types::borrow_str(&mut cur)?;
                 }
-                4u32 => {
+                3u32 => {
                     if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
                         return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
-                            field_number: 4u32,
+                            field_number: 3u32,
                             expected: 2u8,
                             actual: tag.wire_type() as u8,
                         });
@@ -719,7 +523,6 @@ impl<'a> ::buffa::MessageView<'a> for AgentDoneView<'a> {
         #[allow(unused_imports)]
         use ::buffa::alloc::string::ToString as _;
         super::super::AgentDone {
-            session_id: self.session_id.to_string(),
             elapsed_ms: self.elapsed_ms,
             trace_id: self.trace_id.to_string(),
             role_timings: match self.role_timings.as_option() {
@@ -745,9 +548,6 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentDoneView<'a> {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
-        if !self.session_id.is_empty() {
-            size += 1u32 + ::buffa::types::string_encoded_len(&self.session_id) as u32;
-        }
         if self.elapsed_ms != 0u32 {
             size += 1u32 + ::buffa::types::uint32_encoded_len(self.elapsed_ms) as u32;
         }
@@ -773,22 +573,14 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentDoneView<'a> {
     ) {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
-        if !self.session_id.is_empty() {
-            ::buffa::encoding::Tag::new(
-                    1u32,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )
-                .encode(buf);
-            ::buffa::types::encode_string(&self.session_id, buf);
-        }
         if self.elapsed_ms != 0u32 {
-            ::buffa::encoding::Tag::new(2u32, ::buffa::encoding::WireType::Varint)
+            ::buffa::encoding::Tag::new(1u32, ::buffa::encoding::WireType::Varint)
                 .encode(buf);
             ::buffa::types::encode_uint32(self.elapsed_ms, buf);
         }
         if !self.trace_id.is_empty() {
             ::buffa::encoding::Tag::new(
-                    3u32,
+                    2u32,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )
                 .encode(buf);
@@ -796,7 +588,7 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentDoneView<'a> {
         }
         if self.role_timings.is_set() {
             ::buffa::encoding::Tag::new(
-                    4u32,
+                    3u32,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )
                 .encode(buf);
