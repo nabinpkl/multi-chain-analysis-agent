@@ -68,3 +68,10 @@ ulid = { version = "1", features = ["serde"] }
 # debug fallback alongside binary protobuf.
 buffa = { version = "0.4.0", features = ["json"] }
 buffa-types = { version = "0.4.0", features = ["json"] }
+# Official Rust MCP SDK from `modelcontextprotocol/rust-sdk`. We mount
+# `StreamableHttpService` as an Axum nested service at `/mcp` on the
+# internal listener so codex CLI (or any MCP client) can call our
+# read-only primitives in-process without going through the existing
+# `/primitive/*` HTTP routes. v1.6 released 2026-05-01; passes the
+# AGENTS.md library bar (3.4k stars, healthy human PR cadence).
+rmcp = { version = "1.6", features = ["server", "transport-streamable-http-server", "macros"] }

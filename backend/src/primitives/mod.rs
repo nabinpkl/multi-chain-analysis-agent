@@ -16,6 +16,7 @@
 //! the proto bridge converts to/from.
 
 pub mod community_summary;
+pub mod get_token_info;
 pub mod types;
 pub mod wallet_profile;
 

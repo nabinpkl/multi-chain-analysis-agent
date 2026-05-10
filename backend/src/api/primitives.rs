@@ -23,16 +23,19 @@
 //! `410 Gone` so the Python client can branch on it and retry
 //! `/turn/begin`.
 
+use std::convert::Infallible;
+
 use axum::body::{Body, Bytes};
-use axum::extract::{FromRequest, Request, State};
+use axum::extract::{FromRequest, Path, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::sse::{Event, KeepAlive};
+use axum::response::{IntoResponse, Response, Sse};
+use futures_util::stream::StreamExt;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use buffa::Message;
 use serde_json::json;
-use solana_pubkey::Pubkey;
 
-use crate::metadata;
 use crate::primitives::{
     PrimitiveError, PrimitiveOutput, community_summary, wallet_profile,
 };
@@ -227,6 +230,26 @@ pub async fn turn_begin(State(state): State<AppState>, headers: HeaderMap) -> Re
     let expires_at_ms = snap.expires_at_ms;
     state.snapshot_cache.insert(snap);
 
+    // Pair the new snapshot with an unbounded mpsc that the MCP
+    // `emit_claims` tool pushes onto and the SSE drain route at
+    // `GET /turn/{snapshot_id}/claims` reads from. The receiver
+    // is stashed in a separate map keyed by snapshot_id so the
+    // drain route's first request can pick it up; the sender stays
+    // in `state.claim_channels` until `turn_end` removes it. Any
+    // turn that never spawns a codex sub-loop (i.e. the existing
+    // Pydantic AI path that still uses `agent.tool emit_claim`)
+    // simply leaves both the sender unused and the receiver
+    // unsubscribed; the entries are dropped at `turn_end` regardless.
+    let (claim_tx, claim_rx) = tokio::sync::mpsc::unbounded_channel();
+    state.claim_channels.insert(snapshot_id.clone(), claim_tx);
+    // Park the receiver in a separate one-shot map; the SSE drain
+    // route consumes it via remove(). One drain per turn is the
+    // contract (the Python loop driver opens exactly one drain
+    // stream per codex turn).
+    state
+        .claim_receivers
+        .insert(snapshot_id.clone(), parking_lot::Mutex::new(Some(claim_rx)));
+
     let resp = proto::SnapshotBeginResponse {
         snapshot_id,
         expires_at_ms,
@@ -253,7 +276,85 @@ pub async fn turn_end(State(state): State<AppState>, req: Request) -> Response {
         Err(e) => return e,
     };
     state.snapshot_cache.remove(&req_msg.snapshot_id);
+    // Drop the claim sender (if present); any active drain on the
+    // SSE side sees end-of-stream the next read. Drop the receiver
+    // map entry too in case the drain was never opened (e.g. a
+    // Pydantic AI primary turn that doesn't use `emit_claims`).
+    state.claim_channels.remove(&req_msg.snapshot_id);
+    state.claim_receivers.remove(&req_msg.snapshot_id);
     StatusCode::NO_CONTENT.into_response()
+}
+
+/// `GET /turn/{snapshot_id}/claims`  SSE drain stream for the
+/// codex-path claim channel created at `turn_begin`. Single
+/// consumer per snapshot: the receiver is `take()`-n out of
+/// `claim_receivers` on first subscribe, so a second subscribe
+/// returns 409 Conflict.
+///
+/// Frame shape:
+///
+/// ```text
+/// event: claim
+/// data: {"kind":"PROFILE","headline":"...","body_markdown":"...",
+///        "provenance":[...], "support_numbers":[...]}
+///
+/// event: claim
+/// data: {...}
+/// ```
+///
+/// The stream closes (no explicit `turn_closed` event needed) when
+/// the sender side is dropped  `turn_end` removes the channel,
+/// the receiver yields `None`, the stream completes. Python
+/// loop driver detects close via the EventSource's `onerror` /
+/// async-iterator end and proceeds to the gate stack with the
+/// drained list.
+///
+/// KeepAlive comments fire every 15 s so an idle stream (codex is
+/// thinking, no chips yet) doesn't get reaped by intermediate
+/// proxies. None today (only the docker compose network is in
+/// the path), but future-proofs against running this through a
+/// reverse proxy or k8s ingress.
+pub async fn stream_claims(
+    State(state): State<AppState>,
+    Path(snapshot_id): Path<String>,
+) -> Response {
+    // Take the receiver (single-consumer enforcement). Missing
+    // entry => snapshot was never opened (or already ended).
+    // Empty Option inside => somebody already drained this turn.
+    let rx = match state.claim_receivers.get(&snapshot_id) {
+        Some(slot) => match slot.lock().take() {
+            Some(rx) => rx,
+            None => {
+                return (
+                    StatusCode::CONFLICT,
+                    format!(
+                        "claims drain for snapshot {snapshot_id} already opened by another consumer"
+                    ),
+                )
+                    .into_response();
+            }
+        },
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                format!("snapshot {snapshot_id} not open; call /turn/begin first"),
+            )
+                .into_response();
+        }
+    };
+
+    // Map each `serde_json::Value` from the channel into an SSE
+    // `event: claim` frame. The unwrap on `serde_json::to_string`
+    // is safe: the values were `serde_json::to_value`-built by
+    // the MCP tool from valid serde structs.
+    let stream = UnboundedReceiverStream::new(rx).map(|claim_value| {
+        let data = serde_json::to_string(&claim_value).unwrap_or_else(|_| "null".to_string());
+        Ok::<Event, Infallible>(Event::default().event("claim").data(data))
+    });
+
+    Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)))
+        .into_response()
 }
 
 pub async fn wallet_profile_route(State(state): State<AppState>, req: Request) -> Response {
@@ -405,84 +506,39 @@ pub async fn get_token_info_route(State(state): State<AppState>, req: Request) -
             );
         }
     };
-    let mint_b58 = input.mint.trim().to_string();
-    if mint_b58.is_empty() {
-        return error_body(
-            StatusCode::BAD_REQUEST,
-            "invalid_input",
-            "mint pubkey is empty",
-            format,
-        );
-    }
-    let mint_pk = match parse_pubkey(&mint_b58) {
-        Ok(pk) => pk,
-        Err(msg) => {
+
+    // Compute lives in `crate::primitives::get_token_info` so the new
+    // MCP tool wrapper (`crate::mcp::McaeMcp::get_token_info`) calls
+    // the same path. The HTTP route owns the proto-bridge mapping;
+    // compute returns a serde struct shape that we map to the
+    // wire-level `proto::GetTokenInfoOutput` here.
+    use crate::primitives::get_token_info::{GetTokenInfoError, compute};
+
+    let resp = match compute(&state, &input.mint).await {
+        Ok(out) => proto::GetTokenInfoOutput {
+            mint: out.mint,
+            name: out.name,
+            symbol: out.symbol,
+            uri: out.uri,
+            update_authority: out.update_authority,
+            source_program: out.source_program,
+            ..Default::default()
+        },
+        Err(GetTokenInfoError::InvalidMint(msg)) => {
             return error_body(StatusCode::BAD_REQUEST, "invalid_input", &msg, format);
         }
-    };
-
-    let rpc = match state.rpc.clone() {
-        Some(r) => r,
-        None => {
+        Err(e @ GetTokenInfoError::RpcDisabled) => {
             return error_body(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "rpc_disabled",
-                "SOLANA_RPC_URL is not configured; get_token_info needs RPC access",
+                &e.to_string(),
                 format,
             );
         }
-    };
-
-    let cache_ctx = metadata::fetch::CacheCtx {
-        clickhouse: &state.clickhouse,
-        // Tip-unknown sentinel = 0; cache::read_cached treats every
-        // row as stale until the first `getSlot` round-trip lands.
-        current_slot: state.tip.current().unwrap_or(0),
-        ttl_slots: state.metadata_cache_ttl_slots,
-    };
-    let metadata_opt = match metadata::fetch::fetch_token_metadata(&rpc, &mint_pk, &cache_ctx).await
-    {
-        Ok(o) => o,
-        Err(e) => {
-            return error_body(
-                StatusCode::BAD_GATEWAY,
-                "rpc_error",
-                &format!("getAccountInfo failed: {e}"),
-                format,
-            );
+        Err(GetTokenInfoError::RpcError(msg)) => {
+            return error_body(StatusCode::BAD_GATEWAY, "rpc_error", &msg, format);
         }
-    };
-
-    let resp = match metadata_opt {
-        Some(meta) => proto::GetTokenInfoOutput {
-            mint: mint_b58,
-            name: Some(meta.name),
-            symbol: Some(meta.symbol),
-            uri: Some(meta.uri),
-            update_authority: Some(meta.update_authority),
-            source_program: meta.program.to_string(),
-            ..Default::default()
-        },
-        // Mint exists on chain but has no metadata via either path.
-        None => proto::GetTokenInfoOutput {
-            mint: mint_b58,
-            source_program: String::new(),
-            ..Default::default()
-        },
     };
     encode_response(format, &resp, StatusCode::OK)
-}
-
-fn parse_pubkey(s: &str) -> Result<Pubkey, String> {
-    let mut bytes = [0u8; 32];
-    let written = bs58::decode(s)
-        .onto(&mut bytes[..])
-        .map_err(|e| format!("invalid base58: {e}"))?;
-    if written != 32 {
-        return Err(format!(
-            "invalid pubkey length: expected 32 bytes, got {written}"
-        ));
-    }
-    Ok(Pubkey::new_from_array(bytes))
 }
 

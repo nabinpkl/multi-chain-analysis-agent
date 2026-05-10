@@ -24,8 +24,11 @@ Snapshot lease usage:
 from __future__ import annotations
 
 import hashlib
+import json
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 import structlog
@@ -266,6 +269,92 @@ class PrimitiveClient:
                 )
         except Exception as e:  # noqa: BLE001
             log.warning("turn_end_failed", snapshot_id=snapshot_id, error=str(e))
+
+    # -----------------------------------------------------------------
+    # Codex-path claim stream (harness-engineering chunk 2)
+    # -----------------------------------------------------------------
+
+    async def stream_claims(
+        self, snapshot_id: str
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Subscribe to the per-snapshot SSE drain at
+        `GET /turn/{snapshot_id}/claims` and yield each emitted claim
+        as a parsed dict. Single-consumer per snapshot enforced by
+        the Rust handler (a second subscriber gets HTTP 409).
+
+        The stream closes when the Rust side drops the channel
+        sender, which `turn_end` does explicitly. Caller wraps this
+        in `async for` and just lets the loop complete naturally.
+
+        Errors during streaming (network blip, snapshot expired
+        mid-stream, etc) raise `PrimitiveError`. Caller's contract:
+        invoke after the codex sub-loop is started (so emit_claims
+        tool calls have somewhere to land) and let the iterator
+        terminate when codex exits + turn_end fires.
+
+        Used by the codex harness path only; the Pydantic AI primary
+        agent path doesn't go through this  it accumulates claims
+        in `deps.emitted_claims` and the loop driver reads that
+        buffer directly.
+        """
+        url = f"/turn/{snapshot_id}/claims"
+        try:
+            async with self._client.stream("GET", url) as resp:
+                if resp.status_code >= 400:
+                    body = await resp.aread()
+                    raise PrimitiveError(
+                        kind="claim_stream_unavailable",
+                        message=f"GET {url} -> {resp.status_code}: {body.decode('utf-8', 'replace')[:200]}",
+                        status_code=resp.status_code,
+                    )
+                # Minimal SSE parser: walk lines, accumulate `data:`
+                # values until a blank line, then yield the parsed
+                # JSON. The Rust handler emits one claim per SSE
+                # event with `event: claim`; we filter by event name
+                # to ignore future event types (e.g. keep-alive
+                # comments, which `aiter_lines` returns as empty
+                # strings when they're SSE comment lines).
+                event_name: str | None = None
+                data_buf: list[str] = []
+                async for raw_line in resp.aiter_lines():
+                    if raw_line == "":
+                        # Frame terminator. Yield if it was a claim
+                        # event with actual data; reset state either
+                        # way.
+                        if event_name == "claim" and data_buf:
+                            payload = "\n".join(data_buf)
+                            try:
+                                yield json.loads(payload)
+                            except json.JSONDecodeError as e:
+                                log.warning(
+                                    "claim_stream_bad_payload",
+                                    snapshot_id=snapshot_id,
+                                    error=str(e),
+                                    payload_head=payload[:120],
+                                )
+                        event_name = None
+                        data_buf = []
+                        continue
+                    if raw_line.startswith(":"):
+                        # SSE comment (KeepAlive). Ignore.
+                        continue
+                    if raw_line.startswith("event:"):
+                        event_name = raw_line[len("event:") :].strip()
+                    elif raw_line.startswith("data:"):
+                        # Per spec, multi-line data values are joined
+                        # with newlines. We accumulate and join at
+                        # frame-terminator time.
+                        data_buf.append(raw_line[len("data:") :].lstrip())
+                    # Other field types (id:, retry:) ignored  the
+                    # Rust handler doesn't emit them but a future
+                    # version might; silent-skip is safer than
+                    # rejecting.
+        except httpx.HTTPError as e:
+            raise PrimitiveError(
+                kind="claim_stream_network_error",
+                message=str(e),
+                status_code=None,
+            ) from e
 
     # -----------------------------------------------------------------
     # Primitives

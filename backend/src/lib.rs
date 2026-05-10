@@ -12,6 +12,7 @@ pub mod config;
 pub mod domain;
 pub mod graph;
 pub mod ingest;
+pub mod mcp;
 pub mod metadata;
 pub mod primitives;
 pub mod rpc;

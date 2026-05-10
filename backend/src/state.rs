@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use clickhouse::Client;
+use dashmap::DashMap;
 use parking_lot::RwLock;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 
 use crate::analytics::{AnalyticsChannels, AnalyticsSnapshot};
 use crate::config::Config;
@@ -83,6 +84,39 @@ pub struct AppState {
     /// the `get_token_info` handler can pass it to the metadata
     /// fetcher's `CacheCtx` without re-reading env at each request.
     pub metadata_cache_ttl_slots: u64,
+    /// Host-header allowlist enforced by the rmcp transport at
+    /// `/mcp`. Sourced from `Config::mcp_allowed_hosts`. Carried
+    /// here so `api::internal_router` builds the MCP service from
+    /// state without re-reading env, matching how every other knob
+    /// flows through `Config -> AppState -> route handlers`.
+    pub mcp_allowed_hosts: Vec<String>,
+    /// Per-snapshot claim channels used by the harness-engineering
+    /// codex path. `turn_begin` creates an unbounded mpsc pair and
+    /// stashes the sender here under the new snapshot_id; the MCP
+    /// `emit_claims` tool looks up the sender by snapshot_id and
+    /// pushes each parsed claim onto it; the Python loop driver
+    /// drains via the SSE drain route at
+    /// `GET /turn/{snapshot_id}/claims`; `turn_end` removes the
+    /// entry, dropping the sender so any outstanding receiver sees
+    /// end-of-stream.
+    ///
+    /// Unbounded because each turn emits at most a handful of chips
+    /// (the agent's prompt budget caps it well below 100 in
+    /// practice) and bounding would require backpressure semantics
+    /// that complicate the in-MCP `#[tool]` body for no meaningful
+    /// memory pressure relief.
+    pub claim_channels: Arc<DashMap<String, mpsc::UnboundedSender<serde_json::Value>>>,
+    /// Per-snapshot claim receivers parked here at `turn_begin` and
+    /// taken by the SSE drain route on first subscribe. Wrapped in
+    /// `Mutex<Option<...>>` so the drain route's `take()` enforces
+    /// single-consumer at runtime: a second drain attempt on the
+    /// same snapshot returns 409 instead of silently splitting the
+    /// stream. `turn_end` removes whatever's left (whether taken
+    /// or not), so a turn that never opens a drain stream still
+    /// cleans up.
+    pub claim_receivers: Arc<
+        DashMap<String, parking_lot::Mutex<Option<mpsc::UnboundedReceiver<serde_json::Value>>>>,
+    >,
 }
 
 impl AppState {
@@ -130,6 +164,9 @@ impl AppState {
             snapshot_cache: SnapshotCache::new(),
             rpc,
             metadata_cache_ttl_slots: config.metadata_cache_ttl_slots,
+            mcp_allowed_hosts: config.mcp_allowed_hosts.clone(),
+            claim_channels: Arc::new(DashMap::new()),
+            claim_receivers: Arc::new(DashMap::new()),
         };
         (state, analytics_senders)
     }

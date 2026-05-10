@@ -32,6 +32,15 @@ pub struct Config {
     /// code once issue #48 (CDC instruction decoding) lands and the
     /// cache is kept fresh by ingest-time writes.
     pub metadata_cache_ttl_slots: u64,
+    /// Comma-separated list of Host-header values the MCP route at
+    /// `/mcp` will accept. Backstops the underlying network boundary
+    /// against DNS-rebind attacks if this surface ever moves to a
+    /// browser-reachable listener. Default covers loopback callers
+    /// plus the docker compose service name `api` that the
+    /// agent-service container uses internally. Allowlist entries
+    /// without a port match any port; entries with a port (e.g.
+    /// `example.com:8080`) match only that port.
+    pub mcp_allowed_hosts: Vec<String>,
     pub kafka_brokers: String,
     pub kafka_topic_raw_edges: String,
     pub kafka_group_ch_sink: String,
@@ -72,6 +81,22 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(9000),
+            mcp_allowed_hosts: env::var("MCP_ALLOWED_HOSTS")
+                .ok()
+                .map(|s| {
+                    s.split(',')
+                        .map(|h| h.trim().to_string())
+                        .filter(|h| !h.is_empty())
+                        .collect()
+                })
+                .unwrap_or_else(|| {
+                    vec![
+                        "localhost".into(),
+                        "127.0.0.1".into(),
+                        "::1".into(),
+                        "api".into(),
+                    ]
+                }),
             kafka_brokers: env::var("KAFKA_BROKERS")
                 .unwrap_or_else(|_| "redpanda:9092".into()),
             kafka_topic_raw_edges: env::var("KAFKA_TOPIC_RAW_EDGES")
