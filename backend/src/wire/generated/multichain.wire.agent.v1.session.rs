@@ -567,6 +567,15 @@ pub const __AGENT_SESSION_STARTED_JSON_ANY: ::buffa::type_registry::JsonAnyEntry
 /// observability, ADR 13); the frontend uses it to deep-link into
 /// Langfuse for the visual flame graph. Empty string means trace
 /// emission was disabled (OTEL_SDK_DISABLED) or otherwise unavailable.
+///
+/// `role_timings` carries the wall-time spent in each LLM role for
+/// this turn (sum across multiple calls within the same role on the
+/// same turn; the policy bucket fires multiple times per turn for
+/// constitution gates + repeat detection, so the sum is the useful
+/// "how much wall time did this role consume" view). Builder view's
+/// Models panel reads it back to surface "last call elapsed" under
+/// each role row, so a dev sees which role is dragging a turn
+/// without trawling docker logs.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
@@ -595,6 +604,13 @@ pub struct AgentDone {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
     )]
     pub trace_id: ::buffa::alloc::string::String,
+    /// Field 4: `role_timings`
+    #[serde(
+        rename = "roleTimings",
+        alias = "role_timings",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub role_timings: ::buffa::MessageField<RoleTimings>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -605,6 +621,7 @@ impl ::core::fmt::Debug for AgentDone {
             .field("session_id", &self.session_id)
             .field("elapsed_ms", &self.elapsed_ms)
             .field("trace_id", &self.trace_id)
+            .field("role_timings", &self.role_timings)
             .finish()
     }
 }
@@ -628,7 +645,7 @@ impl ::buffa::Message for AgentDone {
     /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
     /// compliant message will never overflow this type.
     #[allow(clippy::let_and_return)]
-    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
@@ -641,12 +658,20 @@ impl ::buffa::Message for AgentDone {
         if !self.trace_id.is_empty() {
             size += 1u32 + ::buffa::types::string_encoded_len(&self.trace_id) as u32;
         }
+        if self.role_timings.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.role_timings.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
     fn write_to(
         &self,
-        _cache: &mut ::buffa::SizeCache,
+        __cache: &mut ::buffa::SizeCache,
         buf: &mut impl ::buffa::bytes::BufMut,
     ) {
         #[allow(unused_imports)]
@@ -671,6 +696,15 @@ impl ::buffa::Message for AgentDone {
                 )
                 .encode(buf);
             ::buffa::types::encode_string(&self.trace_id, buf);
+        }
+        if self.role_timings.is_set() {
+            ::buffa::encoding::Tag::new(
+                    4u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
+                .encode(buf);
+            ::buffa::encoding::encode_varint(__cache.consume_next() as u64, buf);
+            self.role_timings.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -715,6 +749,20 @@ impl ::buffa::Message for AgentDone {
                 }
                 ::buffa::types::merge_string(&mut self.trace_id, buf)?;
             }
+            4u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 4u32,
+                        expected: 2u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                ::buffa::Message::merge_length_delimited(
+                    self.role_timings.get_or_insert_default(),
+                    buf,
+                    depth,
+                )?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, depth)?);
@@ -726,6 +774,7 @@ impl ::buffa::Message for AgentDone {
         self.session_id.clear();
         self.elapsed_ms = 0u32;
         self.trace_id.clear();
+        self.role_timings = ::buffa::MessageField::none();
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -756,5 +805,193 @@ pub const __AGENT_DONE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa:
     type_url: "type.googleapis.com/multichain.wire.agent.v1.AgentDone",
     to_json: ::buffa::type_registry::any_to_json::<AgentDone>,
     from_json: ::buffa::type_registry::any_from_json::<AgentDone>,
+    is_wkt: false,
+};
+/// Per-role wall-time tally for one turn. Values are integer
+/// milliseconds; zero means "no calls fired in that role this turn"
+/// (e.g. judge role isn't on the chat path today, so it stays 0).
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct RoleTimings {
+    /// Field 1: `primary_ms`
+    #[serde(
+        rename = "primaryMs",
+        alias = "primary_ms",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
+    pub primary_ms: u32,
+    /// Field 2: `policy_ms`
+    #[serde(
+        rename = "policyMs",
+        alias = "policy_ms",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
+    pub policy_ms: u32,
+    /// Field 3: `judge_ms`
+    #[serde(
+        rename = "judgeMs",
+        alias = "judge_ms",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
+    pub judge_ms: u32,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for RoleTimings {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("RoleTimings")
+            .field("primary_ms", &self.primary_ms)
+            .field("policy_ms", &self.policy_ms)
+            .field("judge_ms", &self.judge_ms)
+            .finish()
+    }
+}
+impl RoleTimings {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/multichain.wire.agent.v1.RoleTimings";
+}
+impl ::buffa::DefaultInstance for RoleTimings {
+    fn default_instance() -> &'static Self {
+        static VALUE: ::buffa::__private::OnceBox<RoleTimings> = ::buffa::__private::OnceBox::new();
+        VALUE.get_or_init(|| ::buffa::alloc::boxed::Box::new(Self::default()))
+    }
+}
+impl ::buffa::Message for RoleTimings {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.primary_ms != 0u32 {
+            size += 1u32 + ::buffa::types::uint32_encoded_len(self.primary_ms) as u32;
+        }
+        if self.policy_ms != 0u32 {
+            size += 1u32 + ::buffa::types::uint32_encoded_len(self.policy_ms) as u32;
+        }
+        if self.judge_ms != 0u32 {
+            size += 1u32 + ::buffa::types::uint32_encoded_len(self.judge_ms) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.primary_ms != 0u32 {
+            ::buffa::encoding::Tag::new(1u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_uint32(self.primary_ms, buf);
+        }
+        if self.policy_ms != 0u32 {
+            ::buffa::encoding::Tag::new(2u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_uint32(self.policy_ms, buf);
+        }
+        if self.judge_ms != 0u32 {
+            ::buffa::encoding::Tag::new(3u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_uint32(self.judge_ms, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        depth: u32,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 1u32,
+                        expected: 0u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                self.primary_ms = ::buffa::types::decode_uint32(buf)?;
+            }
+            2u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 2u32,
+                        expected: 0u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                self.policy_ms = ::buffa::types::decode_uint32(buf)?;
+            }
+            3u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 3u32,
+                        expected: 0u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                self.judge_ms = ::buffa::types::decode_uint32(buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, depth)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.primary_ms = 0u32;
+        self.policy_ms = 0u32;
+        self.judge_ms = 0u32;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for RoleTimings {
+    const PROTO_FQN: &'static str = "multichain.wire.agent.v1.RoleTimings";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for RoleTimings {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __ROLE_TIMINGS_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/multichain.wire.agent.v1.RoleTimings",
+    to_json: ::buffa::type_registry::any_to_json::<RoleTimings>,
+    from_json: ::buffa::type_registry::any_from_json::<RoleTimings>,
     is_wkt: false,
 };

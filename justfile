@@ -73,3 +73,34 @@ eval-baseline suite *flags:
         --baselines-root "{{ justfile_directory() }}/evals/baselines" \
         {{ flags }}
 
+# Tear the whole compose stack down (including volumes!) and rebuild
+# from a clean slate. Use when env-driven config has shifted (model
+# ids, provider defaults, ClickHouse schema) and you want zero
+# residue from the previous run. `--volumes` wipes ClickHouse +
+# redpanda + langfuse-postgres state too: ingestion will replay
+# from genesis and Langfuse will re-bootstrap the org/project on
+# next boot, so don't run this when there's data you care about.
+# `--build -d` forces a fresh image build, then detaches.
+#
+# Tears down + rebuilds the full docker compose stack from scratch.
+docker:
+    docker compose down --volumes
+    docker compose up --build -d
+
+# Why force the port: a stale `next dev` from a crashed terminal
+# silently bumps a fresh start to 3009, which breaks any hardcoded
+# NEXT_PUBLIC_AGENT_URL or agent-service CORS allowlist pointing at
+# :3008. Killing first keeps every dev session pinned to the same
+# URL.
+#
+# `lsof -ti :3008` lists PIDs holding the port. The leading `-`
+# tells just to ignore the recipe-line exit code, so an empty PID
+# list (no process to kill, lsof exits non-zero on macOS) does not
+# abort the recipe; the redirect silences the cosmetic error.
+#
+# Frees port 3008 then runs the Next.js frontend dev server on it.
+dev:
+    @echo ">> freeing port 3008 if in use"
+    -lsof -ti :3008 | xargs kill -9 2>/dev/null || true
+    @echo ">> starting frontend on :3008"
+    cd frontend && pnpm dev --port 3008

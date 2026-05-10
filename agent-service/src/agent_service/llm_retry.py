@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from contextvars import ContextVar
 from typing import Awaitable, Callable, TypeVar
 
 import httpx
@@ -59,6 +60,62 @@ from pydantic_ai.exceptions import UnexpectedModelBehavior
 T = TypeVar("T")
 
 log = structlog.get_logger(__name__)
+
+# Per-turn role-timing accumulator. The loop driver sets this at the
+# start of `run_turn` to a fresh dict; every successful call within
+# the turn (whether on attempt 1 or attempt 2) adds its elapsed
+# wall-time to the matching role bucket here. The driver reads it back
+# when stamping `AgentDone.role_timings` so the builder view's Models
+# panel can show "primary 73.8s last call" under each role row.
+#
+# Keys are role ids matching `agent_service.llm.Role` ("primary",
+# "policy", "judge"). Values are accumulated seconds; the driver
+# converts to ms when crossing the wire boundary. `None` means we are
+# outside any turn-scoped attribution context (e.g. eval probe runs
+# that don't go through the loop driver) and the accumulator is
+# silently a no-op for those.
+_role_timings: ContextVar[dict[str, float] | None] = ContextVar(
+    "_role_timings", default=None
+)
+
+# Map call-site label to role bucket. Keep this central so adding a
+# new gate (e.g. a future "ground_truth" call) is one line in this
+# table and not a hunt across the codebase. Labels not in the map
+# (eval probes, ad-hoc internal tooling) are intentionally dropped:
+# the panel only surfaces user-visible chat-path timings.
+_LABEL_TO_ROLE: dict[str, str] = {
+    "primary_agent": "primary",
+    "constitution_claim": "policy",
+    "constitution_narrative": "policy",
+    "repeat_detector": "policy",
+    # Judge labels reserved for the eval substrate; they don't run on
+    # the chat path today, so the judge bucket is always 0 in
+    # AgentDone.role_timings. Listed here so the bucket has a stable
+    # name when judge calls migrate onto the chat path.
+}
+
+
+def _attribute_call(label: str, elapsed_s: float) -> None:
+    bucket = _role_timings.get()
+    if bucket is None:
+        return
+    role = _LABEL_TO_ROLE.get(label)
+    if role is None:
+        return
+    bucket[role] = bucket.get(role, 0.0) + elapsed_s
+
+
+def begin_role_timing_capture() -> dict[str, float]:
+    """Install a fresh accumulator for the current async context.
+    Returns the dict the caller should later read after the
+    captured-region's calls have all completed.
+
+    Caller is expected to balance this with `end_role_timing_capture`
+    using the returned token; the contextvar pattern is the same one
+    pydantic_ai uses for its `Agent.override` flow."""
+    bucket: dict[str, float] = {}
+    _role_timings.set(bucket)
+    return bucket
 
 # Exceptions we treat as transient. Anything else propagates immediately.
 #
@@ -107,11 +164,13 @@ async def with_provider_retry(
     started = time.monotonic()
     try:
         result = await _attempt()
+        elapsed = time.monotonic() - started
+        _attribute_call(label, elapsed)
         log.debug(
             "llm_provider_call_ok",
             label=label,
             attempt=1,
-            elapsed_s=round(time.monotonic() - started, 3),
+            elapsed_s=round(elapsed, 3),
             timeout_s=per_attempt_timeout_s,
         )
         return result
@@ -130,11 +189,17 @@ async def with_provider_retry(
         retry_started = time.monotonic()
         try:
             result = await _attempt()
+            retry_elapsed = time.monotonic() - retry_started
+            # Attribute only the successful retry's wall-time, not the
+            # failed first attempt + backoff. The accumulator is for
+            # "how long did the model actually take to answer" and the
+            # retry path is what the caller will see end-to-end.
+            _attribute_call(label, retry_elapsed)
             log.info(
                 "llm_provider_call_ok_after_retry",
                 label=label,
                 attempt=2,
-                elapsed_s=round(time.monotonic() - retry_started, 3),
+                elapsed_s=round(retry_elapsed, 3),
                 timeout_s=per_attempt_timeout_s,
             )
             return result

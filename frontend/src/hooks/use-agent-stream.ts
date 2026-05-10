@@ -29,6 +29,7 @@ import {
   NarrativeWithRefsSchema,
 } from "@/lib/wire/multichain/wire/agent/v1/narrative_pb";
 import { type ProvenanceRef } from "@/lib/wire/multichain/wire/shared/v1/provenance_pb";
+import { useRoleTimings } from "@/stores/use-role-timings";
 
 import type { ProgressEvent } from "@/components/agent/progress-format";
 
@@ -60,6 +61,16 @@ export type AgentStatus =
        * Empty string when telemetry is disabled.
        */
       traceId: string;
+      /**
+       * Per-role wall-time tally for this turn (ms). Sum across
+       * multiple calls within the same role (the policy bucket
+       * fires multiple times per turn for constitution gates +
+       * repeat detection, so the sum is the useful "how much wall
+       * time did this role consume" view). The builder view's
+       * Models panel reads this back to surface "primary 73.8s
+       * last call" under each role row.
+       */
+      roleTimings: { primaryMs: number; policyMs: number; judgeMs: number };
     }
   | { kind: "error"; message: string };
 
@@ -378,14 +389,33 @@ export function useAgentStream() {
         const data = (ev as MessageEvent<string>).data;
         try {
           const done = fromJsonString(AgentDoneSchema, data);
+          const timings = {
+            // proto3 default for an unset sub-message is a
+            // zero-filled instance, so reading the fields is
+            // safe even when the backend omits the message.
+            primaryMs: done.roleTimings?.primaryMs ?? 0,
+            policyMs: done.roleTimings?.policyMs ?? 0,
+            judgeMs: done.roleTimings?.judgeMs ?? 0,
+          };
+          // Publish timings to the dedicated store so the
+          // sibling ModelsPanel can read without prop-drilling
+          // through the agent sheet.
+          useRoleTimings.getState().setLatest(timings);
           setStatus({
             kind: "done",
             sessionId: done.sessionId,
             elapsedMs: done.elapsedMs,
             traceId: done.traceId ?? "",
+            roleTimings: timings,
           });
         } catch {
-          setStatus({ kind: "done", sessionId, elapsedMs: 0, traceId: "" });
+          setStatus({
+            kind: "done",
+            sessionId,
+            elapsedMs: 0,
+            traceId: "",
+            roleTimings: { primaryMs: 0, policyMs: 0, judgeMs: 0 },
+          });
         }
         // Defensive: if the loop ended without emitting anything,
         // mark the turn errored so the spinner doesn't hang.

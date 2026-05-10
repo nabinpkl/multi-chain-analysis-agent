@@ -16,7 +16,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file multichain/wire/agent/v1/session.proto.
  */
 export const file_multichain_wire_agent_v1_session: GenFile = /*@__PURE__*/
-  fileDesc("CiZtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc2Vzc2lvbi5wcm90bxIYbXVsdGljaGFpbi53aXJlLmFnZW50LnYxIqECCgxBZ2VudFJlcXVlc3QSFQoNdXNlcl9xdWVzdGlvbhgBIAEoCRI2Cgdjb250ZXh0GAIgASgLMiUubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLlZpZXdDb250ZXh0EhYKCXRocmVhZF9pZBgDIAEoCUgAiAEBEjkKCHN3aXRjaGVzGAQgASgLMicubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkFnZW50U3dpdGNoZXMSEgoKc2hvd190cmFjZRgFIAEoCBIQCghydW5fdHlwZRgGIAEoCRI7CgxsbG1fb3ZlcnJpZGUYByABKAsyJS5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuTGxtT3ZlcnJpZGVCDAoKX3RocmVhZF9pZCJKChNBZ2VudFNlc3Npb25TdGFydGVkEhIKCnNlc3Npb25faWQYASABKAkSEQoJdGhyZWFkX2lkGAIgASgJEgwKBHR1cm4YAyABKA0iRQoJQWdlbnREb25lEhIKCnNlc3Npb25faWQYASABKAkSEgoKZWxhcHNlZF9tcxgCIAEoDRIQCgh0cmFjZV9pZBgDIAEoCWIGcHJvdG8z", [file_multichain_wire_agent_v1_entity, file_multichain_wire_agent_v1_llm, file_multichain_wire_agent_v1_switches]);
+  fileDesc("CiZtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc2Vzc2lvbi5wcm90bxIYbXVsdGljaGFpbi53aXJlLmFnZW50LnYxIqECCgxBZ2VudFJlcXVlc3QSFQoNdXNlcl9xdWVzdGlvbhgBIAEoCRI2Cgdjb250ZXh0GAIgASgLMiUubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLlZpZXdDb250ZXh0EhYKCXRocmVhZF9pZBgDIAEoCUgAiAEBEjkKCHN3aXRjaGVzGAQgASgLMicubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkFnZW50U3dpdGNoZXMSEgoKc2hvd190cmFjZRgFIAEoCBIQCghydW5fdHlwZRgGIAEoCRI7CgxsbG1fb3ZlcnJpZGUYByABKAsyJS5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuTGxtT3ZlcnJpZGVCDAoKX3RocmVhZF9pZCJKChNBZ2VudFNlc3Npb25TdGFydGVkEhIKCnNlc3Npb25faWQYASABKAkSEQoJdGhyZWFkX2lkGAIgASgJEgwKBHR1cm4YAyABKA0iggEKCUFnZW50RG9uZRISCgpzZXNzaW9uX2lkGAEgASgJEhIKCmVsYXBzZWRfbXMYAiABKA0SEAoIdHJhY2VfaWQYAyABKAkSOwoMcm9sZV90aW1pbmdzGAQgASgLMiUubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLlJvbGVUaW1pbmdzIkYKC1JvbGVUaW1pbmdzEhIKCnByaW1hcnlfbXMYASABKA0SEQoJcG9saWN5X21zGAIgASgNEhAKCGp1ZGdlX21zGAMgASgNYgZwcm90bzM", [file_multichain_wire_agent_v1_entity, file_multichain_wire_agent_v1_llm, file_multichain_wire_agent_v1_switches]);
 
 /**
  * User question + ViewContext. `thread_id` is None on the first
@@ -127,6 +127,15 @@ export const AgentSessionStartedSchema: GenMessage<AgentSessionStarted> = /*@__P
  * Langfuse for the visual flame graph. Empty string means trace
  * emission was disabled (OTEL_SDK_DISABLED) or otherwise unavailable.
  *
+ * `role_timings` carries the wall-time spent in each LLM role for
+ * this turn (sum across multiple calls within the same role on the
+ * same turn; the policy bucket fires multiple times per turn for
+ * constitution gates + repeat detection, so the sum is the useful
+ * "how much wall time did this role consume" view). Builder view's
+ * Models panel reads it back to surface "last call elapsed" under
+ * each role row, so a dev sees which role is dragging a turn
+ * without trawling docker logs.
+ *
  * @generated from message multichain.wire.agent.v1.AgentDone
  */
 export type AgentDone = Message<"multichain.wire.agent.v1.AgentDone"> & {
@@ -144,6 +153,11 @@ export type AgentDone = Message<"multichain.wire.agent.v1.AgentDone"> & {
    * @generated from field: string trace_id = 3;
    */
   traceId: string;
+
+  /**
+   * @generated from field: multichain.wire.agent.v1.RoleTimings role_timings = 4;
+   */
+  roleTimings?: RoleTimings | undefined;
 };
 
 /**
@@ -152,4 +166,35 @@ export type AgentDone = Message<"multichain.wire.agent.v1.AgentDone"> & {
  */
 export const AgentDoneSchema: GenMessage<AgentDone> = /*@__PURE__*/
   messageDesc(file_multichain_wire_agent_v1_session, 2);
+
+/**
+ * Per-role wall-time tally for one turn. Values are integer
+ * milliseconds; zero means "no calls fired in that role this turn"
+ * (e.g. judge role isn't on the chat path today, so it stays 0).
+ *
+ * @generated from message multichain.wire.agent.v1.RoleTimings
+ */
+export type RoleTimings = Message<"multichain.wire.agent.v1.RoleTimings"> & {
+  /**
+   * @generated from field: uint32 primary_ms = 1;
+   */
+  primaryMs: number;
+
+  /**
+   * @generated from field: uint32 policy_ms = 2;
+   */
+  policyMs: number;
+
+  /**
+   * @generated from field: uint32 judge_ms = 3;
+   */
+  judgeMs: number;
+};
+
+/**
+ * Describes the message multichain.wire.agent.v1.RoleTimings.
+ * Use `create(RoleTimingsSchema)` to create a new message.
+ */
+export const RoleTimingsSchema: GenMessage<RoleTimings> = /*@__PURE__*/
+  messageDesc(file_multichain_wire_agent_v1_session, 3);
 

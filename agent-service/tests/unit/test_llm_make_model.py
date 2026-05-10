@@ -24,9 +24,14 @@ pytestmark = pytest.mark.real_llm
 @pytest.fixture(autouse=True)
 def _set_required_env(monkeypatch):
     monkeypatch.setenv("AGENT_API_KEY", "sk-test-or-dummy")
+    monkeypatch.setenv("GEMINI_API_KEY", "sk-test-gemini-dummy")
     monkeypatch.setenv("AGENT_PRIMARY_MODEL", "nvidia/nemotron-test")
     monkeypatch.setenv("AGENT_POLICY_MODEL", "openai/gpt-oss-test")
     monkeypatch.setenv("EVAL_JUDGE_MODEL", "openrouter/judge-test")
+    # Tests exercise the explicit-provider paths; clear the default
+    # knob so a stale value in the dev shell doesn't change the
+    # `_normalize_provider("")` outcome under test.
+    monkeypatch.delenv("AGENT_DEFAULT_PROVIDER", raising=False)
 
 
 def _model_provider(model):
@@ -95,14 +100,75 @@ def test_local_override_without_model_id_falls_back_to_env_id():
     assert model.model_name == "nvidia/nemotron-test"  # AGENT_PRIMARY_MODEL
 
 
-def test_unknown_provider_falls_through_to_openrouter():
+def test_openrouter_override_with_model_id_wins_over_env():
+    """Builder view pins a specific OpenRouter `:free` model per role
+    (e.g. swapping out a slow nemotron default for a faster gpt-oss
+    sibling). Override `model_id` must win over the env default for
+    any provider, including openrouter."""
+    override = SimpleNamespace(
+        provider="openrouter", model_id="openai/gpt-oss-120b:free"
+    )
+    model = llm_mod.make_model("primary", override=override)
+    p = _model_provider(model)
+    assert p.base_url.rstrip("/") == "https://openrouter.ai/api/v1"
+    assert model.model_name == "openai/gpt-oss-120b:free"
+
+
+@pytest.mark.parametrize("role", ["primary", "policy", "judge"])
+def test_gemini_override_routes_to_google_oai_compat(role):
+    """Per-role gemini override picks up the Google OpenAI-compatible
+    base URL and the override's `model_id`. Verified 2026-05 against
+    `gemma-4-31b-it`. The base URL is hard-coded (no `GEMINI_BASE_URL`
+    knob) because Google publishes one canonical OpenAI-compat path
+    and varying it would just be an unguarded foot-gun."""
+    override = SimpleNamespace(provider="gemini", model_id="gemma-4-31b-it")
+    model = llm_mod.make_model(role, override=override)
+    p = _model_provider(model)
+    assert (
+        p.base_url.rstrip("/")
+        == "https://generativelanguage.googleapis.com/v1beta/openai"
+    )
+    assert model.model_name == "gemma-4-31b-it"
+
+
+def test_default_provider_env_var_flips_empty_override(monkeypatch):
+    """`AGENT_DEFAULT_PROVIDER=gemini` makes empty overrides (and
+    no-override calls) route to Google's OpenAI-compat endpoint
+    instead of OpenRouter. This is the production-default flip path
+    that lets us redirect every request after OpenRouter free tier
+    becomes unusable."""
+    monkeypatch.setenv("AGENT_DEFAULT_PROVIDER", "gemini")
+    monkeypatch.setenv("AGENT_PRIMARY_MODEL", "gemma-4-31b-it")
+    model = llm_mod.make_model("primary")
+    p = _model_provider(model)
+    assert (
+        p.base_url.rstrip("/")
+        == "https://generativelanguage.googleapis.com/v1beta/openai"
+    )
+    assert model.model_name == "gemma-4-31b-it"
+
+
+def test_default_provider_env_var_unknown_falls_back_to_openrouter(monkeypatch):
+    """Garbage in `AGENT_DEFAULT_PROVIDER` falls back to openrouter
+    rather than crashing. Same permissive parse rule as the wire-
+    side `_normalize_provider`."""
+    monkeypatch.setenv("AGENT_DEFAULT_PROVIDER", "anthropic-future")
+    model = llm_mod.make_model("primary")
+    p = _model_provider(model)
+    assert p.base_url.rstrip("/") == "https://openrouter.ai/api/v1"
+
+
+def test_unknown_provider_with_model_id_routes_to_openrouter_with_id():
     """Forward-compat: a future frontend may send a provider name
-    this backend doesn't know. Permissive parse: treat as default,
-    log nothing, route to OpenRouter."""
+    this backend doesn't know. Permissive parse: treat as default
+    (openrouter), and if a model_id rode along, honor it. The model
+    being unrecognized is the caller's problem to surface, not ours
+    to silently swallow back to env defaults."""
     override = SimpleNamespace(provider="anthropic-native", model_id="claude-x")
     model = llm_mod.make_model("primary", override=override)
     p = _model_provider(model)
     assert p.base_url.rstrip("/") == "https://openrouter.ai/api/v1"
+    assert model.model_name == "claude-x"
 
 
 def test_explicit_model_id_arg_wins_over_override(monkeypatch):

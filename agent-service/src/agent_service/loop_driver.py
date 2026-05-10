@@ -52,6 +52,7 @@ from agent_service.core import (
     run_one_turn,
 )
 from agent_service.diff import diff_outputs, spec_for
+from agent_service.llm_retry import begin_role_timing_capture
 from agent_service.policy.constitution import build_constitution_agent
 from agent_service.primitive_client import PrimitiveClient, PrimitiveError
 from agent_service.repeat_detector import build_repeat_agent, detect_repeat
@@ -252,6 +253,14 @@ async def run_turn(
     a concurrent task while draining the sink as SSE frames, then
     writes the core's outcome back into thread state.
     """
+    # Install a per-turn role-timing accumulator before any LLM call
+    # could fire. Every successful call inside the turn (primary
+    # agent, constitution gates, repeat detector) attributes its
+    # wall-time into this bucket via `with_provider_retry`. We read
+    # it back when stamping `AgentDone.role_timings` so the builder
+    # view's Models panel can show "primary 73.8s last call" under
+    # each role row.
+    role_timings = begin_role_timing_capture()
     snapshot_id: str | None = None
     # Resolve per-turn agents up front. When the request carries an
     # `llm_override`, build fresh agents pinned to the requested
@@ -376,7 +385,7 @@ async def run_turn(
                             ):
                                 yield frame
                             yield _terminal_done(
-                                session_id, session_started_at_ms
+                                session_id, session_started_at_ms, role_timings
                             )
                             return
 
@@ -463,7 +472,9 @@ async def run_turn(
                 for claim in outcome.approved_claims:
                     thread.record_claim(claim)
 
-                yield _terminal_done(session_id, session_started_at_ms)
+                yield _terminal_done(
+                    session_id, session_started_at_ms, role_timings
+                )
 
     except asyncio.CancelledError:
         log.info("agent_stream_cancelled", session_id=session_id)
@@ -471,25 +482,38 @@ async def run_turn(
     except Exception as e:  # noqa: BLE001
         log.exception("loop_driver_failed", session_id=session_id)
         yield _emit_error(e, debug_public=handles.debug_public)
-        yield _terminal_done(session_id, session_started_at_ms)
+        yield _terminal_done(session_id, session_started_at_ms, role_timings)
     finally:
         if snapshot_id is not None:
             await handles.primitive_client.end_turn(snapshot_id)
 
 
-def _terminal_done(session_id: str, session_started_at_ms: int) -> dict[str, str]:
+def _terminal_done(
+    session_id: str,
+    session_started_at_ms: int,
+    role_timings: dict[str, float],
+) -> dict[str, str]:
     elapsed_ms = max(0, int(time.time() * 1000) - session_started_at_ms)
     # Stamp the active OTel trace id onto the Done frame so the
     # frontend can deep-link into Langfuse / SQL the trace by id.
     # Empty string when the SDK is disabled (tests) or no active span.
     span_ctx = trace.get_current_span().get_span_context()
     trace_id_hex = format(span_ctx.trace_id, "032x") if span_ctx.is_valid else ""
+    # Per-role wall-time tally. Roles missing from the bucket (e.g.
+    # judge today, since it isn't on the chat path) stay 0. Cap at
+    # uint32 max for the same reason `elapsed_ms` does.
+    timings_proto = session_pb2.RoleTimings(
+        primary_ms=min(int(role_timings.get("primary", 0.0) * 1000), 0xFFFFFFFF),
+        policy_ms=min(int(role_timings.get("policy", 0.0) * 1000), 0xFFFFFFFF),
+        judge_ms=min(int(role_timings.get("judge", 0.0) * 1000), 0xFFFFFFFF),
+    )
     return _frame(
         "Done",
         session_pb2.AgentDone(
             session_id=session_id,
             elapsed_ms=min(elapsed_ms, 0xFFFFFFFF),
             trace_id=trace_id_hex,
+            role_timings=timings_proto,
         ),
     )
 

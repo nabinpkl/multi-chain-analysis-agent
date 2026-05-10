@@ -219,6 +219,129 @@ async def local_models() -> dict:
         return {"reachable": False, "baseUrl": base_url, "models": []}
 
 
+@app.get("/agent/config/role-defaults")
+async def role_defaults() -> dict[str, str]:
+    """Expose the per-role env-driven model ids (`AGENT_PRIMARY_MODEL`,
+    `AGENT_POLICY_MODEL`, `EVAL_JUDGE_MODEL`) so the builder view can
+    render the actual id in its "use the default" dropdown option
+    instead of the abstract phrase "env default." Builders need to
+    see *which* model the production preset would pick (currently
+    e.g. `nvidia/nemotron-3-super-120b-a12b:free` for primary, the
+    timeout offender we identified) without ssh'ing into the
+    container or grep'ing `.env`. Empty string when an env var is
+    unset, mirroring the wire contract for `RoleOverride`.
+    """
+    return {
+        "primary": os.environ.get("AGENT_PRIMARY_MODEL", ""),
+        "policy": os.environ.get("AGENT_POLICY_MODEL", ""),
+        "judge": os.environ.get("EVAL_JUDGE_MODEL", ""),
+    }
+
+
+@app.get("/agent/gemini/models")
+async def gemini_models() -> dict:
+    """Proxy `GET https://generativelanguage.googleapis.com/v1beta/openai/models`
+    so the builder view can populate its Gemini/Gemma dropdown.
+
+    Why this exists: OpenRouter free tier became unusable on the
+    primary role (queue-depth stalls hitting the 75s/attempt cap on
+    `nvidia/nemotron-3-super-120b-a12b:free`). Google's Generative
+    Language API exposes Gemma open-weights models directly with no
+    queue-depth issue and tool-calling support. The proxy keeps
+    every "list models" path on one canonical shape.
+
+    Auth required: `GEMINI_API_KEY` env var. We DO forward this key
+    server-side (unlike `/agent/openrouter/models` where the
+    listing is public). When the key is missing we return one
+    canonical "unreachable" shape rather than 500'ing so the
+    builder view can render a clear empty state.
+
+    The returned model ids are normalized: Google's `/models`
+    response uses `models/<id>` while the chat-completions endpoint
+    accepts the bare `<id>`. We strip the prefix here so the
+    dropdown value matches what `make_model` expects to send.
+
+    Returns: `{"reachable": bool, "models": [{id, name}]}`.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return {"reachable": False, "models": []}
+    url = "https://generativelanguage.googleapis.com/v1beta/openai/models"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+        if r.status_code != 200:
+            return {"reachable": False, "models": []}
+        body = r.json()
+        raw = body.get("data", []) if isinstance(body, dict) else []
+        out = []
+        for m in raw:
+            if not isinstance(m, dict):
+                continue
+            mid = m.get("id", "")
+            if not isinstance(mid, str) or not mid:
+                continue
+            # Google returns "models/gemma-4-31b-it"; the OpenAI-compat
+            # chat completions endpoint accepts the bare id, so strip
+            # to match what `make_model` will send on the wire.
+            bare = mid[len("models/") :] if mid.startswith("models/") else mid
+            out.append({"id": bare, "name": m.get("name", bare)})
+        out.sort(key=lambda m: m["id"])
+        return {"reachable": True, "models": out}
+    except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError):
+        return {"reachable": False, "models": []}
+
+
+@app.get("/agent/openrouter/models")
+async def openrouter_models() -> dict:
+    """Proxy `GET https://openrouter.ai/api/v1/models`, filtered to
+    free-tier ids (suffix `:free`), so the builder view can populate
+    its OpenRouter dropdown.
+
+    Why server-side instead of fetching from the browser: keeps every
+    "list models" path on one canonical shape (matches
+    `/agent/local/models`), and OpenRouter occasionally trickles
+    request budgets across origins; routing through the agent service
+    means one server-side IP not many browser ones.
+
+    `:free` filter is the user-asked semantic. The pricing object
+    (`pricing.prompt == "0"` etc.) would also work, but suffix is
+    what OpenRouter publishes as the durable identifier and is what
+    we want pinned in the user's localStorage.
+
+    Auth: OpenRouter `/models` is publicly readable; no API key
+    required. We intentionally do NOT forward `AGENT_API_KEY` here:
+    the listing should work even before the env is fully configured
+    (e.g. on first project clone).
+
+    Returns one canonical shape regardless of failure:
+      `{"reachable": bool, "models": [{id, name, contextLength, ...}]}`
+    """
+    url = "https://openrouter.ai/api/v1/models"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(url)
+        if r.status_code != 200:
+            return {"reachable": False, "models": []}
+        body = r.json()
+        raw = body.get("data", []) if isinstance(body, dict) else []
+        free = [
+            {
+                "id": m.get("id", ""),
+                "name": m.get("name", ""),
+                "contextLength": m.get("context_length"),
+            }
+            for m in raw
+            if isinstance(m, dict) and isinstance(m.get("id"), str)
+            and m["id"].endswith(":free")
+        ]
+        # Stable sort by id so the dropdown order is deterministic.
+        free.sort(key=lambda m: m["id"])
+        return {"reachable": True, "models": free}
+    except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError):
+        return {"reachable": False, "models": []}
+
+
 @app.post("/agent/ask")
 async def ask(request: Request) -> Response:
     """Stash the request under a fresh session_id; the SSE handler

@@ -42,7 +42,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 Role = Literal["primary", "policy", "judge"]
-ProviderId = Literal["openrouter", "local"]
+ProviderId = Literal["openrouter", "gemini", "local"]
 
 _ROLE_TO_ENV: dict[Role, str] = {
     "primary": "AGENT_PRIMARY_MODEL",
@@ -97,6 +97,23 @@ def _resolve_provider(provider_id: ProviderId) -> _ProviderCfg:
             base_url="https://openrouter.ai/api/v1",
             api_key=_api_key_required("AGENT_API_KEY", purpose="OpenRouter API key"),
         )
+    if provider_id == "gemini":
+        # Google's OpenAI-compatible shim sits at this base; the same
+        # API key works for both Gemini (proprietary) and Gemma
+        # (open weights served by Google) model ids. Verified
+        # 2026-05 against gemma-4-31b-it. Tool-calling and JSON-
+        # schema structured output both work through this shim,
+        # though Gemma models embed `<thought>...</thought>` blocks
+        # in `message.content` that pydantic_ai treats as part of
+        # the assistant's reply; Gemini-2.5+ models put the same
+        # reasoning in a separate `extra_content.google.thought`
+        # field, so they're cleaner if `<thought>` leakage matters.
+        return _ProviderCfg(
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            api_key=_api_key_required(
+                "GEMINI_API_KEY", purpose="Google Generative Language API key"
+            ),
+        )
     if provider_id == "local":
         return _ProviderCfg(
             base_url=os.environ.get(
@@ -111,14 +128,29 @@ def _resolve_provider(provider_id: ProviderId) -> _ProviderCfg:
 
 def _normalize_provider(raw: str) -> ProviderId:
     """Permissive provider-id parsing. Empty / unrecognized values
-    fall through to the production default (openrouter), matching the
-    proto's wire contract: `RoleOverride.provider == ""` means "use
-    the default for this role." Frontend extensions can introduce
-    new provider names without breaking older backends; the worst
-    case for a typo is "ignored, defaults applied."
+    fall through to the production default (controlled by
+    `AGENT_DEFAULT_PROVIDER`, fallback "openrouter" for backward
+    compat). Matches the proto's wire contract: `RoleOverride.
+    provider == ""` means "use the default for this role." Frontend
+    extensions can introduce new provider names without breaking
+    older backends; the worst case for a typo is "ignored, default
+    applied."
+
+    `AGENT_DEFAULT_PROVIDER` exists because the OpenRouter free tier
+    became unusable on the primary role (queue-depth stalls hitting
+    the 75s/attempt cap), and the natural reaction is to flip the
+    operating default to a different provider (gemini today, perhaps
+    something else tomorrow). Without this knob the only way to
+    redirect every empty-override request is to lie in the per-role
+    env model id (e.g. set `AGENT_PRIMARY_MODEL=gemma-4-31b-it` AND
+    rewrite the hardcoded "openrouter" return below). The env var
+    keeps the production default declarative.
     """
-    if raw == "local":
-        return "local"
+    if raw in ("local", "gemini", "openrouter"):
+        return raw  # type: ignore[return-value]
+    fallback = os.environ.get("AGENT_DEFAULT_PROVIDER", "").strip().lower()
+    if fallback in ("local", "gemini", "openrouter"):
+        return fallback  # type: ignore[return-value]
     return "openrouter"
 
 
@@ -149,10 +181,15 @@ def make_model(role: Role, *, override=None, model_id: str | None = None) -> Mod
     resolved_model_id: str
     if model_id:
         resolved_model_id = model_id
-    elif provider_id == "local" and raw_model_id:
-        # Override-supplied model id only takes effect on the local
-        # path. For openrouter the env-default wins (the dev pain we
-        # solve is OpenRouter latency, not OpenRouter model picking).
+    elif raw_model_id:
+        # Override-supplied model id wins for any provider. Originally
+        # we only honored this on the local path because the dev pain
+        # was OpenRouter latency, not OpenRouter model picking. That
+        # changed once we identified specific free-tier models (e.g.
+        # `nvidia/nemotron-3-super-120b-a12b:free`) as the timeout
+        # source: the builder view's Models section now lets a dev
+        # pin a known-fast `:free` OpenRouter model per role, so the
+        # path needs to honor `model_id` for openrouter too.
         resolved_model_id = raw_model_id
     else:
         resolved_model_id = _required_model_id(_ROLE_TO_ENV[role])

@@ -576,6 +576,15 @@ impl<'v> ::buffa::DefaultViewInstance for AgentSessionStartedView<'v> {
 /// observability, ADR 13); the frontend uses it to deep-link into
 /// Langfuse for the visual flame graph. Empty string means trace
 /// emission was disabled (OTEL_SDK_DISABLED) or otherwise unavailable.
+///
+/// `role_timings` carries the wall-time spent in each LLM role for
+/// this turn (sum across multiple calls within the same role on the
+/// same turn; the policy bucket fires multiple times per turn for
+/// constitution gates + repeat detection, so the sum is the useful
+/// "how much wall time did this role consume" view). Builder view's
+/// Models panel reads it back to surface "last call elapsed" under
+/// each role row, so a dev sees which role is dragging a turn
+/// without trawling docker logs.
 #[derive(Clone, Debug, Default)]
 pub struct AgentDoneView<'a> {
     /// Field 1: `session_id`
@@ -584,6 +593,10 @@ pub struct AgentDoneView<'a> {
     pub elapsed_ms: u32,
     /// Field 3: `trace_id`
     pub trace_id: &'a str,
+    /// Field 4: `role_timings`
+    pub role_timings: ::buffa::MessageFieldView<
+        super::super::__buffa::view::RoleTimingsView<'a>,
+    >,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> AgentDoneView<'a> {
@@ -654,6 +667,30 @@ impl<'a> AgentDoneView<'a> {
                     }
                     view.trace_id = ::buffa::types::borrow_str(&mut cur)?;
                 }
+                4u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 4u32,
+                            expected: 2u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    if depth == 0 {
+                        return Err(::buffa::DecodeError::RecursionLimitExceeded);
+                    }
+                    let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                    match view.role_timings.as_mut() {
+                        Some(existing) => existing._merge_into_view(sub, depth - 1)?,
+                        None => {
+                            view.role_timings = ::buffa::MessageFieldView::set(
+                                super::super::__buffa::view::RoleTimingsView::_decode_depth(
+                                    sub,
+                                    depth - 1,
+                                )?,
+                            );
+                        }
+                    }
+                }
                 _ => {
                     ::buffa::encoding::skip_field_depth(tag, &mut cur, depth)?;
                     let span_len = before_tag.len() - cur.len();
@@ -685,6 +722,14 @@ impl<'a> ::buffa::MessageView<'a> for AgentDoneView<'a> {
             session_id: self.session_id.to_string(),
             elapsed_ms: self.elapsed_ms,
             trace_id: self.trace_id.to_string(),
+            role_timings: match self.role_timings.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::RoleTimings,
+                    >::some(v.to_owned_message())
+                }
+                None => ::buffa::MessageField::none(),
+            },
             __buffa_unknown_fields: self
                 .__buffa_unknown_fields
                 .to_owned()
@@ -696,7 +741,7 @@ impl<'a> ::buffa::MessageView<'a> for AgentDoneView<'a> {
 }
 impl<'a> ::buffa::ViewEncode<'a> for AgentDoneView<'a> {
     #[allow(clippy::needless_borrow, clippy::let_and_return)]
-    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
@@ -709,13 +754,21 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentDoneView<'a> {
         if !self.trace_id.is_empty() {
             size += 1u32 + ::buffa::types::string_encoded_len(&self.trace_id) as u32;
         }
+        if self.role_timings.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.role_timings.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
     #[allow(clippy::needless_borrow)]
     fn write_to(
         &self,
-        _cache: &mut ::buffa::SizeCache,
+        __cache: &mut ::buffa::SizeCache,
         buf: &mut impl ::buffa::bytes::BufMut,
     ) {
         #[allow(unused_imports)]
@@ -741,6 +794,15 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentDoneView<'a> {
                 .encode(buf);
             ::buffa::types::encode_string(&self.trace_id, buf);
         }
+        if self.role_timings.is_set() {
+            ::buffa::encoding::Tag::new(
+                    4u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
+                .encode(buf);
+            ::buffa::encoding::encode_varint(__cache.consume_next() as u64, buf);
+            self.role_timings.write_to(__cache, buf);
+        }
         self.__buffa_unknown_fields.write_to(buf);
     }
 }
@@ -753,6 +815,183 @@ impl<'v> ::buffa::DefaultViewInstance for AgentDoneView<'v> {
         VALUE
             .get_or_init(|| ::buffa::alloc::boxed::Box::new(
                 <AgentDoneView<'static>>::default(),
+            ))
+    }
+}
+/// Per-role wall-time tally for one turn. Values are integer
+/// milliseconds; zero means "no calls fired in that role this turn"
+/// (e.g. judge role isn't on the chat path today, so it stays 0).
+#[derive(Clone, Debug, Default)]
+pub struct RoleTimingsView<'a> {
+    /// Field 1: `primary_ms`
+    pub primary_ms: u32,
+    /// Field 2: `policy_ms`
+    pub policy_ms: u32,
+    /// Field 3: `judge_ms`
+    pub judge_ms: u32,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> RoleTimingsView<'a> {
+    /// Decode from `buf`, enforcing a recursion depth limit for nested messages.
+    ///
+    /// Called by [`::buffa::MessageView::decode_view`] with [`::buffa::RECURSION_LIMIT`]
+    /// and by generated sub-message decode arms with `depth - 1`.
+    ///
+    /// **Not part of the public API.** Named with a leading underscore to
+    /// signal that it is for generated-code use only.
+    #[doc(hidden)]
+    pub fn _decode_depth(
+        buf: &'a [u8],
+        depth: u32,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let mut view = Self::default();
+        view._merge_into_view(buf, depth)?;
+        ::core::result::Result::Ok(view)
+    }
+    /// Merge fields from `buf` into this view (proto merge semantics).
+    ///
+    /// Repeated fields append; singular fields last-wins; singular
+    /// MESSAGE fields merge recursively. Used by sub-message decode
+    /// arms when the same field appears multiple times on the wire.
+    ///
+    /// **Not part of the public API.**
+    #[doc(hidden)]
+    pub fn _merge_into_view(
+        &mut self,
+        buf: &'a [u8],
+        depth: u32,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        let _ = depth;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur: &'a [u8] = buf;
+        while !cur.is_empty() {
+            let before_tag = cur;
+            let tag = ::buffa::encoding::Tag::decode(&mut cur)?;
+            match tag.field_number() {
+                1u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 1u32,
+                            expected: 0u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    view.primary_ms = ::buffa::types::decode_uint32(&mut cur)?;
+                }
+                2u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 2u32,
+                            expected: 0u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    view.policy_ms = ::buffa::types::decode_uint32(&mut cur)?;
+                }
+                3u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 3u32,
+                            expected: 0u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    view.judge_ms = ::buffa::types::decode_uint32(&mut cur)?;
+                }
+                _ => {
+                    ::buffa::encoding::skip_field_depth(tag, &mut cur, depth)?;
+                    let span_len = before_tag.len() - cur.len();
+                    view.__buffa_unknown_fields.push_raw(&before_tag[..span_len]);
+                }
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+}
+impl<'a> ::buffa::MessageView<'a> for RoleTimingsView<'a> {
+    type Owned = super::super::RoleTimings;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        Self::_decode_depth(buf, ::buffa::RECURSION_LIMIT)
+    }
+    fn decode_view_with_limit(
+        buf: &'a [u8],
+        depth: u32,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        Self::_decode_depth(buf, depth)
+    }
+    /// Convert this view to the owned message type.
+    #[allow(clippy::redundant_closure, clippy::useless_conversion)]
+    #[allow(clippy::needless_update)]
+    fn to_owned_message(&self) -> super::super::RoleTimings {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        super::super::RoleTimings {
+            primary_ms: self.primary_ms,
+            policy_ms: self.policy_ms,
+            judge_ms: self.judge_ms,
+            __buffa_unknown_fields: self
+                .__buffa_unknown_fields
+                .to_owned()
+                .unwrap_or_default()
+                .into(),
+            ..::core::default::Default::default()
+        }
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for RoleTimingsView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.primary_ms != 0u32 {
+            size += 1u32 + ::buffa::types::uint32_encoded_len(self.primary_ms) as u32;
+        }
+        if self.policy_ms != 0u32 {
+            size += 1u32 + ::buffa::types::uint32_encoded_len(self.policy_ms) as u32;
+        }
+        if self.judge_ms != 0u32 {
+            size += 1u32 + ::buffa::types::uint32_encoded_len(self.judge_ms) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.primary_ms != 0u32 {
+            ::buffa::encoding::Tag::new(1u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_uint32(self.primary_ms, buf);
+        }
+        if self.policy_ms != 0u32 {
+            ::buffa::encoding::Tag::new(2u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_uint32(self.policy_ms, buf);
+        }
+        if self.judge_ms != 0u32 {
+            ::buffa::encoding::Tag::new(3u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_uint32(self.judge_ms, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+impl<'v> ::buffa::DefaultViewInstance for RoleTimingsView<'v> {
+    fn default_view_instance<'a>() -> &'a Self
+    where
+        Self: 'a,
+    {
+        static VALUE: ::buffa::__private::OnceBox<RoleTimingsView<'static>> = ::buffa::__private::OnceBox::new();
+        VALUE
+            .get_or_init(|| ::buffa::alloc::boxed::Box::new(
+                <RoleTimingsView<'static>>::default(),
             ))
     }
 }

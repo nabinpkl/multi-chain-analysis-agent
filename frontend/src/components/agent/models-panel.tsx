@@ -13,6 +13,7 @@ import {
   type ProviderId,
   type Role,
 } from "@/stores/use-llm-override";
+import { useRoleTimings } from "@/stores/use-role-timings";
 
 /**
  * Builder-view section for per-role LLM provider override (OpenRouter
@@ -24,11 +25,19 @@ import {
  * panel; production traffic carries an empty `LlmOverride` and the
  * backend defaults to env-driven OpenRouter.
  *
- * The local-model dropdown is populated by hitting
- * `${NEXT_PUBLIC_AGENT_URL}/agent/local/models`, which the
- * agent-service proxies to LM Studio's `/v1/models` server-side. The
- * proxy returns one canonical shape (`{reachable, baseUrl, models}`)
- * regardless of failure, so this component renders one error state.
+ * Two model-list lookups, both proxied through agent-service to
+ * sidestep browser CORS:
+ *   - `/agent/local/models` → LM Studio's `/v1/models`. Lists
+ *     whatever the dev has loaded in LM Studio.
+ *   - `/agent/openrouter/models` → OpenRouter's public `/v1/models`,
+ *     server-side filtered to ids ending in `:free`. Lets the dev
+ *     swap the production-default OpenRouter model (currently
+ *     timeout-prone on the primary role) for a faster `:free`
+ *     sibling without editing `.env`. Picking "(env default)"
+ *     restores `AGENT_*_MODEL` behavior.
+ *
+ * Both proxies return one canonical shape regardless of failure mode
+ * so this component renders one error state per provider.
  */
 
 interface LocalModel {
@@ -41,6 +50,29 @@ interface ModelsResponse {
   baseUrl: string;
   models: LocalModel[];
 }
+
+interface OpenRouterModel {
+  id: string;
+  name?: string;
+  contextLength?: number | null;
+}
+
+interface OpenRouterModelsResponse {
+  reachable: boolean;
+  models: OpenRouterModel[];
+}
+
+interface GeminiModel {
+  id: string;
+  name?: string;
+}
+
+interface GeminiModelsResponse {
+  reachable: boolean;
+  models: GeminiModel[];
+}
+
+type RoleDefaults = Record<Role, string>;
 
 const ROLES: { id: Role; label: string; hint: string }[] = [
   {
@@ -71,41 +103,119 @@ export function ModelsPanel() {
   const setOverride = useLlmOverride((s) => s.setOverride);
 
   const overrides: Record<Role, typeof primary> = { primary, policy, judge };
+  const latestTimings = useRoleTimings((s) => s.latest);
 
   const [open, setOpen] = useState(false);
   const [reachable, setReachable] = useState<boolean | null>(null);
   const [models, setModels] = useState<LocalModel[]>([]);
+  const [orReachable, setOrReachable] = useState<boolean | null>(null);
+  const [orModels, setOrModels] = useState<OpenRouterModel[]>([]);
+  const [gmReachable, setGmReachable] = useState<boolean | null>(null);
+  const [gmModels, setGmModels] = useState<GeminiModel[]>([]);
+  const [defaults, setDefaults] = useState<RoleDefaults>({
+    primary: "",
+    policy: "",
+    judge: "",
+  });
   const [refreshing, setRefreshing] = useState(false);
 
+  // Both lookups run in parallel and share the refresh button +
+  // spinner. They're independent failure surfaces (LM Studio can be
+  // down while OpenRouter is up and vice versa); each surface
+  // rendered with its own reachability dot in the row UIs below.
   const fetchModels = useCallback(async () => {
     setRefreshing(true);
-    try {
-      const res = await fetch(`${agentUrl()}/agent/local/models`, {
-        cache: "no-store",
-      });
-      if (!res.ok) {
+    const localPromise = (async () => {
+      try {
+        const res = await fetch(`${agentUrl()}/agent/local/models`, {
+          cache: "no-store",
+        });
+        if (!res.ok) {
+          setReachable(false);
+          setModels([]);
+          return;
+        }
+        const body: ModelsResponse = await res.json();
+        setReachable(body.reachable);
+        setModels(body.models ?? []);
+      } catch {
         setReachable(false);
         setModels([]);
-        return;
       }
-      const body: ModelsResponse = await res.json();
-      setReachable(body.reachable);
-      setModels(body.models ?? []);
-    } catch {
-      setReachable(false);
-      setModels([]);
+    })();
+    const orPromise = (async () => {
+      try {
+        const res = await fetch(`${agentUrl()}/agent/openrouter/models`, {
+          cache: "no-store",
+        });
+        if (!res.ok) {
+          setOrReachable(false);
+          setOrModels([]);
+          return;
+        }
+        const body: OpenRouterModelsResponse = await res.json();
+        setOrReachable(body.reachable);
+        setOrModels(body.models ?? []);
+      } catch {
+        setOrReachable(false);
+        setOrModels([]);
+      }
+    })();
+    const gmPromise = (async () => {
+      try {
+        const res = await fetch(`${agentUrl()}/agent/gemini/models`, {
+          cache: "no-store",
+        });
+        if (!res.ok) {
+          setGmReachable(false);
+          setGmModels([]);
+          return;
+        }
+        const body: GeminiModelsResponse = await res.json();
+        setGmReachable(body.reachable);
+        setGmModels(body.models ?? []);
+      } catch {
+        setGmReachable(false);
+        setGmModels([]);
+      }
+    })();
+    const defaultsPromise = (async () => {
+      try {
+        const res = await fetch(`${agentUrl()}/agent/config/role-defaults`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const body = (await res.json()) as Partial<RoleDefaults>;
+        setDefaults({
+          primary: body.primary ?? "",
+          policy: body.policy ?? "",
+          judge: body.judge ?? "",
+        });
+      } catch {
+        // Defaults stay as their zero-value placeholders; the
+        // dropdown falls back to the generic "(env default)" label
+        // when the per-role string is empty.
+      }
+    })();
+    try {
+      await Promise.all([localPromise, orPromise, gmPromise, defaultsPromise]);
     } finally {
       setRefreshing(false);
     }
   }, []);
 
   // Lazy-fetch the first time the section opens; refresh button after
-  // that. Avoids burning a request on a closed panel.
+  // that. Avoids burning a request on a closed panel. The trigger
+  // condition is "any lookup is uninitialized" so a fresh page load
+  // primes all three even if one is down on first try.
   useEffect(() => {
-    if (open && reachable === null) {
+    if (
+      open &&
+      (reachable === null || orReachable === null || gmReachable === null)
+    ) {
       void fetchModels();
     }
-  }, [open, reachable, fetchModels]);
+  }, [open, reachable, orReachable, gmReachable, fetchModels]);
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -127,7 +237,7 @@ export function ModelsPanel() {
             <button
               type="button"
               className="text-mca-muted hover:text-mca-text focus:outline-none focus-visible:ring-1 focus-visible:ring-mca-accent rounded p-1"
-              aria-label="refresh local models list"
+              aria-label="refresh local + openrouter models lists"
               onClick={(e) => {
                 e.stopPropagation();
                 void fetchModels();
@@ -151,15 +261,32 @@ export function ModelsPanel() {
                 override={overrides[id]}
                 models={models}
                 reachable={reachable}
+                orModels={orModels}
+                orReachable={orReachable}
+                gmModels={gmModels}
+                gmReachable={gmReachable}
+                envDefaultModelId={defaults[id]}
+                lastTurnMs={
+                  latestTimings === null
+                    ? null
+                    : id === "primary"
+                      ? latestTimings.primaryMs
+                      : id === "policy"
+                        ? latestTimings.policyMs
+                        : latestTimings.judgeMs
+                }
                 onChange={(o) => setOverride(id, o)}
               />
             ))}
             <p className="text-[0.6rem] text-mca-muted leading-relaxed pt-1">
-              Local model must support OpenAI-style tool calls AND
-              JSON-schema structured output. Recommended:
-              Qwen2.5-7B-Instruct, Llama-3.1-8B-Instruct, or recent
-              Mistral. Smaller / older models will silently produce
-              empty primary turns.
+              gemini lists every model exposed by Google's OpenAI-compat
+              endpoint (Gemma open-weights + Gemini proprietary).
+              openrouter lists `:free` ids only. local hits LM Studio
+              at LOCAL_LLM_BASE_URL. Local + Gemma open-weights must
+              support OpenAI-style tool calls AND JSON-schema
+              structured output for the agent loop to function;
+              models that ignore tool_choice will produce empty
+              primary turns.
             </p>
           </div>
         </CollapsibleContent>
@@ -198,6 +325,12 @@ function RoleRow({
   override,
   models,
   reachable,
+  orModels,
+  orReachable,
+  gmModels,
+  gmReachable,
+  envDefaultModelId,
+  lastTurnMs,
   onChange,
 }: {
   role: Role;
@@ -206,41 +339,139 @@ function RoleRow({
   override: { provider: ProviderId; modelId: string };
   models: LocalModel[];
   reachable: boolean | null;
+  orModels: OpenRouterModel[];
+  orReachable: boolean | null;
+  gmModels: GeminiModel[];
+  gmReachable: boolean | null;
+  envDefaultModelId: string;
+  /** Last completed turn's wall-time for this role, ms.
+   *  `null` before any turn has finished on this session;
+   *  `0` when the role didn't fire on the last turn (e.g. judge
+   *  always 0 today). */
+  lastTurnMs: number | null;
   onChange: (o: { provider: ProviderId; modelId: string }) => void;
 }) {
-  // Treat empty provider as "openrouter" for the segment UI: that's
-  // what the empty state means (use the production default), and the
-  // default is OpenRouter. Local provider always renders explicitly.
-  const effectiveProvider: "openrouter" | "local" =
-    override.provider === "local" ? "local" : "openrouter";
+  // Three explicit provider segments. Empty `override.provider` means
+  // "use the production default", and which default is in effect is
+  // controlled by the backend's `AGENT_DEFAULT_PROVIDER` env (gemini
+  // today). The segment UI maps empty to "gemini" when that's the
+  // default and "openrouter" otherwise so the user sees the segment
+  // their next request will actually route through, not a stale
+  // OpenRouter pin from when this UI was built.
+  //
+  // We can't read `AGENT_DEFAULT_PROVIDER` from here, so the
+  // heuristic is: if the env-default model id looks like an
+  // OpenRouter id (contains "/"), treat empty as openrouter; else
+  // treat as gemini. Robust enough for the three providers we ship,
+  // and will get refactored if a fourth lands.
+  const emptyMapsTo: "openrouter" | "gemini" =
+    envDefaultModelId.includes("/") ? "openrouter" : "gemini";
+  const effectiveProvider: "openrouter" | "gemini" | "local" =
+    override.provider === "local"
+      ? "local"
+      : override.provider === "openrouter"
+        ? "openrouter"
+        : override.provider === "gemini"
+          ? "gemini"
+          : emptyMapsTo;
 
-  // Stale model id: developer chose a model name, then unloaded it
-  // in LM Studio. We don't auto-clear it (the user might reload it
-  // shortly), but we flag it red so they know to refresh + repick.
-  const modelKnown =
+  // Stale model id, local side: developer chose a model name, then
+  // unloaded it in LM Studio. We don't auto-clear it (the user might
+  // reload it shortly), but we flag it red so they know to refresh +
+  // repick.
+  const localModelKnown =
     override.modelId === "" ||
     models.some((m) => m.id === override.modelId);
+
+  // Stale model id, openrouter side: developer pinned a `:free` id
+  // that OpenRouter has since deprecated, or an id that was never
+  // free-tier. Same red-border treatment so the dev can re-pick.
+  const orModelKnown =
+    override.modelId === "" ||
+    orModels.some((m) => m.id === override.modelId);
+
+  // Stale model id, gemini side: developer pinned a Gemma/Gemini id
+  // that Google has rolled off the API. Same flag.
+  const gmModelKnown =
+    override.modelId === "" ||
+    gmModels.some((m) => m.id === override.modelId);
 
   return (
     <div className="space-y-1">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[0.7rem] text-mca-text">{label}</span>
+        <span className="flex items-center gap-2 text-[0.7rem] text-mca-text">
+          {label}
+          <LastTurnTag ms={lastTurnMs} />
+        </span>
         <Segment
           value={effectiveProvider}
           onChange={(v) => {
-            if (v === "openrouter") {
+            if (v === emptyMapsTo) {
+              // Switching to whatever the production default is
+              // means "go back to env-default for this role"; clear
+              // the override entirely.
               onChange({ provider: "", modelId: "" });
+            } else if (v === "openrouter") {
+              onChange({ provider: "openrouter", modelId: "" });
+            } else if (v === "gemini") {
+              onChange({ provider: "gemini", modelId: "" });
             } else {
+              // Switching to local preserves any existing local
+              // modelId; if the user had pinned a non-local id, the
+              // local-side stale-id handling will flag it red.
               onChange({ provider: "local", modelId: override.modelId });
             }
           }}
         />
       </div>
       <p className="text-[0.6rem] text-mca-muted leading-snug">{hint}</p>
-      {effectiveProvider === "local" ? (
+      {effectiveProvider === "gemini" ? (
+        // Gemini / Gemma side. The dropdown is populated by
+        // `/agent/gemini/models` proxied through agent-service so the
+        // GEMINI_API_KEY never crosses the browser boundary. Picking
+        // a model id sends `provider: "gemini" / modelId: "<id>"` on
+        // the next request. Empty id falls back to the env default
+        // (resolved through `AGENT_DEFAULT_PROVIDER` + `AGENT_*_MODEL`).
         <select
           className={`w-full text-[0.7rem] bg-mca-bg border rounded px-2 py-1 focus:outline-none focus-visible:ring-1 focus-visible:ring-mca-accent ${
-            modelKnown ? "border-mca-border" : "border-rose-500"
+            gmModelKnown ? "border-mca-border" : "border-rose-500"
+          }`}
+          value={override.modelId}
+          onChange={(e) => {
+            const id = e.target.value;
+            onChange(
+              id === ""
+                ? emptyMapsTo === "gemini"
+                  ? { provider: "", modelId: "" }
+                  : { provider: "gemini", modelId: "" }
+                : { provider: "gemini", modelId: id },
+            );
+          }}
+          disabled={gmReachable === false && gmModels.length === 0}
+          aria-label={`gemini / gemma model id for ${role}`}
+        >
+          <option value="">
+            {gmReachable === false
+              ? "gemini key missing or unreachable"
+              : emptyMapsTo === "gemini" && envDefaultModelId
+                ? `${envDefaultModelId} (env default)`
+                : "(env default)"}
+          </option>
+          {!gmModelKnown && override.modelId ? (
+            <option value={override.modelId}>
+              {override.modelId} (no longer listed)
+            </option>
+          ) : null}
+          {gmModels.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.id}
+            </option>
+          ))}
+        </select>
+      ) : effectiveProvider === "local" ? (
+        <select
+          className={`w-full text-[0.7rem] bg-mca-bg border rounded px-2 py-1 focus:outline-none focus-visible:ring-1 focus-visible:ring-mca-accent ${
+            localModelKnown ? "border-mca-border" : "border-rose-500"
           }`}
           value={override.modelId}
           onChange={(e) =>
@@ -254,7 +485,7 @@ function RoleRow({
               ? "lm studio not reachable"
               : "select a model"}
           </option>
-          {!modelKnown && override.modelId ? (
+          {!localModelKnown && override.modelId ? (
             <option value={override.modelId}>
               {override.modelId} (not loaded)
             </option>
@@ -266,11 +497,93 @@ function RoleRow({
           ))}
         </select>
       ) : (
-        <p className="text-[0.6rem] text-mca-muted italic">
-          uses env-default openrouter model id
-        </p>
+        // OpenRouter side. Empty value clears the override only when
+        // openrouter is the current production default; otherwise
+        // it's just a "pick a model" placeholder, since shipping
+        // `provider: "openrouter" / modelId: ""` while the env
+        // model id is the gemini-shaped `gemma-4-31b-it` would route
+        // a non-existent OpenRouter id and 4xx out.
+        <select
+          className={`w-full text-[0.7rem] bg-mca-bg border rounded px-2 py-1 focus:outline-none focus-visible:ring-1 focus-visible:ring-mca-accent ${
+            orModelKnown ? "border-mca-border" : "border-rose-500"
+          }`}
+          value={override.modelId}
+          onChange={(e) => {
+            const id = e.target.value;
+            onChange(
+              id === ""
+                ? emptyMapsTo === "openrouter"
+                  ? { provider: "", modelId: "" }
+                  : { provider: "openrouter", modelId: "" }
+                : { provider: "openrouter", modelId: id },
+            );
+          }}
+          disabled={orReachable === false && orModels.length === 0}
+          aria-label={`openrouter free-tier model id for ${role}`}
+        >
+          <option value="">
+            {orReachable === false
+              ? "openrouter unreachable"
+              : emptyMapsTo === "openrouter" && envDefaultModelId
+                ? `${envDefaultModelId} (env default)`
+                : "select a :free model"}
+          </option>
+          {!orModelKnown && override.modelId ? (
+            <option value={override.modelId}>
+              {override.modelId} (not in :free list)
+            </option>
+          ) : null}
+          {orModels.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.id}
+            </option>
+          ))}
+        </select>
       )}
     </div>
+  );
+}
+
+/**
+ * Compact "last turn: X.Xs" badge next to the role label. The
+ * threshold colors match the per-attempt timeout budgets used by
+ * `with_provider_retry` (75s primary, 30s policy gates, 20s repeat
+ * detector); a value within 80% of any of those budgets renders amber
+ * to flag "this turn was close to timing out, the model may be a
+ * candidate to swap." Anything above the budget itself renders rose
+ * (the call would have been retried, possibly aborted on the second
+ * attempt).
+ *
+ * `null` ms means no turn has completed yet this session; we show
+ * nothing rather than a 0.0s placeholder so the row stays clean
+ * before the dev's first interaction. `0` ms means the role didn't
+ * fire on the last turn (judge today, always); we show a muted
+ * "idle" hint so the row doesn't suggest "0s = blazing fast" when
+ * the right reading is "didn't run."
+ */
+function LastTurnTag({ ms }: { ms: number | null }) {
+  if (ms === null) return null;
+  if (ms === 0) {
+    return (
+      <span className="text-[0.55rem] uppercase tracking-[1px] text-mca-dim">
+        idle
+      </span>
+    );
+  }
+  const seconds = ms / 1000;
+  // Pick the closer-to-the-edge tone: any role over 80% of its
+  // tightest expected budget is worth flagging. We use 60s as the
+  // amber threshold (= 80% of the 75s primary budget; the policy
+  // bucket sums multiple calls and rarely approaches its 30s+30s+20s
+  // headroom in practice).
+  const tone =
+    seconds >= 75 ? "text-rose-400"
+    : seconds >= 60 ? "text-amber-400"
+    : "text-mca-muted";
+  return (
+    <span className={`text-[0.55rem] tabular-nums ${tone}`}>
+      last {seconds.toFixed(1)}s
+    </span>
   );
 }
 
@@ -278,8 +591,8 @@ function Segment({
   value,
   onChange,
 }: {
-  value: "openrouter" | "local";
-  onChange: (v: "openrouter" | "local") => void;
+  value: "openrouter" | "gemini" | "local";
+  onChange: (v: "openrouter" | "gemini" | "local") => void;
 }) {
   return (
     <div className="inline-flex rounded border border-mca-border bg-mca-bg overflow-hidden">
@@ -288,6 +601,12 @@ function Segment({
         onClick={() => onChange("openrouter")}
       >
         openrouter
+      </SegmentButton>
+      <SegmentButton
+        active={value === "gemini"}
+        onClick={() => onChange("gemini")}
+      >
+        gemini
       </SegmentButton>
       <SegmentButton
         active={value === "local"}

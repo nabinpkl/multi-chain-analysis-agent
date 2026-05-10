@@ -29,10 +29,12 @@ import {
  *
  * Layout: a master "switches" collapsible wraps every group, and
  * each named group is itself collapsible so the panel scales as the
- * surface grows. Master + groups all default expanded; the user
- * collapses anything they don't currently care about. Mirrors the
- * `models-panel.tsx` collapse pattern so the two builder-view
- * sections feel like the same family.
+ * surface grows. Master defaults collapsed (the everyday dev rarely
+ * touches ablation switches; the row would otherwise add visual
+ * weight above the conversation for no benefit). Sub-groups default
+ * expanded so opening the master reveals the whole surface in one
+ * click. Mirrors the `models-panel.tsx` collapse-by-default pattern
+ * so the two builder-view sections feel like the same family.
  *
  * Tooltips are deliberately user-facing: no implementation jargon,
  * no ship references. The implementation map lives in
@@ -47,7 +49,7 @@ export function SwitchPanel() {
   const cross = switches.crossCheck;
   const channels = switches.channels;
 
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>

@@ -15,7 +15,7 @@ import { persist, createJSONStorage } from "zustand/middleware";
  * panel, so the field stays empty in prod.
  */
 
-export type ProviderId = "" | "openrouter" | "local";
+export type ProviderId = "" | "openrouter" | "gemini" | "local";
 
 export interface RoleOverride {
   /** "" = use production default for this role. */

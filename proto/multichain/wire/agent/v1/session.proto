@@ -52,8 +52,27 @@ message AgentSessionStarted {
 // observability, ADR 13); the frontend uses it to deep-link into
 // Langfuse for the visual flame graph. Empty string means trace
 // emission was disabled (OTEL_SDK_DISABLED) or otherwise unavailable.
+//
+// `role_timings` carries the wall-time spent in each LLM role for
+// this turn (sum across multiple calls within the same role on the
+// same turn; the policy bucket fires multiple times per turn for
+// constitution gates + repeat detection, so the sum is the useful
+// "how much wall time did this role consume" view). Builder view's
+// Models panel reads it back to surface "last call elapsed" under
+// each role row, so a dev sees which role is dragging a turn
+// without trawling docker logs.
 message AgentDone {
   string session_id = 1;
   uint32 elapsed_ms = 2;
   string trace_id = 3;
+  RoleTimings role_timings = 4;
+}
+
+// Per-role wall-time tally for one turn. Values are integer
+// milliseconds; zero means "no calls fired in that role this turn"
+// (e.g. judge role isn't on the chat path today, so it stays 0).
+message RoleTimings {
+  uint32 primary_ms = 1;
+  uint32 policy_ms = 2;
+  uint32 judge_ms = 3;
 }
