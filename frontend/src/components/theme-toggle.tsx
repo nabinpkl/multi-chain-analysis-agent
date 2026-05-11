@@ -1,14 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { useTheme } from "next-themes";
 import { Moon, Sun } from "lucide-react";
 
-export function ThemeToggle() {
-  const [mounted, setMounted] = useState(false);
-  const { resolvedTheme, setTheme } = useTheme();
+// Mount detection for SSR-hydration guard. `useSyncExternalStore` returns
+// the server snapshot (`false`) during SSR and the client snapshot
+// (`true`) after hydration. This is the React-recommended replacement
+// for the classic `useState(false)` + `useEffect(() => setState(true))`
+// pattern, which trips `react-hooks/set-state-in-effect` because the
+// effect's only job is to schedule a cascading render.
+function useMounted(): boolean {
+  return useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
+}
 
-  useEffect(() => setMounted(true), []);
+export function ThemeToggle() {
+  const mounted = useMounted();
+  const { resolvedTheme, setTheme } = useTheme();
 
   const isDark = resolvedTheme === "dark";
   const label = !mounted

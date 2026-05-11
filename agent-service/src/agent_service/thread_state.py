@@ -49,9 +49,29 @@ import structlog
 from google.protobuf import json_format
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
-from multichain.wire.agent.v1 import claim_pb2
+from multichain.wire.agent.v1 import claim_pb2, session_pb2
 
 from agent_service.policy.binding_store import PrimitiveBindingStore
+
+
+class RuntimeMismatchError(Exception):
+    """Raised when a request resumes an existing thread with an
+    `AgentRequest.runtime` field that disagrees with the value the
+    server persisted at thread creation. Runtime is locked per
+    thread; switching runtimes mid-conversation would silently
+    swap which engine speaks for the user, which is exactly the
+    drop-in-equivalence trap the chunk 3 plan refuses. The POST
+    handler translates this to HTTP 400 with a clear "start a new
+    chat to switch runtime" message."""
+
+    def __init__(self, thread_id: str, stored: int, requested: int) -> None:
+        self.thread_id = thread_id
+        self.stored = stored
+        self.requested = requested
+        super().__init__(
+            f"thread {thread_id} runtime is {session_pb2.AgentRuntime.Name(stored)}; "
+            f"request asked for {session_pb2.AgentRuntime.Name(requested)}"
+        )
 
 log = structlog.get_logger(__name__)
 
@@ -101,6 +121,21 @@ class AgentThread:
     thread_id: str
     started_at_ms: int
     turn_count: int = 0
+    # Which runtime owns this thread. Locked at creation; the chunk
+    # 3 dispatch switch in `main.py` reads it via
+    # `ThreadRegistry.runtime_for` before invoking the matching
+    # driver. Stored as the proto enum int (`session_pb2.AgentRuntime`
+    # values) rather than a string so the wire shape on
+    # `runtime.json` round-trips through the enum name without a
+    # parallel "is this still the right string" check.
+    runtime: int = session_pb2.AGENT_RUNTIME_PYDANTIC_AI
+    # Codex-side thread handle, returned by codex on the first turn
+    # (`thread/start`) and threaded back via
+    # `CodexRunRequest.provider_thread_id` on every subsequent turn
+    # so codex resumes the same conversation (preserves prompt
+    # caching + codex-side memory). Empty on the pydantic-ai
+    # runtime; populated only by the codex driver.
+    codex_provider_thread_id: str = ""
     # Pydantic AI message history. Passed to `agent.run(message_history=...)`
     # on each follow-up turn.
     message_history: list[ModelMessage] = field(default_factory=list)
@@ -153,6 +188,8 @@ class AgentThread:
             "thread_id": self.thread_id,
             "started_at_ms": self.started_at_ms,
             "turn_count": self.turn_count,
+            "runtime": self.runtime,
+            "codex_provider_thread_id": self.codex_provider_thread_id,
             # pydantic-ai ships an official TypeAdapter for the whole
             # `list[ModelMessage]` union. Round-trips every variant
             # (UserPromptPart, ToolReturnPart, ToolCallPart, etc) with
@@ -203,6 +240,8 @@ class AgentThread:
             thread_id=data["thread_id"],
             started_at_ms=int(data["started_at_ms"]),
             turn_count=int(data.get("turn_count", 0)),
+            runtime=int(data.get("runtime", session_pb2.AGENT_RUNTIME_PYDANTIC_AI)),
+            codex_provider_thread_id=str(data.get("codex_provider_thread_id", "")),
             message_history=message_history,
             claims=claims,
             bindings=PrimitiveBindingStore.from_dict(data.get("bindings", {})),
@@ -241,6 +280,39 @@ class ThreadRegistry:
             return None
         return self._thread_root / "threads" / thread_id / "state.json"
 
+    def _runtime_path(self, thread_id: str) -> Path | None:
+        """Sibling of `state.json` storing the per-thread runtime
+        lock. Written once at thread creation (chunk 3); read on
+        every subsequent turn to validate `AgentRequest.runtime`
+        against the persisted choice without instantiating the
+        whole `AgentThread`."""
+        if self._thread_root is None:
+            return None
+        return self._thread_root / "threads" / thread_id / "runtime.json"
+
+    def runtime_for(self, thread_id: str) -> int | None:
+        """Peek at the persisted runtime without loading the full
+        thread. Returns the `session_pb2.AgentRuntime` enum int, or
+        None when the thread is unknown (memory miss + disk miss).
+        Memory path: return the cached thread's runtime. Disk
+        path: read `runtime.json` only. Used by the POST handler
+        to short-circuit a mismatched request with 400 before any
+        per-turn work runs."""
+        cached = self._threads.get(thread_id)
+        if cached is not None:
+            return cached.runtime
+        path = self._runtime_path(thread_id)
+        if path is None or not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text("utf-8"))
+            return int(data.get("runtime", session_pb2.AGENT_RUNTIME_PYDANTIC_AI))
+        except (OSError, json.JSONDecodeError, ValueError) as e:
+            log.warning(
+                "runtime_file_load_failed", thread_id=thread_id, error=str(e)
+            )
+            return None
+
     def _load_from_disk(self, thread_id: str) -> AgentThread | None:
         path = self._state_path(thread_id)
         if path is None or not path.exists():
@@ -259,21 +331,50 @@ class ThreadRegistry:
             )
             return None
 
-    async def get_or_create(self, thread_id: str) -> tuple[AgentThread, asyncio.Lock]:
+    async def get_or_create(
+        self,
+        thread_id: str,
+        runtime: int = session_pb2.AGENT_RUNTIME_PYDANTIC_AI,
+    ) -> tuple[AgentThread, asyncio.Lock]:
         """Look up the thread and its lock. Creates both lazily if
         first encounter. On in-memory miss tries disk; on disk miss
-        creates a fresh thread. Returns the lock unacquired; caller
-        is responsible for `async with` around the turn."""
+        creates a fresh thread with the supplied runtime. Returns
+        the lock unacquired; caller is responsible for `async with`
+        around the turn.
+
+        On a disk hit whose persisted `runtime` disagrees with the
+        requested one, raises `RuntimeMismatchError`; the POST
+        handler translates that to 400. Runtime is locked at
+        creation per the chunk 3 plan.
+        """
         async with self._registry_lock:
             thread = self._threads.get(thread_id)
             if thread is None:
                 # Disk fallback before mint-fresh.
-                thread = self._load_from_disk(thread_id) or AgentThread(
-                    thread_id=thread_id,
-                    started_at_ms=int(time.time() * 1000),
-                )
+                loaded = self._load_from_disk(thread_id)
+                if loaded is not None:
+                    if loaded.runtime != runtime:
+                        raise RuntimeMismatchError(
+                            thread_id=thread_id,
+                            stored=loaded.runtime,
+                            requested=runtime,
+                        )
+                    thread = loaded
+                else:
+                    thread = AgentThread(
+                        thread_id=thread_id,
+                        started_at_ms=int(time.time() * 1000),
+                        runtime=runtime,
+                    )
                 self._threads[thread_id] = thread
                 self._locks[thread_id] = asyncio.Lock()
+            else:
+                if thread.runtime != runtime:
+                    raise RuntimeMismatchError(
+                        thread_id=thread_id,
+                        stored=thread.runtime,
+                        requested=runtime,
+                    )
             return thread, self._locks[thread_id]
 
     def get(self, thread_id: str) -> AgentThread | None:
@@ -295,25 +396,57 @@ class ThreadRegistry:
     def persist(self, thread: AgentThread) -> None:
         """Atomically write the thread's state to disk. No-op when
         `thread_root` is None. Caller must hold the per-thread lock
-        so concurrent writes can't race with the next turn's read."""
-        path = self._state_path(thread.thread_id)
-        if path is None:
+        so concurrent writes can't race with the next turn's read.
+
+        Writes two sibling files under
+        `<thread_root>/threads/<thread_id>/`:
+
+        - `state.json`: full thread state (message_history, claims,
+          bindings, per-turn tool calls, runtime, codex provider
+          thread id, ...).
+        - `runtime.json`: tiny sidecar carrying just the runtime int.
+          Read by `runtime_for` on the request path WITHOUT loading
+          state.json; lets the POST handler validate
+          `AgentRequest.runtime` against the persisted lock cheaply.
+
+        Both files use the same `tempfile + os.replace` atomic-write
+        idiom so a crash mid-write never leaves a half-baked file
+        on disk.
+        """
+        state_path = self._state_path(thread.thread_id)
+        if state_path is None:
             return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # NamedTemporaryFile in the same directory so os.replace is
-        # atomic (rename within one filesystem). delete=False because
-        # we hand the file off to os.replace; on success the temp
-        # file becomes the target; on failure the cleanup catches it.
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        self._atomic_write_json(state_path, thread.to_state_dict())
+        # Runtime sidecar. Cheap enough to rewrite every turn so we
+        # don't need a separate "first turn only" branch; the value
+        # never changes after thread creation either way.
+        runtime_path = self._runtime_path(thread.thread_id)
+        if runtime_path is not None:
+            self._atomic_write_json(
+                runtime_path,
+                {
+                    "runtime": thread.runtime,
+                    "runtime_name": session_pb2.AgentRuntime.Name(thread.runtime),
+                    "created_at_ms": thread.started_at_ms,
+                },
+            )
+
+    @staticmethod
+    def _atomic_write_json(path: Path, payload: dict) -> None:
+        """Atomic JSON write via tempfile-in-same-dir + os.replace.
+        Used for both `state.json` and `runtime.json`; same code
+        path so the two files have identical crash semantics."""
         tmp = tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
             dir=path.parent,
-            prefix=".state-",
+            prefix=f".{path.stem}-",
             suffix=".tmp",
             delete=False,
         )
         try:
-            json.dump(thread.to_state_dict(), tmp)
+            json.dump(payload, tmp)
             tmp.flush()
             os.fsync(tmp.fileno())
             tmp.close()

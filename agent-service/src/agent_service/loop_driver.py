@@ -37,6 +37,7 @@ import asyncio
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from typing import Any
 
 import structlog
 from google.protobuf import json_format
@@ -113,6 +114,14 @@ class LoopHandles:
     primitive_client: PrimitiveClient
     threads: ThreadRegistry
     debug_public: bool
+    # Chunk 3. Long-lived codex driver built in lifespan (one
+    # `CodexAppServerDriver` per service process, with an internal
+    # session pool that persists subprocess connections across
+    # turns). `None` when the codex CLI is unavailable in the
+    # environment (tests, local dev without `codex` on PATH); the
+    # `POST /agent/turn` handler 503s codex-runtime requests in
+    # that case rather than silently falling back to pydantic-ai.
+    codex_driver: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +308,9 @@ async def run_turn(
         else handles.repeat_agent
     )
     try:
-        thread, lock = await handles.threads.get_or_create(thread_id)
+        thread, lock = await handles.threads.get_or_create(
+            thread_id, runtime=session_pb2.AGENT_RUNTIME_PYDANTIC_AI
+        )
         thread_for_persist = thread
         async with lock:
             # Root span for this turn. Carries the four turn-scoped

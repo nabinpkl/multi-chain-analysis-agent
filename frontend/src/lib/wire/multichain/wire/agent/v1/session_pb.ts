@@ -2,8 +2,8 @@
 // @generated from file multichain/wire/agent/v1/session.proto (package multichain.wire.agent.v1, syntax proto3)
 /* eslint-disable */
 
-import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
-import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
+import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import type { ViewContext } from "./entity_pb";
 import { file_multichain_wire_agent_v1_entity } from "./entity_pb";
 import type { LlmOverride } from "./llm_pb";
@@ -16,7 +16,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file multichain/wire/agent/v1/session.proto.
  */
 export const file_multichain_wire_agent_v1_session: GenFile = /*@__PURE__*/
-  fileDesc("CiZtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc2Vzc2lvbi5wcm90bxIYbXVsdGljaGFpbi53aXJlLmFnZW50LnYxIqECCgxBZ2VudFJlcXVlc3QSFQoNdXNlcl9xdWVzdGlvbhgBIAEoCRI2Cgdjb250ZXh0GAIgASgLMiUubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLlZpZXdDb250ZXh0EhYKCXRocmVhZF9pZBgDIAEoCUgAiAEBEjkKCHN3aXRjaGVzGAQgASgLMicubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkFnZW50U3dpdGNoZXMSEgoKc2hvd190cmFjZRgFIAEoCBIQCghydW5fdHlwZRgGIAEoCRI7CgxsbG1fb3ZlcnJpZGUYByABKAsyJS5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuTGxtT3ZlcnJpZGVCDAoKX3RocmVhZF9pZCJuCglBZ2VudERvbmUSEgoKZWxhcHNlZF9tcxgBIAEoDRIQCgh0cmFjZV9pZBgCIAEoCRI7Cgxyb2xlX3RpbWluZ3MYAyABKAsyJS5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuUm9sZVRpbWluZ3MiRgoLUm9sZVRpbWluZ3MSEgoKcHJpbWFyeV9tcxgBIAEoDRIRCglwb2xpY3lfbXMYAiABKA0SEAoIanVkZ2VfbXMYAyABKA1iBnByb3RvMw", [file_multichain_wire_agent_v1_entity, file_multichain_wire_agent_v1_llm, file_multichain_wire_agent_v1_switches]);
+  fileDesc("CiZtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc2Vzc2lvbi5wcm90bxIYbXVsdGljaGFpbi53aXJlLmFnZW50LnYxItoCCgxBZ2VudFJlcXVlc3QSFQoNdXNlcl9xdWVzdGlvbhgBIAEoCRI2Cgdjb250ZXh0GAIgASgLMiUubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLlZpZXdDb250ZXh0EhYKCXRocmVhZF9pZBgDIAEoCUgAiAEBEjkKCHN3aXRjaGVzGAQgASgLMicubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkFnZW50U3dpdGNoZXMSEgoKc2hvd190cmFjZRgFIAEoCBIQCghydW5fdHlwZRgGIAEoCRI7CgxsbG1fb3ZlcnJpZGUYByABKAsyJS5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuTGxtT3ZlcnJpZGUSNwoHcnVudGltZRgIIAEoDjImLm11bHRpY2hhaW4ud2lyZS5hZ2VudC52MS5BZ2VudFJ1bnRpbWVCDAoKX3RocmVhZF9pZCJuCglBZ2VudERvbmUSEgoKZWxhcHNlZF9tcxgBIAEoDRIQCgh0cmFjZV9pZBgCIAEoCRI7Cgxyb2xlX3RpbWluZ3MYAyABKAsyJS5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuUm9sZVRpbWluZ3MiRgoLUm9sZVRpbWluZ3MSEgoKcHJpbWFyeV9tcxgBIAEoDRIRCglwb2xpY3lfbXMYAiABKA0SEAoIanVkZ2VfbXMYAyABKA0qZQoMQWdlbnRSdW50aW1lEh0KGUFHRU5UX1JVTlRJTUVfVU5TUEVDSUZJRUQQABIdChlBR0VOVF9SVU5USU1FX1BZREFOVElDX0FJEAESFwoTQUdFTlRfUlVOVElNRV9DT0RFWBACYgZwcm90bzM", [file_multichain_wire_agent_v1_entity, file_multichain_wire_agent_v1_llm, file_multichain_wire_agent_v1_switches]);
 
 /**
  * User question + ViewContext. `thread_id` is None on the first
@@ -78,6 +78,19 @@ export type AgentRequest = Message<"multichain.wire.agent.v1.AgentRequest"> & {
    * @generated from field: multichain.wire.agent.v1.LlmOverride llm_override = 7;
    */
   llmOverride?: LlmOverride | undefined;
+
+  /**
+   * Which agent runtime owns this thread. Per the chunk 3 plan,
+   * runtime is locked at thread creation: the server writes it to
+   * `<thread_root>/threads/<thread_id>/runtime.json` on mint and
+   * rejects subsequent turns whose `runtime` field disagrees with
+   * the persisted value (400). UNSPECIFIED on the wire falls back
+   * to PYDANTIC_AI server-side, keeping pre-chunk-3 clients
+   * working unchanged.
+   *
+   * @generated from field: multichain.wire.agent.v1.AgentRuntime runtime = 8;
+   */
+  runtime: AgentRuntime;
 };
 
 /**
@@ -160,4 +173,36 @@ export type RoleTimings = Message<"multichain.wire.agent.v1.RoleTimings"> & {
  */
 export const RoleTimingsSchema: GenMessage<RoleTimings> = /*@__PURE__*/
   messageDesc(file_multichain_wire_agent_v1_session, 2);
+
+/**
+ * Which agent core handles this thread. PYDANTIC_AI is the in-
+ * process Pydantic AI loop (today's default); CODEX bridges to a
+ * codex-cli subprocess via the `codex-agent-driver` JSON-RPC
+ * transport, with tools exposed through the data-plane MCP server
+ * at `${DATA_PLANE_URL}/mcp`.
+ *
+ * @generated from enum multichain.wire.agent.v1.AgentRuntime
+ */
+export enum AgentRuntime {
+  /**
+   * @generated from enum value: AGENT_RUNTIME_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: AGENT_RUNTIME_PYDANTIC_AI = 1;
+   */
+  PYDANTIC_AI = 1,
+
+  /**
+   * @generated from enum value: AGENT_RUNTIME_CODEX = 2;
+   */
+  CODEX = 2,
+}
+
+/**
+ * Describes the enum multichain.wire.agent.v1.AgentRuntime.
+ */
+export const AgentRuntimeSchema: GenEnum<AgentRuntime> = /*@__PURE__*/
+  enumDesc(file_multichain_wire_agent_v1_session, 0);
 

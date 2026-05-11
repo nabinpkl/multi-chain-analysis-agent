@@ -44,14 +44,17 @@ from google.protobuf import json_format
 from sse_starlette.sse import EventSourceResponse
 
 from multichain.wire.agent.v1 import session_pb2 as sess_pb
+from multichain.wire.agent.v1 import sse_pb2
 
 from agent_service.agent import build_agent
+from agent_service.codex_driver import run_turn_codex
+from agent_service.codex_profile import build_codex_driver, build_codex_profile
 from agent_service.loop_driver import LoopHandles, run_turn
 from agent_service.otel import init_otel, instrument_fastapi
 from agent_service.policy.constitution import build_constitution_agent
 from agent_service.primitive_client import PrimitiveClient
 from agent_service.repeat_detector import build_repeat_agent
-from agent_service.thread_state import ThreadRegistry
+from agent_service.thread_state import RuntimeMismatchError, ThreadRegistry
 
 log = structlog.get_logger(__name__)
 
@@ -81,6 +84,25 @@ async def lifespan(app: FastAPI):
     thread_root = Path(os.environ.get("THREAD_ROOT", "./.cache/threads"))
     threads = ThreadRegistry(thread_root=thread_root)
 
+    # Chunk 3 codex runtime. Build the static profile + driver once
+    # so per-turn calls hit the cached session pool. The codex CLI
+    # has to be on PATH (the docker image bakes it; local-dev paths
+    # need a global `codex` install). When unavailable, we log and
+    # leave `codex_driver=None`; the POST handler 503s codex
+    # requests rather than silently falling back to pydantic-ai.
+    codex_driver = None
+    try:
+        codex_profile = build_codex_profile(
+            data_plane_url=base_url, cwd=Path.cwd()
+        )
+        codex_driver = build_codex_driver(
+            profile=codex_profile,
+            codex_home_root=thread_root / "codex_homes",
+        )
+        log.info("codex_runtime_ready")
+    except Exception:  # noqa: BLE001
+        log.exception("codex_runtime_init_failed")
+
     handles = LoopHandles(
         primary_agent=build_agent(),
         constitution_agent=build_constitution_agent(),
@@ -88,6 +110,7 @@ async def lifespan(app: FastAPI):
         primitive_client=primitive_client,
         threads=threads,
         debug_public=debug_public,
+        codex_driver=codex_driver,
     )
     app.state.handles = handles
     # Backwards-compat alias for tests still poking at app.state.primitive_client
@@ -98,6 +121,14 @@ async def lifespan(app: FastAPI):
     finally:
         log.info("agent_service_stopping")
         await primitive_client.close()
+        # CodexAppServerDriver owns a session pool of long-lived
+        # codex subprocesses; close it on shutdown so the subprocess
+        # exits cleanly and any per-thread sqlite is flushed.
+        if codex_driver is not None:
+            try:
+                codex_driver.close()
+            except Exception:  # noqa: BLE001
+                log.exception("codex_driver_close_failed")
 
 
 app = FastAPI(title="multichain agent-service", version="0.2.0", lifespan=lifespan)
@@ -361,6 +392,43 @@ async def agent_turn(request: Request) -> EventSourceResponse:
     if req.thread_id and not handles.threads.exists(req.thread_id):
         raise HTTPException(status_code=404, detail="thread_id not found")
 
+    # Resolve runtime. UNSPECIFIED on the wire falls back to
+    # PYDANTIC_AI server-side (chunk 3 backward-compat). On resume,
+    # the request's runtime must agree with the persisted lock from
+    # thread creation; mismatch is a 400 so the client can show
+    # "start a new chat to switch runtime" without a silent runtime
+    # swap.
+    requested_runtime = (
+        req.runtime
+        if req.runtime != sess_pb.AGENT_RUNTIME_UNSPECIFIED
+        else sess_pb.AGENT_RUNTIME_PYDANTIC_AI
+    )
+    if req.thread_id:
+        stored_runtime = handles.threads.runtime_for(req.thread_id)
+        if stored_runtime is not None and stored_runtime != requested_runtime:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "thread runtime is "
+                    f"{sess_pb.AgentRuntime.Name(stored_runtime)}; "
+                    f"request asked for "
+                    f"{sess_pb.AgentRuntime.Name(requested_runtime)}. "
+                    "Start a new chat to switch runtime."
+                ),
+            )
+        # Trust the stored value over the wire field on resume; the
+        # client may have lost its localStorage selection mid-session.
+        if stored_runtime is not None:
+            requested_runtime = stored_runtime
+    if requested_runtime == sess_pb.AGENT_RUNTIME_CODEX and handles.codex_driver is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "codex runtime is not available on this server "
+                "(codex CLI missing or driver init failed)"
+            ),
+        )
+
     thread_id = req.thread_id or str(uuid.uuid4())
     turn_started_at_ms = int(time.time() * 1000)
 
@@ -372,15 +440,37 @@ async def agent_turn(request: Request) -> EventSourceResponse:
         else None,
     )
 
+    # Pick the per-runtime driver. Both have the same async generator
+    # contract; the dispatch is one branch.
+    driver_fn = (
+        run_turn_codex
+        if requested_runtime == sess_pb.AGENT_RUNTIME_CODEX
+        else run_turn
+    )
+
     async def event_iter():
         try:
-            async for frame in run_turn(
+            async for frame in driver_fn(
                 handles=handles,
                 request=req,
                 thread_id=thread_id,
                 turn_started_at_ms=turn_started_at_ms,
             ):
                 yield frame
+        except RuntimeMismatchError as e:
+            # Race: between the runtime_for peek above and entering
+            # get_or_create inside the driver, a concurrent turn
+            # locked the thread to a different runtime. Surface a
+            # clear error frame so the SSE consumer doesn't hang.
+            log.warning("runtime_mismatch_during_dispatch", error=str(e))
+            yield {
+                "event": "Error",
+                "data": json_format.MessageToJson(
+                    sse_pb2.Error(message=str(e)),
+                    preserving_proto_field_name=False,
+                    indent=None,
+                ),
+            }
         except asyncio.CancelledError:
             log.info("agent_stream_cancelled", thread_id=thread_id)
             raise

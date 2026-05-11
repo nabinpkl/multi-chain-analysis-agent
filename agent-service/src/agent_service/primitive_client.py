@@ -216,6 +216,12 @@ class PrimitiveClient:
     lifecycle: build once at app startup, close on shutdown."""
 
     def __init__(self, base_url: str, timeout_s: float = 30.0):
+        # Exposed publicly so the codex driver can build the
+        # `GET /turn/{snapshot_id}/claims` URL on a separate
+        # streaming httpx client (the existing
+        # `self._client` is configured for short proto-binary RPCs,
+        # not long-lived SSE drains).
+        self.base_url = base_url
         self._client = httpx.AsyncClient(
             base_url=base_url,
             timeout=httpx.Timeout(timeout_s),

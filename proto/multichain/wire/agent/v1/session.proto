@@ -34,6 +34,25 @@ message AgentRequest {
   // frontend builder view's Models section; production frontend
   // never populates this field. See llm.proto for shape.
   LlmOverride llm_override = 7;
+  // Which agent runtime owns this thread. Per the chunk 3 plan,
+  // runtime is locked at thread creation: the server writes it to
+  // `<thread_root>/threads/<thread_id>/runtime.json` on mint and
+  // rejects subsequent turns whose `runtime` field disagrees with
+  // the persisted value (400). UNSPECIFIED on the wire falls back
+  // to PYDANTIC_AI server-side, keeping pre-chunk-3 clients
+  // working unchanged.
+  AgentRuntime runtime = 8;
+}
+
+// Which agent core handles this thread. PYDANTIC_AI is the in-
+// process Pydantic AI loop (today's default); CODEX bridges to a
+// codex-cli subprocess via the `codex-agent-driver` JSON-RPC
+// transport, with tools exposed through the data-plane MCP server
+// at `${DATA_PLANE_URL}/mcp`.
+enum AgentRuntime {
+  AGENT_RUNTIME_UNSPECIFIED = 0;
+  AGENT_RUNTIME_PYDANTIC_AI = 1;
+  AGENT_RUNTIME_CODEX = 2;
 }
 
 // Final SSE event payload. Emitted as the `done` event by the SSE

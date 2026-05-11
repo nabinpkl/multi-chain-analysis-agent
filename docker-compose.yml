@@ -104,6 +104,18 @@ services:
     build:
       context: ./agent-service
       dockerfile: Dockerfile
+      # Chunk 3 dep `codex-agent-driver` lives outside this repo at
+      # `../second-brain/packages/codex-agent-driver`. Docker's plain
+      # build context can't reach siblings, so we expose it as a
+      # named additional context the Dockerfile copies in via
+      # `COPY --from=codex-agent-driver`. The path inside the image
+      # (`/second-brain/packages/codex-agent-driver`) is chosen so the
+      # relative `../../second-brain/packages/codex-agent-driver`
+      # `[tool.uv.sources]` entry in `agent-service/pyproject.toml`
+      # resolves identically in local dev (`uv sync` from the repo)
+      # and in the docker build.
+      additional_contexts:
+        codex-agent-driver: ../second-brain/packages/codex-agent-driver
     ports:
       - "8003:8003"
     # `host.docker.internal` is the hostname the LM Studio proxy
@@ -143,6 +155,19 @@ services:
       - THREAD_ROOT=/var/threads
     volumes:
       - ./data/agent-service/threads:/var/threads
+      # Host codex auth + base config, mounted read-only so the
+      # container can spawn `codex` without re-logging in. Chunk 3
+      # uses `prepare_actor_codex_home` to materialize a per-thread
+      # codex_home under `${THREAD_ROOT}/threads/<thread_id>/...`;
+      # that helper symlinks `auth.json` and seeds `config.toml`
+      # from this base path. Read-only by design: writes (sqlite,
+      # logs, per-session state) land in the per-thread codex_home,
+      # never on the host.
+      #
+      # ${HOME} expands from the user's docker compose invocation,
+      # so this works across machines as long as the user has run
+      # `codex login` once on the host.
+      - ${HOME}/.codex:/root/.codex:ro
     depends_on:
       api:
         condition: service_started

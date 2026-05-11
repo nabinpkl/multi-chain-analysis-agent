@@ -279,7 +279,7 @@ export function ModelsPanel() {
               />
             ))}
             <p className="text-[0.6rem] text-mca-muted leading-relaxed pt-1">
-              gemini lists every model exposed by Google's OpenAI-compat
+              gemini lists every model exposed by Google&apos;s OpenAI-compat
               endpoint (Gemma open-weights + Gemini proprietary).
               openrouter lists `:free` ids only. local hits LM Studio
               at LOCAL_LLM_BASE_URL. Local + Gemma open-weights must

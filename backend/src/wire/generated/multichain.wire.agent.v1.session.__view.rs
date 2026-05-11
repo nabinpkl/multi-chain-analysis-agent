@@ -44,6 +44,16 @@ pub struct AgentRequestView<'a> {
     pub llm_override: ::buffa::MessageFieldView<
         super::super::__buffa::view::LlmOverrideView<'a>,
     >,
+    /// Which agent runtime owns this thread. Per the chunk 3 plan,
+    /// runtime is locked at thread creation: the server writes it to
+    /// `<thread_root>/threads/<thread_id>/runtime.json` on mint and
+    /// rejects subsequent turns whose `runtime` field disagrees with
+    /// the persisted value (400). UNSPECIFIED on the wire falls back
+    /// to PYDANTIC_AI server-side, keeping pre-chunk-3 clients
+    /// working unchanged.
+    ///
+    /// Field 8: `runtime`
+    pub runtime: ::buffa::EnumValue<super::super::AgentRuntime>,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> AgentRequestView<'a> {
@@ -196,6 +206,18 @@ impl<'a> AgentRequestView<'a> {
                         }
                     }
                 }
+                8u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 8u32,
+                            expected: 0u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    view.runtime = ::buffa::EnumValue::from(
+                        ::buffa::types::decode_int32(&mut cur)?,
+                    );
+                }
                 _ => {
                     ::buffa::encoding::skip_field_depth(tag, &mut cur, depth)?;
                     let span_len = before_tag.len() - cur.len();
@@ -252,6 +274,7 @@ impl<'a> ::buffa::MessageView<'a> for AgentRequestView<'a> {
                 }
                 None => ::buffa::MessageField::none(),
             },
+            runtime: self.runtime,
             __buffa_unknown_fields: self
                 .__buffa_unknown_fields
                 .to_owned()
@@ -303,6 +326,12 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentRequestView<'a> {
             size
                 += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
+        }
+        {
+            let val = self.runtime.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
@@ -370,6 +399,14 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentRequestView<'a> {
                 .encode(buf);
             ::buffa::encoding::encode_varint(__cache.consume_next() as u64, buf);
             self.llm_override.write_to(__cache, buf);
+        }
+        {
+            let val = self.runtime.to_i32();
+            if val != 0 {
+                ::buffa::encoding::Tag::new(8u32, ::buffa::encoding::WireType::Varint)
+                    .encode(buf);
+                ::buffa::types::encode_int32(val, buf);
+            }
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
