@@ -384,6 +384,22 @@ class ThreadRegistry:
         memory-or-disk check."""
         return self._threads.get(thread_id)
 
+    def is_busy(self, thread_id: str) -> bool:
+        """Non-blocking probe for "is a turn currently running on
+        this thread". Chunk 3.5 uses this in `POST /agent/turn` to
+        return HTTP 409 immediately when a second turn arrives
+        before the first finishes, rather than silently queuing on
+        the per-thread `asyncio.Lock` until release.
+
+        `asyncio.Lock.locked()` is sync, allocation-free, and
+        reliable: a `True` reading means another coroutine is
+        currently inside `async with lock:` for this thread, and
+        `False` means the next `async with` would acquire
+        immediately. Threads we've never seen also count as
+        not-busy (no lock allocated yet)."""
+        lock = self._locks.get(thread_id)
+        return lock is not None and lock.locked()
+
     def exists(self, thread_id: str) -> bool:
         """True iff the thread is in memory OR has a `state.json` on
         disk. Used by the POST /agent/turn handler to validate a

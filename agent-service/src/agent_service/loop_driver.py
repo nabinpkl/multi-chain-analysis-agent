@@ -36,11 +36,10 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
-from google.protobuf import json_format
 from opentelemetry import trace
 from pydantic_ai import Agent
 
@@ -52,10 +51,10 @@ from agent_service.core import (
     resolve_run_type,
     run_one_turn,
 )
-from agent_service.diff import diff_outputs, spec_for
+from agent_service.diff_replay import _frame as _shared_frame, run_repeat_path
 from agent_service.llm_retry import begin_role_timing_capture
 from agent_service.policy.constitution import build_constitution_agent
-from agent_service.primitive_client import PrimitiveClient, PrimitiveError
+from agent_service.primitive_client import PrimitiveClient
 from agent_service.repeat_detector import build_repeat_agent, detect_repeat
 from agent_service.thread_state import (
     AgentThread,
@@ -63,7 +62,6 @@ from agent_service.thread_state import (
     TurnToolCallRecord,
 )
 from multichain.wire.agent.v1 import (
-    diff_pb2,
     session_pb2,
     sse_pb2,
 )
@@ -122,125 +120,22 @@ class LoopHandles:
     # `POST /agent/turn` handler 503s codex-runtime requests in
     # that case rather than silently falling back to pydantic-ai.
     codex_driver: Any = None
+    # Chunk 3.5. Active-turn registry keyed by thread_id. The POST
+    # handler registers the per-turn asyncio.Task here on entry and
+    # clears it on exit; `DELETE /agent/turn/{thread_id}` looks up
+    # the task and calls `task.cancel()`. Cancellation propagates
+    # into the generator's `except asyncio.CancelledError` branch
+    # which closes the codex session / cancels the drain / releases
+    # the snapshot lease cleanly. Mutated by `main.py`; the
+    # dataclass default factory keeps each LoopHandles owning its
+    # own dict.
+    active_turns: dict[str, asyncio.Task] = field(default_factory=dict)
 
 
-# ---------------------------------------------------------------------------
-# Frame helpers (proto -> {"event", "data": json_str} dicts for SSE)
-# ---------------------------------------------------------------------------
-
-
-def _frame(event: str, msg) -> dict[str, str]:
-    return {
-        "event": event,
-        "data": json_format.MessageToJson(
-            msg, preserving_proto_field_name=False, indent=None
-        ),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Repeat path (ship 4 dont_repeat_yourself)
-# ---------------------------------------------------------------------------
-
-
-async def _run_repeat_path(
-    *,
-    handles: LoopHandles,
-    thread: AgentThread,
-    repeat_of_turn: int,
-    snapshot_id: str,
-    thread_id: str,
-    turn_started_at_ms: int,
-) -> AsyncIterator[dict[str, str]]:
-    """Replay the prior turn's tool calls against the fresh snapshot,
-    diff outputs, emit NoMovement or ChangedSince. No LLM narrative
-    call on the empty path; ChangedSince carries deterministic prose
-    listing the changed fields.
-
-    Wrapped in a `turn.diff` span so the SQL query
-    `SELECT changed_count, primitives_replayed FROM otel_traces WHERE
-    SpanName='turn.diff'` answers "what shifted between this turn and
-    the prior one" without replaying the loop. Per-primitive replays
-    nest as primitive.* spans automatically.
-    """
-    prior_calls = thread.tool_calls_per_turn.get(repeat_of_turn, [])
-    primitives_replayed: list[str] = []
-    all_changed: list[diff_pb2.FieldDelta] = []
-    total_unchanged = 0
-
-    with _tracer.start_as_current_span(spans.TURN_DIFF) as diff_span:
-        diff_span.set_attribute(spans.Attrs.REPEAT_OF_TURN, repeat_of_turn)
-        for record in prior_calls:
-            try:
-                if record.primitive_name == "wallet_profile":
-                    fresh = await handles.primitive_client.wallet_profile(
-                        addr=record.args["addr"], snapshot_id=snapshot_id
-                    )
-                elif record.primitive_name == "community_summary":
-                    fresh = await handles.primitive_client.community_summary(
-                        community_id=record.args["community_id"],
-                        snapshot_id=snapshot_id,
-                    )
-                else:
-                    continue
-            except PrimitiveError as e:
-                log.warning(
-                    "repeat_replay_failed",
-                    primitive=record.primitive_name,
-                    error=e.kind,
-                )
-                continue
-
-            primitives_replayed.append(record.primitive_name)
-            spec = spec_for(record.primitive_name)
-            delta = diff_outputs(record.primitive_name, spec, record.output_value, fresh.value)
-            all_changed.extend(delta.changed)
-            total_unchanged += delta.unchanged_field_count
-
-        diff_span.set_attribute(spans.Attrs.DIFF_CHANGED_COUNT, len(all_changed))
-        diff_span.set_attribute(spans.Attrs.DIFF_UNCHANGED_COUNT, total_unchanged)
-        diff_span.set_attribute(
-            spans.Attrs.DIFF_PRIMITIVES_REPLAYED, primitives_replayed
-        )
-
-        if not all_changed:
-            # No-movement bubble. Deterministic; no LLM call.
-            nm = diff_pb2.NoMovement(
-                prior_turn=repeat_of_turn,
-                primitives_replayed=primitives_replayed,
-            )
-            yield _frame("NoMovement", nm)
-        else:
-            delta = diff_pb2.Delta(
-                changed=all_changed, unchanged_field_count=total_unchanged
-            )
-            prose = _format_changed_prose(all_changed)
-            cs = diff_pb2.ChangedSince(prior_turn=repeat_of_turn, delta=delta, prose=prose)
-            yield _frame("ChangedSince", cs)
-
-
-def _format_changed_prose(changes: list[diff_pb2.FieldDelta]) -> str:
-    """Deterministic single-paragraph summary of what diff fields
-    moved. Plain prose; no chips, no audit numbers."""
-    if not changes:
-        return "No movement since the prior turn."
-    parts: list[str] = []
-    for c in changes:
-        case = c.change.WhichOneof("change")
-        if case == "number_moved":
-            n = c.change.number_moved
-            parts.append(f"{c.field_path} moved from {n.prior:.2f} to {n.current:.2f}")
-        elif case == "count_changed":
-            n = c.change.count_changed
-            parts.append(f"{c.field_path} changed from {int(n.prior)} to {int(n.current)}")
-        elif case == "set_changed":
-            s = c.change.set_changed
-            added_n = len(s.added)
-            removed_n = len(s.removed)
-            parts.append(
-                f"{c.field_path}: {added_n} added, {removed_n} removed"
-            )
-    return "Since the prior turn: " + "; ".join(parts) + "."
+# Frame helpers + repeat-path body now live in `diff_replay` so
+# the codex driver shares them without copy-paste. The local
+# `_frame` alias keeps the rest of this file unchanged.
+_frame = _shared_frame
 
 
 # ---------------------------------------------------------------------------
@@ -398,13 +293,11 @@ async def run_turn(
                             )
                             lease = await handles.primitive_client.begin_turn()
                             snapshot_id = lease.snapshot_id
-                            async for frame in _run_repeat_path(
+                            async for frame in run_repeat_path(
                                 handles=handles,
                                 thread=thread,
                                 repeat_of_turn=outcome.repeat_of_turn,
                                 snapshot_id=snapshot_id,
-                                thread_id=thread_id,
-                                turn_started_at_ms=turn_started_at_ms,
                             ):
                                 yield frame
                             yield _terminal_done(

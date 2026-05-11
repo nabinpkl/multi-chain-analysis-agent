@@ -38,7 +38,7 @@ from pathlib import Path
 
 import httpx
 import structlog
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from google.protobuf import json_format
 from sse_starlette.sse import EventSourceResponse
@@ -420,6 +420,21 @@ async def agent_turn(request: Request) -> EventSourceResponse:
         # client may have lost its localStorage selection mid-session.
         if stored_runtime is not None:
             requested_runtime = stored_runtime
+    # 409 on concurrent turn. Without this the per-thread asyncio
+    # Lock queued the second turn until the first finished; with
+    # the chunk 3.5 Stop button in the UI, returning busy
+    # immediately + telling the user to cancel the current turn is
+    # honest. Tested against `lock.locked()` which is sync and
+    # non-blocking.
+    if req.thread_id and handles.threads.is_busy(req.thread_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "thread is busy with another turn; "
+                "stop the current turn first"
+            ),
+        )
+
     if requested_runtime == sess_pb.AGENT_RUNTIME_CODEX and handles.codex_driver is None:
         raise HTTPException(
             status_code=503,
@@ -449,6 +464,16 @@ async def agent_turn(request: Request) -> EventSourceResponse:
     )
 
     async def event_iter():
+        # Register this turn's iterating task so DELETE /agent/turn/
+        # {thread_id} can cancel it. EventSourceResponse drives this
+        # generator from its own task; `asyncio.current_task()` on
+        # first iteration returns that task. Cancellation propagates
+        # into the generator as `asyncio.CancelledError`, which the
+        # driver's finally blocks already handle (snapshot release,
+        # codex session close, drain task abort).
+        task = asyncio.current_task()
+        if task is not None:
+            handles.active_turns[thread_id] = task
         try:
             async for frame in driver_fn(
                 handles=handles,
@@ -474,6 +499,13 @@ async def agent_turn(request: Request) -> EventSourceResponse:
         except asyncio.CancelledError:
             log.info("agent_stream_cancelled", thread_id=thread_id)
             raise
+        finally:
+            # Drop the registry entry, but only if it's still our
+            # task; a later turn on the same thread that already
+            # started would have replaced the entry, and clobbering
+            # it would let its DELETE hit nothing.
+            if handles.active_turns.get(thread_id) is task:
+                handles.active_turns.pop(thread_id, None)
 
     # Critical SSE headers: nginx / cloudflared / browsers won't buffer
     # if these are set. `X-Mca-Thread-Id` lets the frontend learn the
@@ -487,3 +519,33 @@ async def agent_turn(request: Request) -> EventSourceResponse:
         "X-Mca-Thread-Id": thread_id,
     }
     return EventSourceResponse(event_iter(), headers=headers)
+
+
+@app.delete("/agent/turn/{thread_id}", status_code=204)
+async def cancel_turn(thread_id: str, request: Request) -> Response:
+    """Cancel the in-flight turn for `thread_id`. Looks up the
+    iterating asyncio.Task on `LoopHandles.active_turns` and calls
+    `.cancel()`; the generator's `except asyncio.CancelledError`
+    branch closes the codex session, aborts the claim drain, and
+    releases the snapshot lease before the SSE response stream
+    closes on the client side.
+
+    Returns:
+      * **204** when the task was found and cancellation was
+        signalled. We DO NOT wait for the task to unwind  the
+        SSE response closes from the client end as soon as the
+        generator exits, which is enough for the frontend.
+      * **404** when no active turn matches. Stops a stray Stop
+        click after the turn naturally finished from raising on
+        the client.
+    """
+    handles: LoopHandles = request.app.state.handles
+    task = handles.active_turns.get(thread_id)
+    if task is None or task.done():
+        raise HTTPException(
+            status_code=404,
+            detail="no active turn for this thread",
+        )
+    task.cancel()
+    log.info("cancel_turn_requested", thread_id=thread_id)
+    return Response(status_code=204)

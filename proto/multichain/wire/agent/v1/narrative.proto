@@ -22,3 +22,17 @@ message NarrativeRetracted {
   string reason = 2;
   optional string debug_reason = 3;
 }
+
+// One token-or-phrase chunk of narrative prose, streamed mid-turn
+// as the underlying model generates. Frontend accumulates these
+// into the in-progress turn's `narrative` field; a terminal
+// `NarrativeWithRefs` (or `NarrativeRetracted`) follows once the
+// constitution gate has run and provenance is assembled, at which
+// point the renderer can resolve `${ref:N}` placeholders.
+//
+// Emitted by the codex runtime today (`agent_service/codex_driver.py`)
+// where the underlying SDK exposes `TEXT_DELTA` events. The
+// pydantic-ai runtime's streaming migration ships separately.
+message NarrativeDelta {
+  string text = 1;
+}

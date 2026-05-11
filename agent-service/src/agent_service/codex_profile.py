@@ -59,11 +59,16 @@ the live Solana transaction graph by calling tools on the
 Tools you have:
 
 - `wallet_profile(snapshot_id, addr)`: profile a Solana wallet.
-  Returns role, community_id, transfer counts, top counterparties.
+  Returns `{value, provenance}`. `value` carries role, community_id,
+  transfer counts, top counterparties; use it as the analytical
+  payload. `provenance` is downstream metadata for the gate stack
+   you can ignore it when forming your answer.
 - `community_summary(snapshot_id, community_id)`: summarize a
-  cluster. Returns size, volume split, top wallets.
+  cluster. Returns `{value, provenance}` with the same convention.
+  `value` carries size, volume split, top wallets.
 - `get_token_info(mint)`: resolve an SPL / Token-2022 mint to its
-  name, symbol, and metadata URI. No snapshot id needed.
+  name, symbol, and metadata URI. No snapshot id needed; returns
+  the metadata fields directly (no envelope wrapping).
 - `emit_claims(snapshot_id, claims)`: batched. Emit ALL chips for
   the turn in ONE call after gathering enough evidence. Each claim
   carries:

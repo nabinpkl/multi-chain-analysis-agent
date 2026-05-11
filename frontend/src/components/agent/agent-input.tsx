@@ -31,10 +31,17 @@ import type { AgentStatus } from "@/hooks/use-agent-stream";
  */
 export function AgentInput({
   onSend,
+  onStop,
   status,
   liveWindowSecs,
 }: {
   onSend: (request: AgentRequest) => void;
+  /** Chunk 3.5: invoked when the user clicks the Stop button.
+   *  Fires `DELETE /agent/turn/{thread_id}` then aborts the local
+   *  fetch. Always required even though the button only shows
+   *  while a turn is in flight, so the prop contract stays
+   *  truthful about what the parent must wire. */
+  onStop: () => void;
   status: AgentStatus;
   liveWindowSecs: number;
 }) {
@@ -153,9 +160,26 @@ export function AgentInput({
         <span className="text-[0.6rem] uppercase tracking-[1.5px] text-mca-muted">
           enter to send · shift+enter for newline
         </span>
-        <Button type="submit" size="sm" disabled={inFlight || !text.trim()}>
-          {inFlight ? "..." : "send"}
-        </Button>
+        {inFlight ? (
+          // Chunk 3.5: in-flight UI swaps Send for Stop so the user
+          // can cancel a long codex turn. type="button" so Enter on
+          // the textarea doesn't accidentally trigger Stop instead
+          // of Send. The click fires `DELETE /agent/turn/{thread_id}`
+          // server-side and aborts the local SSE fetch.
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={onStop}
+            title="cancel the current turn"
+          >
+            stop
+          </Button>
+        ) : (
+          <Button type="submit" size="sm" disabled={!text.trim()}>
+            send
+          </Button>
+        )}
       </div>
     </form>
   );

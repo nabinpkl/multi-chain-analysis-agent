@@ -9,6 +9,7 @@ import { AgentClaimList } from "./agent-claim-list";
 import { AgentInput } from "./agent-input";
 import { BuilderViewToggle } from "./builder-view-toggle";
 import { ModelsPanel } from "./models-panel";
+import { RuntimePanel } from "./runtime-panel";
 import { SwitchPanel } from "./switch-panel";
 
 /**
@@ -35,7 +36,8 @@ export function AgentSheet({
 }) {
   const focusedAddr = useGraphFocus((s) => s.focusedAddr);
   const builderViewOn = useAgentSwitches((s) => s.builderViewOn);
-  const { status, turns, progress, threadId, turn, ask, reset } = agentStream;
+  const { status, turns, progress, threadId, turn, ask, reset, stop } =
+    agentStream;
   const inFlight = status.kind === "sending" || status.kind === "streaming";
   const showTurnChip = threadId !== null && (turn > 0 || turns.length > 0);
 
@@ -82,6 +84,7 @@ export function AgentSheet({
         <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
           {builderViewOn ? (
             <>
+              <RuntimePanel threadId={threadId} />
               <ModelsPanel />
               <SwitchPanel />
             </>
@@ -105,6 +108,7 @@ export function AgentSheet({
 
         <AgentInput
           onSend={ask}
+          onStop={stop}
           status={status}
           liveWindowSecs={liveWindowSecs}
         />

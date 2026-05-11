@@ -23,6 +23,7 @@ import {
   type GatePath,
 } from "@/lib/wire/multichain/wire/agent/v1/sse_pb";
 import {
+  NarrativeDeltaSchema,
   NarrativeRetractedSchema,
   NarrativeWithRefsSchema,
 } from "@/lib/wire/multichain/wire/agent/v1/narrative_pb";
@@ -34,6 +35,7 @@ import {
   getThreadId,
   setThreadId as persistThreadId,
 } from "@/lib/session";
+import { useRuntimeSelector } from "@/stores/use-runtime-selector";
 
 import type { ProgressEvent } from "@/components/agent/progress-format";
 
@@ -178,6 +180,33 @@ export function useAgentStream() {
     clearThreadId();
   }, [cleanup]);
 
+  /**
+   * Cancel the in-flight turn. Fires
+   * `DELETE /agent/turn/{thread_id}` so the server can cancel the
+   * iterating asyncio task (closes the codex session, aborts the
+   * claim drain, releases the snapshot lease) then aborts the local
+   * fetch so the React state stops updating from a stream the
+   * server is about to close. Idempotent: 404 from the server
+   * (turn already finished) is swallowed silently  the UI doesn't
+   * care whether the cancel hit a live turn or beat the natural
+   * exit by milliseconds.
+   */
+  const stop = useCallback(() => {
+    const tid = threadId;
+    cleanup();
+    if (tid) {
+      void fetch(`${agentUrl()}/agent/turn/${tid}`, {
+        method: "DELETE",
+      }).catch(() => {
+        // Network errors during stop are harmless: the local
+        // AbortController already closed the SSE consumer. If the
+        // server keeps generating frames briefly they go nowhere.
+      });
+    }
+    setStatus({ kind: "idle" });
+    setProgress(null);
+  }, [cleanup, threadId]);
+
   const ask = useCallback(
     async (request: AgentRequest) => {
       cleanup();
@@ -221,11 +250,16 @@ export function useAgentStream() {
       };
 
       // Build the request body, optionally carrying the saved
-      // thread_id so the server resumes the conversation.
+      // thread_id so the server resumes the conversation. Runtime
+      // is sourced from the persisted RuntimeSelector store; the
+      // backend ignores it on resume (already-locked runtime wins)
+      // but uses it on first turn to write `runtime.json`.
+      const runtime = useRuntimeSelector.getState().runtime;
       const buildBody = (tid: string | null): string => {
         const req = create(AgentRequestSchema, {
           ...request,
           threadId: tid ?? undefined,
+          runtime,
         });
         return toJsonString(AgentRequestSchema, req);
       };
@@ -255,6 +289,18 @@ export function useAgentStream() {
             body: buildBody(null),
             signal: controller.signal,
           });
+        }
+        if (resp.status === 409) {
+          // Thread is busy with another in-flight turn. Don't
+          // retry  surface a clear error so the user knows to
+          // click Stop. Avoiding a retry here also keeps the
+          // Stop-then-Send race from accidentally double-firing.
+          const msg =
+            "thread is busy with another turn. click stop to cancel it first.";
+          markTurnError(turnId, msg);
+          setStatus({ kind: "error", message: msg });
+          cleanup();
+          return;
         }
         if (!resp.ok || !resp.body) {
           const message = await resp.text().catch(() => `${resp.status}`);
@@ -330,17 +376,40 @@ export function useAgentStream() {
           }
           return;
         }
+        if (name === "NarrativeDelta") {
+          // Chunk 3.5: codex emits prose token-by-token via
+          // NarrativeDelta. Accumulate into t.narrative so the
+          // bubble fills in real time; provenance arrives later
+          // via the terminal Narrative frame.
+          try {
+            const parsed = fromJsonString(NarrativeDeltaSchema, data);
+            const chunk = parsed.text ?? "";
+            if (!chunk) return;
+            updateTurn((t) => ({
+              ...t,
+              narrative: (t.narrative ?? "") + chunk,
+            }));
+          } catch {
+            // skip malformed payloads
+          }
+          return;
+        }
         if (name === "Narrative") {
           try {
             const parsed = fromJsonString(NarrativeWithRefsSchema, data);
             const text = parsed.text ?? "";
             const provenance = parsed.provenance ?? [];
             if (!text) return;
-            updateTurn((t) =>
-              t.narrative === null
-                ? { ...t, narrative: text, narrativeProvenance: provenance }
-                : t,
-            );
+            // Always set provenance on the terminal frame. If
+            // streaming deltas already filled `narrative`, replace
+            // with the canonical final text the constitution gate
+            // approved (matches what's been streamed in the happy
+            // path; differs only if the gate altered the text).
+            updateTurn((t) => ({
+              ...t,
+              narrative: text,
+              narrativeProvenance: provenance,
+            }));
           } catch {
             // skip malformed payloads
           }
@@ -483,7 +552,7 @@ export function useAgentStream() {
   // user message); preserves the existing prop shape consumers see.
   const turn = turns.length;
 
-  return { status, turns, progress, threadId, turn, ask, reset };
+  return { status, turns, progress, threadId, turn, ask, reset, stop };
 }
 
 export type AgentStreamState = ReturnType<typeof useAgentStream>;

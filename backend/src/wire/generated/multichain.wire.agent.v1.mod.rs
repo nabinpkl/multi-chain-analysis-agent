@@ -113,6 +113,7 @@ pub mod __buffa {
         reg.register_json_any(super::__ROLE_OVERRIDE_JSON_ANY);
         reg.register_json_any(super::__NARRATIVE_WITH_REFS_JSON_ANY);
         reg.register_json_any(super::__NARRATIVE_RETRACTED_JSON_ANY);
+        reg.register_json_any(super::__NARRATIVE_DELTA_JSON_ANY);
         reg.register_json_any(super::__AGENT_SWITCHES_JSON_ANY);
         reg.register_json_any(super::__CHANNEL_SWITCHES_JSON_ANY);
         reg.register_json_any(super::__STAY_IN_ROLE_SWITCHES_JSON_ANY);

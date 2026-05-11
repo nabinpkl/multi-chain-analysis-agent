@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file multichain/wire/agent/v1/narrative.proto.
  */
 export const file_multichain_wire_agent_v1_narrative: GenFile = /*@__PURE__*/
-  fileDesc("CihtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvbmFycmF0aXZlLnByb3RvEhhtdWx0aWNoYWluLndpcmUuYWdlbnQudjEiXwoRTmFycmF0aXZlV2l0aFJlZnMSDAoEdGV4dBgBIAEoCRI8Cgpwcm92ZW5hbmNlGAIgAygLMigubXVsdGljaGFpbi53aXJlLnNoYXJlZC52MS5Qcm92ZW5hbmNlUmVmIl4KEk5hcnJhdGl2ZVJldHJhY3RlZBIMCgR0ZXh0GAEgASgJEg4KBnJlYXNvbhgCIAEoCRIZCgxkZWJ1Z19yZWFzb24YAyABKAlIAIgBAUIPCg1fZGVidWdfcmVhc29uYgZwcm90bzM", [file_multichain_wire_shared_v1_provenance]);
+  fileDesc("CihtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvbmFycmF0aXZlLnByb3RvEhhtdWx0aWNoYWluLndpcmUuYWdlbnQudjEiXwoRTmFycmF0aXZlV2l0aFJlZnMSDAoEdGV4dBgBIAEoCRI8Cgpwcm92ZW5hbmNlGAIgAygLMigubXVsdGljaGFpbi53aXJlLnNoYXJlZC52MS5Qcm92ZW5hbmNlUmVmIl4KEk5hcnJhdGl2ZVJldHJhY3RlZBIMCgR0ZXh0GAEgASgJEg4KBnJlYXNvbhgCIAEoCRIZCgxkZWJ1Z19yZWFzb24YAyABKAlIAIgBAUIPCg1fZGVidWdfcmVhc29uIh4KDk5hcnJhdGl2ZURlbHRhEgwKBHRleHQYASABKAliBnByb3RvMw", [file_multichain_wire_shared_v1_provenance]);
 
 /**
  * Approved free-form prose. May contain inline ${ref:N} tokens the
@@ -72,4 +72,32 @@ export type NarrativeRetracted = Message<"multichain.wire.agent.v1.NarrativeRetr
  */
 export const NarrativeRetractedSchema: GenMessage<NarrativeRetracted> = /*@__PURE__*/
   messageDesc(file_multichain_wire_agent_v1_narrative, 1);
+
+/**
+ * One token-or-phrase chunk of narrative prose, streamed mid-turn
+ * as the underlying model generates. Frontend accumulates these
+ * into the in-progress turn's `narrative` field; a terminal
+ * `NarrativeWithRefs` (or `NarrativeRetracted`) follows once the
+ * constitution gate has run and provenance is assembled, at which
+ * point the renderer can resolve `${ref:N}` placeholders.
+ *
+ * Emitted by the codex runtime today (`agent_service/codex_driver.py`)
+ * where the underlying SDK exposes `TEXT_DELTA` events. The
+ * pydantic-ai runtime's streaming migration ships separately.
+ *
+ * @generated from message multichain.wire.agent.v1.NarrativeDelta
+ */
+export type NarrativeDelta = Message<"multichain.wire.agent.v1.NarrativeDelta"> & {
+  /**
+   * @generated from field: string text = 1;
+   */
+  text: string;
+};
+
+/**
+ * Describes the message multichain.wire.agent.v1.NarrativeDelta.
+ * Use `create(NarrativeDeltaSchema)` to create a new message.
+ */
+export const NarrativeDeltaSchema: GenMessage<NarrativeDelta> = /*@__PURE__*/
+  messageDesc(file_multichain_wire_agent_v1_narrative, 2);
 

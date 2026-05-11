@@ -50,8 +50,27 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{ErrorData as McpError, ServerHandler, schemars, tool, tool_handler, tool_router};
 
-use crate::primitives::{community_summary, get_token_info, types::TimeScope, wallet_profile};
+use crate::primitives::{
+    ProvenanceRef, community_summary, get_token_info, types::TimeScope, wallet_profile,
+};
 use crate::state::AppState;
+
+/// MCP-side envelope wrapping a primitive's `value` plus its
+/// `provenance` array, intentionally omitting `subgraph_slice` so
+/// the per-tool-call JSON payload stays compact (the visualizer
+/// path on `/primitive/*` keeps the full envelope).
+///
+/// Why this exists: the chunk 3.5 codex driver populates the
+/// Python-side `PrimitiveBindingStore` from these tool outputs so
+/// the structural value-compare gate can run over codex-emitted
+/// claims. The pre-chunk-3.5 shape returned only `value`, leaving
+/// the binding store empty on codex turns and forcing the gate to
+/// no-op.
+#[derive(serde::Serialize)]
+struct McpEnvelope<'a, T: serde::Serialize> {
+    value: &'a T,
+    provenance: &'a Vec<ProvenanceRef>,
+}
 
 /// Tool surface bound to one rmcp session. Holds an `AppState` clone
 /// (cheap: every field is `Arc` / channel-handle internally) and the
@@ -223,12 +242,18 @@ impl McaeMcp {
         let out = wallet_profile::compute_with_snapshot(&self.state, &snapshot, input)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        // Return the inner `.value` only; the `PrimitiveOutput`
-        // envelope (provenance + subgraph_slice) is internal to the
-        // Python claim-chip pipeline and not relevant to codex /
-        // any other MCP consumer reading tool results.
+        // Return the {value, provenance} envelope so the chunk 3.5
+        // codex driver can populate the Python-side binding store
+        // (and run the structural value-compare gate over codex-
+        // emitted claims). `subgraph_slice` is intentionally
+        // dropped to keep token cost bounded; the visualizer path
+        // on /primitive/* still serves the full envelope.
         Ok(CallToolResult::structured(
-            serde_json::to_value(&out.value).unwrap_or(serde_json::Value::Null),
+            serde_json::to_value(&McpEnvelope {
+                value: &out.value,
+                provenance: &out.provenance,
+            })
+            .unwrap_or(serde_json::Value::Null),
         ))
     }
 
@@ -257,7 +282,11 @@ impl McaeMcp {
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::structured(
-            serde_json::to_value(&out.value).unwrap_or(serde_json::Value::Null),
+            serde_json::to_value(&McpEnvelope {
+                value: &out.value,
+                provenance: &out.provenance,
+            })
+            .unwrap_or(serde_json::Value::Null),
         ))
     }
 

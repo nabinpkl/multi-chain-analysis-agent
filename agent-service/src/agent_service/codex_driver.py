@@ -66,9 +66,23 @@ from agent_service.boundary import (
     build_context_block,
     reject_if_unsafe_user_question,
 )
-from agent_service.core.run import _build_claim, _set_retracted
-from agent_service.llm_retry import begin_role_timing_capture
+from agent_service.core.run import (
+    _build_claim,
+    _claims_to_judgement_payload,
+    _normalize_verdict,
+    _set_retracted,
+)
+from agent_service.diff_replay import run_repeat_path
+from agent_service.repeat_detector import detect_repeat
+from agent_service.thread_state import TurnToolCallRecord
+from agent_service.llm_retry import begin_role_timing_capture, with_provider_retry
+from agent_service.policy import constitution as constitution_module
+from agent_service.policy import structural as structural_module
+from agent_service.policy.binding_store import build_binding
+from agent_service.policy.constitution import judge_narrative
 from agent_service.policy.placeholder import validate_refs
+from agent_service.policy.structural import verify_chip_values
+from multichain.wire.shared.v1 import provenance_pb2
 from agent_service.thread_state import AgentThread
 from multichain.wire.agent.v1 import (
     narrative_pb2,
@@ -158,37 +172,202 @@ async def _drain_claims(
         )
 
 
-def _run_codex_sync(
+def _provenance_refs_from_json(
+    refs_json: list[dict[str, Any]],
+) -> list[provenance_pb2.ProvenanceRef]:
+    """Convert the kebab-case-tagged JSON shape that Rust serde
+    emits for `Vec<ProvenanceRef>` (see
+    `backend/src/primitives/types.rs:54`) into the proto
+    `ProvenanceRef` messages the structural gate consumes.
+
+    Rust's discriminator field is `kind`; values are kebab-case
+    variant names (`wallet`, `community`, `edge`, `time-range`,
+    `number`). Field names inside each variant are already
+    snake_case, which matches the proto. Refs whose shape doesn't
+    parse cleanly are skipped so a slight schema drift doesn't
+    crash the whole binding population.
+    """
+    out: list[provenance_pb2.ProvenanceRef] = []
+    for r in refs_json:
+        if not isinstance(r, dict):
+            continue
+        kind = r.get("kind", "")
+        try:
+            if kind == "wallet" and "addr" in r:
+                wallet = provenance_pb2.WalletRef(addr=r["addr"])
+                if r.get("idx") is not None:
+                    wallet.idx = int(r["idx"])
+                out.append(provenance_pb2.ProvenanceRef(wallet=wallet))
+            elif kind == "community" and "id" in r:
+                out.append(
+                    provenance_pb2.ProvenanceRef(
+                        community=provenance_pb2.CommunityRef(id=int(r["id"]))
+                    )
+                )
+            elif kind == "edge" and {"id", "src", "dst"} <= r.keys():
+                out.append(
+                    provenance_pb2.ProvenanceRef(
+                        edge=provenance_pb2.EdgeRef(
+                            id=r["id"], src=int(r["src"]), dst=int(r["dst"])
+                        )
+                    )
+                )
+            elif kind == "time-range" and {"from_s", "to_s"} <= r.keys():
+                out.append(
+                    provenance_pb2.ProvenanceRef(
+                        time_range=provenance_pb2.TimeRangeRef(
+                            from_s=int(r["from_s"]),
+                            to_s=int(r["to_s"]),
+                        )
+                    )
+                )
+            elif kind == "number" and {"metric", "value"} <= r.keys():
+                out.append(
+                    provenance_pb2.ProvenanceRef(
+                        number=provenance_pb2.NumberRef(
+                            metric=r["metric"],
+                            value=float(r["value"]),
+                            support=list(r.get("support") or []),
+                        )
+                    )
+                )
+        except (TypeError, ValueError) as e:
+            log.warning("provenance_ref_parse_failed", kind=kind, error=str(e))
+            continue
+    return out
+
+
+def _extract_tool_call_signature(
+    raw_event: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any]] | None:
+    """Pull `(tool_name, args)` out of a codex `item/started` raw
+    event. Used to set up the per-tool-call record the repeat
+    detector replays against the live snapshot on a follow-up turn.
+
+    Codex serializes one MCP tool call as
+    `params.item.type=="mcpToolCall"` with `tool`, `server`, and
+    `arguments` fields. Shape is undocumented across codex-cli
+    versions, so this stays defensive  any missing key returns
+    None and the caller skips recording. The repeat detector then
+    just doesn't see this tool call as priorturn evidence, which
+    is the same fallback the pydantic-ai path takes when an
+    `agent.tool` wrapper throws before recording.
+    """
+    if not raw_event:
+        return None
+    params = raw_event.get("params") if isinstance(raw_event, dict) else None
+    if not isinstance(params, dict):
+        return None
+    item = params.get("item")
+    if not isinstance(item, dict):
+        return None
+    if item.get("type") != "mcpToolCall":
+        return None
+    tool_name = item.get("tool")
+    args = item.get("arguments")
+    if not isinstance(tool_name, str) or not isinstance(args, dict):
+        return None
+    return tool_name, args
+
+
+def _extract_mcp_envelope(
+    output_json: str | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """Return `(value_dict, provenance_list)` from a
+    `TOOL_COMPLETED.output` payload, navigating the codex-cli MCP
+    wrapper. Codex serializes an `mcpToolCall` `result` as
+    `{"content": [...], "structuredContent": {<our envelope>},
+    "_meta": null}` and `_tool_output(item)` json-dumps the whole
+    `result` object. The envelope chunk 3.5 widened
+    (`backend/src/mcp.rs`) lands under `structuredContent`.
+
+    None on shape mismatch (failed tool calls land here  `result`
+    is null + `error` is non-null, _tool_output picks the error
+    message instead). Callers no-op binding population and tool-
+    call recording on None; the structural gate then has nothing
+    to verify against for that tool, same fallback as the
+    pydantic-ai path when a primitive errors.
+    """
+    if not output_json:
+        return None
+    try:
+        payload = json.loads(output_json)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    structured = payload.get("structuredContent")
+    if not isinstance(structured, dict):
+        return None
+    value = structured.get("value")
+    provenance_json = structured.get("provenance") or []
+    if not isinstance(value, dict) or not isinstance(provenance_json, list):
+        return None
+    return value, provenance_json
+
+
+def _record_tool_output_binding(
+    *,
+    thread: AgentThread,
+    tool_name: str,
+    output_json: str | None,
+) -> None:
+    """Parse a `TOOL_COMPLETED.output` payload from codex and
+    populate the per-thread `PrimitiveBindingStore`. The MCP tool
+    surface returns `{value, provenance}` for the two analytical
+    tools (chunk 3.5 widened `backend/src/mcp.rs`); `get_token_info`
+    returns a bare value with no envelope and is skipped here.
+
+    Failures (malformed JSON, missing envelope keys, no provenance)
+    return without recording. The structural gate then no-ops on
+    that tool's claims; defensive parsing keeps the codex turn
+    intact when the data plane's schema drifts.
+    """
+    if tool_name not in ("wallet_profile", "community_summary"):
+        return
+    envelope = _extract_mcp_envelope(output_json)
+    if envelope is None:
+        # Tool errored (e.g. wallet not in live window) or schema
+        # drift; structural gate no-ops on this turn's claims that
+        # would have referenced this binding, same as the
+        # pydantic-ai path when a primitive errors.
+        return
+    value, provenance_json = envelope
+    provenance = _provenance_refs_from_json(provenance_json)
+    binding = build_binding(
+        primitive=tool_name,
+        call_id=f"{tool_name}:codex:{time.time_ns():x}",
+        captured_at_ms=int(time.time() * 1000),
+        value_json=value,
+        provenance=provenance,
+    )
+    thread.bindings.record(binding)
+
+
+def _pump_codex_events(
     *,
     driver: CodexAppServerDriver,
     request: CodexRunRequest,
-) -> dict[str, Any]:
-    """Drive `CodexAppServerDriver.stream` to completion on a worker
-    thread (sync iterator + blocking I/O). Returns the aggregated
-    outcome the caller emits as SSE frames.
+    loop: asyncio.AbstractEventLoop,
+    queue: asyncio.Queue,
+) -> None:
+    """Run `CodexAppServerDriver.stream` on a worker thread and push
+    each event back into the main asyncio loop's queue. Used by the
+    async driver to interleave TEXT_DELTA / TOOL_STARTED frames with
+    the claim drain in real time.
 
-    We collect tool-name events for logging but don't surface them
-    as Progress frames in this MVP; per-tool Progress with mid-turn
-    UI updates is chunk 3.5 work that needs an async-bridge from
-    the worker thread back into the event loop.
+    Termination: a `None` sentinel is enqueued once the codex
+    iterator returns (or raises). The async consumer reads until
+    it sees the sentinel; any exception is re-raised on the
+    consumer side by surfacing a `("error", exc)` tuple.
     """
-    final_text: str | None = None
-    provider_thread_id: str | None = None
-    tool_events: list[str] = []
-    for evt in driver.stream(request):
-        if evt.provider_thread_id:
-            provider_thread_id = evt.provider_thread_id
-        if evt.type == CodexRunEventType.TOOL_STARTED:
-            tool_events.append(f"start:{evt.text or evt.tool_id or 'tool'}")
-        elif evt.type == CodexRunEventType.TOOL_COMPLETED:
-            tool_events.append(f"done:{evt.text or evt.tool_id or 'tool'}")
-        elif evt.type == CodexRunEventType.MESSAGE_COMPLETED:
-            final_text = evt.final_text
-    return {
-        "final_text": final_text or "",
-        "provider_thread_id": provider_thread_id or "",
-        "tool_events": tool_events,
-    }
+    try:
+        for evt in driver.stream(request):
+            loop.call_soon_threadsafe(queue.put_nowait, ("codex", evt))
+    except Exception as exc:  # noqa: BLE001
+        loop.call_soon_threadsafe(queue.put_nowait, ("error", exc))
+    finally:
+        loop.call_soon_threadsafe(queue.put_nowait, ("codex_done", None))
 
 
 def _emit_claims_from_drain(
@@ -197,6 +376,7 @@ def _emit_claims_from_drain(
     thread: AgentThread,
     thread_id: str,
     turn_started_at_ms: int,
+    dont_fabricate: bool,
 ) -> list[tuple[Any, bool]]:
     """Convert each drained claim dict into a `claim_pb2.Claim`,
     run the placeholder gate, and return the list paired with
@@ -250,6 +430,37 @@ def _emit_claims_from_drain(
                     spans.Attrs.GATE_REASON, ref_err.to_human_string()
                 )
                 _set_retracted(claim, ref_err.to_human_string())
+                out.append((claim, False))
+                continue
+            g.set_attribute(spans.Attrs.GATE_VERDICT, spans.VERDICT_APPROVED)
+
+        # Chunk 3.5 item 6: structural value-compare gate. Runs on
+        # codex claims now that `_record_tool_output_binding`
+        # populates `thread.bindings` from the {value, provenance}
+        # envelope. Only retracts when `dont_fabricate` is on; when
+        # off the gate observes-without-acting so the ablation
+        # suite can compare gated vs ungated codex behavior.
+        with _tracer.start_as_current_span(spans.GATE_STRUCTURAL) as g:
+            g.set_attribute(spans.Attrs.GATE_VERSION, structural_module.VERSION)
+            g.set_attribute(
+                spans.Attrs.GATE_BINDING_SIZE,
+                len(thread.bindings.all_numbers()),
+            )
+            struct_err = verify_chip_values(
+                list(claim.provenance), thread.bindings
+            )
+            if struct_err is not None and dont_fabricate:
+                g.set_attribute(
+                    spans.Attrs.GATE_VERDICT, spans.VERDICT_RETRACTED
+                )
+                g.set_attribute(
+                    spans.Attrs.GATE_REASON, struct_err.to_human_string()
+                )
+                g.set_attribute(
+                    spans.Attrs.GATE_FAILED_CHIP,
+                    str(getattr(struct_err, "kind", "unknown")),
+                )
+                _set_retracted(claim, struct_err.to_human_string())
                 out.append((claim, False))
                 continue
             g.set_attribute(spans.Attrs.GATE_VERDICT, spans.VERDICT_APPROVED)
@@ -373,6 +584,75 @@ async def run_turn_codex(
                     ),
                 )
 
+                # Chunk 3.5 item 7: repeat detection on codex path.
+                # Mirrors `loop_driver.run_turn:342-402`. The repeat
+                # detector itself is an LLM call (model decides
+                # whether the new question reasks a prior one); on
+                # hit, we replay the prior turn's tool calls against
+                # the fresh snapshot via the shared
+                # `diff_replay.run_repeat_path`. No codex stream
+                # fires on a repeat-hit  the diff is deterministic.
+                if (
+                    request.switches.dont_repeat_yourself
+                    and turn >= 1
+                    and thread.user_questions_per_turn
+                ):
+                    prior_qs = {
+                        t: q
+                        for t, q in thread.user_questions_per_turn.items()
+                        if t != turn
+                    }
+                    if prior_qs:
+                        with _tracer.start_as_current_span(
+                            spans.REPEAT_DETECTION
+                        ) as rd_span:
+                            outcome = await detect_repeat(
+                                prior_qs,
+                                request.user_question,
+                                handles.repeat_agent,
+                            )
+                            is_repeat = outcome.repeat_of_turn is not None
+                            rd_span.set_attribute(
+                                spans.Attrs.REPEAT_IS_REPEAT, is_repeat
+                            )
+                            rd_span.set_attribute(
+                                spans.Attrs.REPEAT_USER_WANTS_REFRESH,
+                                outcome.user_explicitly_wants_refresh,
+                            )
+                            if is_repeat:
+                                rd_span.set_attribute(
+                                    spans.Attrs.REPEAT_OF_TURN,
+                                    outcome.repeat_of_turn,
+                                )
+                            if outcome.reason:
+                                rd_span.set_attribute(
+                                    spans.Attrs.REPEAT_REASON, outcome.reason
+                                )
+                        if (
+                            outcome.repeat_of_turn is not None
+                            and not outcome.user_explicitly_wants_refresh
+                        ):
+                            log.info(
+                                "repeat_detected",
+                                thread_id=thread_id,
+                                repeat_of_turn=outcome.repeat_of_turn,
+                                reason=outcome.reason,
+                                runtime="codex",
+                            )
+                            lease = await handles.primitive_client.begin_turn()
+                            snapshot_id = lease.snapshot_id
+                            async for frame in run_repeat_path(
+                                handles=handles,
+                                thread=thread,
+                                repeat_of_turn=outcome.repeat_of_turn,
+                                snapshot_id=snapshot_id,
+                            ):
+                                yield frame
+                            yield _terminal_done(
+                                turn_started_at_ms, role_timings
+                            )
+                            return
+
                 # Snapshot lease. Same `PrimitiveClient.begin_turn` the
                 # pydantic-ai path uses; one snapshot per turn.
                 lease = await handles.primitive_client.begin_turn()
@@ -439,30 +719,145 @@ async def run_turn_codex(
                     ),
                 )
 
-                # Drive codex to completion on a worker thread. The
-                # sync iterator would block the event loop otherwise.
+                # Drive codex on a worker thread; pump events back
+                # into the event loop via an asyncio.Queue so we
+                # can yield NarrativeDelta frames as the underlying
+                # model emits tokens, not in one blob at turn end.
+                # The thread-bridge also gives us a single per-event
+                # consumer point where TOOL_STARTED/TOOL_COMPLETED
+                # handlers can populate the binding store + tool
+                # call record (chunks 3.5 items 6 + 7).
                 role_t0 = time.monotonic()
-                outcome = await asyncio.to_thread(
-                    _run_codex_sync,
-                    driver=handles.codex_driver,
-                    request=codex_request,
+                codex_queue: asyncio.Queue = asyncio.Queue()
+                codex_worker = asyncio.create_task(
+                    asyncio.to_thread(
+                        _pump_codex_events,
+                        driver=handles.codex_driver,
+                        request=codex_request,
+                        loop=asyncio.get_running_loop(),
+                        queue=codex_queue,
+                    )
                 )
+
+                final_text: str = ""
+                provider_thread_id_local: str = ""
+                tool_events: list[str] = []
+                streamed_chars = 0
+                codex_error: Exception | None = None
+                # Chunk 3.5 item 7: track per-tool args between
+                # TOOL_STARTED and TOOL_COMPLETED so we can record a
+                # full `TurnToolCallRecord` once the output lands.
+                # Keyed by `tool_id` (codex's per-call id).
+                pending_tool_calls: dict[str, tuple[str, dict[str, Any]]] = {}
+                while True:
+                    source, payload = await codex_queue.get()
+                    if source == "codex_done":
+                        break
+                    if source == "error":
+                        codex_error = payload  # type: ignore[assignment]
+                        continue
+                    if source != "codex":
+                        continue
+                    evt = payload
+                    if evt.provider_thread_id:
+                        provider_thread_id_local = evt.provider_thread_id
+                    if evt.type == CodexRunEventType.TEXT_DELTA:
+                        if evt.text:
+                            streamed_chars += len(evt.text)
+                            yield _frame(
+                                "NarrativeDelta",
+                                narrative_pb2.NarrativeDelta(text=evt.text),
+                            )
+                    elif evt.type == CodexRunEventType.TOOL_STARTED:
+                        tool_events.append(
+                            f"start:{evt.text or evt.tool_id or 'tool'}"
+                        )
+                        # Buffer args for the eventual TOOL_COMPLETED
+                        # so we can record a TurnToolCallRecord with
+                        # both args and output (chunk 3.5 item 7).
+                        sig = _extract_tool_call_signature(evt.raw_event)
+                        if sig is not None and evt.tool_id:
+                            pending_tool_calls[evt.tool_id] = sig
+                        yield _frame(
+                            "Progress",
+                            sse_pb2.Progress(
+                                phase="primitive",
+                                detail=evt.text or evt.tool_id or "tool",
+                            ),
+                        )
+                    elif evt.type == CodexRunEventType.TOOL_COMPLETED:
+                        tool_name = evt.text or evt.tool_id or ""
+                        tool_events.append(f"done:{tool_name or 'tool'}")
+                        # Chunk 3.5 item 6: populate the per-thread
+                        # binding store from the {value, provenance}
+                        # envelope. Lets the structural value-compare
+                        # gate run over claims emitted later in this
+                        # turn (or in follow-up turns).
+                        _record_tool_output_binding(
+                            thread=thread,
+                            tool_name=tool_name,
+                            output_json=evt.output,
+                        )
+                        # Chunk 3.5 item 7: record TurnToolCallRecord
+                        # so a follow-up turn's repeat detector can
+                        # replay this tool call. The args were
+                        # buffered on TOOL_STARTED; output_value
+                        # comes from the {value, provenance}
+                        # envelope on this event. If either is
+                        # missing (rare: schema drift on
+                        # codex-cli) we just skip the record  the
+                        # repeat path no-ops on un-recorded tools.
+                        pending = (
+                            pending_tool_calls.pop(evt.tool_id, None)
+                            if evt.tool_id
+                            else None
+                        )
+                        if pending is not None and pending[0] in (
+                            "wallet_profile",
+                            "community_summary",
+                        ):
+                            envelope = _extract_mcp_envelope(evt.output)
+                            if envelope is not None:
+                                value, _ = envelope
+                                thread.record_turn_tool_call(
+                                    turn,
+                                    TurnToolCallRecord(
+                                        primitive_name=pending[0],
+                                        args=pending[1],
+                                        output_value=value,
+                                        call_id=evt.tool_id or "",
+                                    ),
+                                )
+                    elif evt.type == CodexRunEventType.MESSAGE_COMPLETED:
+                        final_text = evt.final_text or ""
+
+                # Ensure the worker task is fully done (the sentinel
+                # was already delivered, but the future may still
+                # hold a residual exception we want to observe).
+                try:
+                    await codex_worker
+                except Exception as worker_exc:  # noqa: BLE001
+                    if codex_error is None:
+                        codex_error = worker_exc
+
+                if codex_error is not None:
+                    raise codex_error
+
                 role_timings["primary"] = (
                     role_timings.get("primary", 0.0)
                     + (time.monotonic() - role_t0)
                 )
 
-                final_text = outcome["final_text"]
-                pti = outcome["provider_thread_id"]
-                if pti:
-                    thread.codex_provider_thread_id = pti
+                if provider_thread_id_local:
+                    thread.codex_provider_thread_id = provider_thread_id_local
 
                 log.info(
                     "codex_turn_complete",
                     thread_id=thread_id,
-                    provider_thread_id=pti,
-                    tool_events=outcome["tool_events"],
+                    provider_thread_id=provider_thread_id_local,
+                    tool_events=tool_events,
                     final_chars=len(final_text),
+                    streamed_chars=streamed_chars,
                 )
 
                 # Close the snapshot lease so the drain socket sees
@@ -494,6 +889,7 @@ async def run_turn_codex(
                     thread=thread,
                     thread_id=thread_id,
                     turn_started_at_ms=turn_started_at_ms,
+                    dont_fabricate=request.switches.dont_fabricate,
                 )
                 turn_span.set_attribute(
                     spans.Attrs.TURN_CLAIMS_EMITTED, len(results)
@@ -508,18 +904,77 @@ async def run_turn_codex(
                     spans.Attrs.TURN_CLAIMS_APPROVED, approved_count
                 )
 
-                # Final narrative. No constitution gate on this MVP
-                # (chunk 3.5); codex prose passes through verbatim
-                # with empty provenance since the existing chip-
-                # resolution pipeline runs on Claim-emitted refs,
-                # not narrative-side provenance.
-                yield _frame(
-                    "Narrative",
-                    narrative_pb2.NarrativeWithRefs(
-                        text=final_text,
-                        provenance=[],
-                    ),
-                )
+                # Chunk 3.5 item 5: run the constitution gate over
+                # the codex final prose, same path the pydantic-ai
+                # core uses (`core/run.py:483-523`). Gated by the
+                # `defend_constitution_judge` switch so the
+                # ablation suite can still pull raw codex output.
+                # `same_turn_claims` carries this turn's approved
+                # claims plus prior-turn approved claims for
+                # narrative-coherence context. Approved or skipped
+                # → `Narrative` SSE frame. Retracted / rejected →
+                # `NarrativeRetracted` SSE frame; the frontend
+                # renders it in the same struck-amber bubble as
+                # the pydantic-ai retraction.
+                approved_claim_list = [c for c, ok in results if ok]
+                narrative_retracted = False
+                if (
+                    request.switches.stay_in_role.defend_constitution_judge
+                    and final_text
+                ):
+                    role_t_const = time.monotonic()
+                    with _tracer.start_as_current_span(
+                        spans.GATE_NARRATIVE_CONSTITUTION
+                    ) as g:
+                        g.set_attribute(
+                            spans.Attrs.GATE_VERSION,
+                            constitution_module.VERSION,
+                        )
+                        verdict = await with_provider_retry(
+                            lambda: judge_narrative(
+                                handles.constitution_agent,
+                                text=final_text,
+                                same_turn_claims=(
+                                    _claims_to_judgement_payload(
+                                        approved_claim_list
+                                    )
+                                    + _claims_to_judgement_payload(
+                                        list(thread.claims)
+                                    )
+                                ),
+                            ),
+                            label="constitution_narrative",
+                        )
+                        normalized = _normalize_verdict(verdict.verdict)
+                        g.set_attribute(spans.Attrs.GATE_VERDICT, normalized)
+                        if verdict.reason:
+                            g.set_attribute(
+                                spans.Attrs.GATE_REASON, verdict.reason
+                            )
+                        if verdict.verdict in ("retract", "reject"):
+                            ret = narrative_pb2.NarrativeRetracted(
+                                text=final_text,
+                                reason=verdict.reason
+                                or f"constitution {verdict.verdict}",
+                            )
+                            if handles.debug_public:
+                                ret.debug_reason = (
+                                    f"constitution: {verdict.reason}"
+                                )
+                            yield _frame("NarrativeRetracted", ret)
+                            narrative_retracted = True
+                    role_timings["policy"] = role_timings.get(
+                        "policy", 0.0
+                    ) + (time.monotonic() - role_t_const)
+
+                if not narrative_retracted:
+                    yield _frame(
+                        "Narrative",
+                        narrative_pb2.NarrativeWithRefs(
+                            text=final_text,
+                            provenance=[],
+                        ),
+                    )
                 turn_span.set_attribute(
                     spans.Attrs.TURN_NARRATIVE_CHARS, len(final_text)
                 )

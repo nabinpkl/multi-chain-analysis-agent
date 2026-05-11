@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from multichain.wire.shared.v1 import provenance_pb2 as multichain_dot_wire_dot_shared_dot_v1_dot_provenance__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n(multichain/wire/agent/v1/narrative.proto\x12\x18multichain.wire.agent.v1\x1a*multichain/wire/shared/v1/provenance.proto\"q\n\x11NarrativeWithRefs\x12\x12\n\x04text\x18\x01 \x01(\tR\x04text\x12H\n\nprovenance\x18\x02 \x03(\x0b\x32(.multichain.wire.shared.v1.ProvenanceRefR\nprovenance\"y\n\x12NarrativeRetracted\x12\x12\n\x04text\x18\x01 \x01(\tR\x04text\x12\x16\n\x06reason\x18\x02 \x01(\tR\x06reason\x12&\n\x0c\x64\x65\x62ug_reason\x18\x03 \x01(\tH\x00R\x0b\x64\x65\x62ugReason\x88\x01\x01\x42\x0f\n\r_debug_reasonb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n(multichain/wire/agent/v1/narrative.proto\x12\x18multichain.wire.agent.v1\x1a*multichain/wire/shared/v1/provenance.proto\"q\n\x11NarrativeWithRefs\x12\x12\n\x04text\x18\x01 \x01(\tR\x04text\x12H\n\nprovenance\x18\x02 \x03(\x0b\x32(.multichain.wire.shared.v1.ProvenanceRefR\nprovenance\"y\n\x12NarrativeRetracted\x12\x12\n\x04text\x18\x01 \x01(\tR\x04text\x12\x16\n\x06reason\x18\x02 \x01(\tR\x06reason\x12&\n\x0c\x64\x65\x62ug_reason\x18\x03 \x01(\tH\x00R\x0b\x64\x65\x62ugReason\x88\x01\x01\x42\x0f\n\r_debug_reason\"$\n\x0eNarrativeDelta\x12\x12\n\x04text\x18\x01 \x01(\tR\x04textb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -36,4 +36,6 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_NARRATIVEWITHREFS']._serialized_end=227
   _globals['_NARRATIVERETRACTED']._serialized_start=229
   _globals['_NARRATIVERETRACTED']._serialized_end=350
+  _globals['_NARRATIVEDELTA']._serialized_start=352
+  _globals['_NARRATIVEDELTA']._serialized_end=388
 # @@protoc_insertion_point(module_scope)
