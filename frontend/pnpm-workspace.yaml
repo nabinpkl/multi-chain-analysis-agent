@@ -1,3 +1,19 @@
-ignoredBuiltDependencies:
-  - sharp
-  - unrs-resolver
+# pnpm 11+ allowlist for packages whose postinstall scripts may run.
+# Each entry maps a package name to a boolean: true = allowed, false =
+# blocked. Packages not listed are blocked by default (because
+# strictDepBuilds=true is pnpm 11's default).
+#
+# Keep the list minimal and audit every entry before adding it. The
+# postinstall hook executes arbitrary code at install time with full
+# FS + network access; an unaudited entry is a supply-chain risk.
+#
+# Audited 2026-05-12 after the Mini Shai-Hulud TanStack incident
+# (May 11 2026): sharp@0.34.5 and unrs-resolver@1.11.1 have zero
+# known advisories per Snyk and are NOT in any Shai-Hulud attack
+# scope. msw is explicitly denied  we don't use Mock Service Worker
+# so its file-copy postinstall is dead work; blocking it cuts one
+# postinstall surface.
+allowBuilds:
+  sharp: true
+  unrs-resolver: true
+  msw: false

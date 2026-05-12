@@ -79,14 +79,12 @@ export function HistoryMenu({
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger asChild>
-        <button
-          className="text-mca-muted hover:text-mca-text transition-colors p-1 rounded border border-mca-border"
-          title="thread history"
-          aria-label="open thread history"
-        >
-          <History className="h-3.5 w-3.5" />
-        </button>
+      <DropdownMenuTrigger
+        className="text-mca-muted hover:text-mca-text transition-colors p-1 rounded border border-mca-border"
+        title="thread history"
+        aria-label="open thread history"
+      >
+        <History className="h-3.5 w-3.5" />
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
