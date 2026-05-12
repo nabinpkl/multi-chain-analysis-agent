@@ -50,8 +50,15 @@ from google.protobuf import json_format
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
 from multichain.wire.agent.v1 import claim_pb2, session_pb2
+from multichain.wire.shared.v1 import provenance_pb2
 
 from agent_service.policy.binding_store import PrimitiveBindingStore
+
+# Chunk 4 on-disk schema version stamp. Bumped only when state.json
+# acquires a breaking field-shape change; additive fields stay on
+# the same version and are read with `.get(key, default)`. See
+# `from_state_dict` for the migration policy.
+_STATE_SCHEMA_VERSION: int = 1
 
 
 class RuntimeMismatchError(Exception):
@@ -83,6 +90,61 @@ MAX_THREAD_CLAIMS: int = 20
 # map. They share the cap so they stay roughly aligned. Matches Rust's
 # `MAX_THREAD_TOOL_CALL_TURNS = 20`.
 MAX_THREAD_TOOL_CALL_TURNS: int = 20
+
+
+@dataclass(slots=True)
+class NarrativeSnapshot:
+    """Chunk 4 history-feature record. The final narrative the agent
+    emitted on one turn, captured so a reopened thread can replay
+    the full chat scroll instead of showing blank prose bubbles.
+
+    Three fields cover the live narrative paths both runtimes drive:
+    - `text`: the prose itself, either approved by the constitution
+      gate or carrying the model's draft when retracted.
+    - `provenance`: typed entity refs assembled from this turn's
+      claims (1-indexed against `${ref:N}` placeholders in `text`).
+      The renderer resolves chips against this list, same shape the
+      live `NarrativeWithRefs` SSE frame carries.
+    - `retracted_reason`: empty when the gate approved the
+      narrative; otherwise the user-facing reason the gate gave.
+      Drives the retracted-styling in the chat scroll on reopen.
+
+    Backend-only; the wire shape is `TranscriptTurn` in
+    `history.proto`."""
+
+    text: str
+    provenance: list[provenance_pb2.ProvenanceRef] = field(
+        default_factory=list
+    )
+    retracted_reason: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize for state.json. Provenance refs go through
+        the same `MessageToJson` codec as `AgentThread.claims` so
+        the JSON shape on disk is consistent across both lists."""
+        return {
+            "text": self.text,
+            "retracted_reason": self.retracted_reason,
+            "provenance": [
+                json_format.MessageToJson(
+                    p, preserving_proto_field_name=False
+                )
+                for p in self.provenance
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "NarrativeSnapshot":
+        refs: list[provenance_pb2.ProvenanceRef] = []
+        for p_json in data.get("provenance", []):
+            ref = provenance_pb2.ProvenanceRef()
+            json_format.Parse(p_json, ref, ignore_unknown_fields=True)
+            refs.append(ref)
+        return cls(
+            text=str(data.get("text", "")),
+            provenance=refs,
+            retracted_reason=str(data.get("retracted_reason", "")),
+        )
 
 
 @dataclass(slots=True)
@@ -144,6 +206,17 @@ class AgentThread:
     bindings: PrimitiveBindingStore = field(default_factory=PrimitiveBindingStore)
     tool_calls_per_turn: dict[int, list[TurnToolCallRecord]] = field(default_factory=dict)
     user_questions_per_turn: dict[int, str] = field(default_factory=dict)
+    # Chunk 4. Per-turn final narrative for transcript replay when
+    # the user reopens this thread. FIFO-capped with
+    # `MAX_THREAD_TOOL_CALL_TURNS` so memory + disk usage stay
+    # bounded the same way other per-turn maps do.
+    narratives_per_turn: dict[int, NarrativeSnapshot] = field(default_factory=dict)
+    # Chunk 4. Soft-archive flag. Threads with `archived=True` are
+    # hidden from the default history list (`GET /agent/threads`)
+    # but still resumable via `GET /agent/thread/{id}`. No GC; the
+    # on-disk tree (state.json + summary.json + codex_homes) stays
+    # until manually purged.
+    archived: bool = False
 
     def record_claim(self, claim: claim_pb2.Claim) -> None:
         """Append an approved claim, dropping the oldest when the cap
@@ -166,6 +239,23 @@ class AgentThread:
         self.user_questions_per_turn[turn] = question
         self._evict_oldest_turn_if_needed()
 
+    def record_turn_narrative(
+        self, turn: int, snapshot: NarrativeSnapshot
+    ) -> None:
+        """Record the final narrative for this turn so the history
+        reopen path can replay the full prose. Called by both
+        drivers right before they emit the terminal `Narrative` or
+        `NarrativeRetracted` SSE frame, so what gets persisted is
+        exactly what the live UI saw.
+        """
+        self.narratives_per_turn[turn] = snapshot
+        # Same FIFO cap as the tool-call / question maps so the
+        # three per-turn maps stay in lockstep when the cap kicks
+        # in.
+        while len(self.narratives_per_turn) > MAX_THREAD_TOOL_CALL_TURNS:
+            oldest = min(self.narratives_per_turn.keys())
+            self.narratives_per_turn.pop(oldest, None)
+
     def _evict_oldest_turn_if_needed(self) -> None:
         """Evict by smallest turn key when either map exceeds cap. Both
         maps share the cap so they stay roughly aligned."""
@@ -185,11 +275,17 @@ class AgentThread:
         `ThreadRegistry` to write `state.json` at end of turn so a
         container restart can reload the conversation."""
         return {
+            # Schema version is monotonic. New ADDITIVE fields stay
+            # on the current version (read-side uses `.get`); a
+            # version bump is only required when an existing field
+            # changes shape or is renamed. So far chunk 4 = v1.
+            "schema_version": _STATE_SCHEMA_VERSION,
             "thread_id": self.thread_id,
             "started_at_ms": self.started_at_ms,
             "turn_count": self.turn_count,
             "runtime": self.runtime,
             "codex_provider_thread_id": self.codex_provider_thread_id,
+            "archived": self.archived,
             # pydantic-ai ships an official TypeAdapter for the whole
             # `list[ModelMessage]` union. Round-trips every variant
             # (UserPromptPart, ToolReturnPart, ToolCallPart, etc) with
@@ -215,6 +311,10 @@ class AgentThread:
             "user_questions_per_turn": {
                 str(turn): q for turn, q in self.user_questions_per_turn.items()
             },
+            "narratives_per_turn": {
+                str(turn): snap.to_dict()
+                for turn, snap in self.narratives_per_turn.items()
+            },
         }
 
     @classmethod
@@ -236,18 +336,73 @@ class AgentThread:
             int(turn_str): q
             for turn_str, q in data.get("user_questions_per_turn", {}).items()
         }
+        # `narratives_per_turn` is chunk 4. Pre-chunk-4 state.json
+        # files lack the key; `.get` returns {} and the empty map
+        # is fine  reopened pre-chunk-4 threads render with blank
+        # narrative bubbles (same shape as a retracted-no-text
+        # turn, which already renders gracefully).
+        narratives: dict[int, NarrativeSnapshot] = {
+            int(turn_str): NarrativeSnapshot.from_dict(snap)
+            for turn_str, snap in data.get("narratives_per_turn", {}).items()
+        }
         return cls(
             thread_id=data["thread_id"],
             started_at_ms=int(data["started_at_ms"]),
             turn_count=int(data.get("turn_count", 0)),
             runtime=int(data.get("runtime", session_pb2.AGENT_RUNTIME_PYDANTIC_AI)),
             codex_provider_thread_id=str(data.get("codex_provider_thread_id", "")),
+            archived=bool(data.get("archived", False)),
             message_history=message_history,
             claims=claims,
             bindings=PrimitiveBindingStore.from_dict(data.get("bindings", {})),
             tool_calls_per_turn=tool_calls,
             user_questions_per_turn=user_questions,
+            narratives_per_turn=narratives,
         )
+
+
+# Maximum length (in chars) of the auto-generated thread title.
+# Long enough to give the row a useful first-question snippet
+# without crowding the dropdown; matches second-brain's posture
+# of "title from first prompt, no LLM call."
+_TITLE_MAX_CHARS: int = 80
+
+
+def _build_summary_row(thread: AgentThread) -> dict[str, Any]:
+    """Project an `AgentThread` to the seven-field history row.
+    Same shape `GET /agent/threads` serves; written to
+    `summary.json` on every `persist()` so the list endpoint never
+    needs to read the full `state.json` for any thread.
+
+    `title` and `last_user_question` both derive from
+    `user_questions_per_turn`. Title is the FIRST user_question
+    truncated; last_user_question is the most recent. Both empty
+    when the thread minted but never completed a turn (rare; only
+    possible if persist runs before `record_turn_user_question`).
+    """
+    sorted_turns = sorted(thread.user_questions_per_turn.keys())
+    first_q = (
+        thread.user_questions_per_turn[sorted_turns[0]]
+        if sorted_turns
+        else ""
+    )
+    last_q = (
+        thread.user_questions_per_turn[sorted_turns[-1]]
+        if sorted_turns
+        else ""
+    )
+    title = first_q[:_TITLE_MAX_CHARS]
+    return {
+        "schema_version": _STATE_SCHEMA_VERSION,
+        "thread_id": thread.thread_id,
+        "runtime": thread.runtime,
+        "runtime_name": session_pb2.AgentRuntime.Name(thread.runtime),
+        "started_at_ms": thread.started_at_ms,
+        "turn_count": thread.turn_count,
+        "title": title,
+        "last_user_question": last_q,
+        "archived": thread.archived,
+    }
 
 
 class ThreadRegistry:
@@ -280,28 +435,37 @@ class ThreadRegistry:
             return None
         return self._thread_root / "threads" / thread_id / "state.json"
 
-    def _runtime_path(self, thread_id: str) -> Path | None:
-        """Sibling of `state.json` storing the per-thread runtime
-        lock. Written once at thread creation (chunk 3); read on
-        every subsequent turn to validate `AgentRequest.runtime`
-        against the persisted choice without instantiating the
-        whole `AgentThread`."""
+    def _summary_path(self, thread_id: str) -> Path | None:
+        """Sibling of `state.json` carrying the full row payload for
+        the history list (chunk 4 replaces the chunk-3 `runtime.json`
+        with this wider sidecar). One sub-KB JSON per thread holding
+        every field `GET /agent/threads` projects to a row: runtime,
+        timestamps, turn count, title, last user question, archived.
+
+        Why a sidecar rather than projecting from `state.json`: the
+        list endpoint scans EVERY thread on disk to populate the
+        dropdown. Reading the ~10KB state.json per row would be
+        ~50x more IO than the sidecar (~200B). The sidecar IS the
+        list-side source of truth for chunk 4; state.json remains
+        the source of truth for the detail endpoint + the runtime
+        itself (gates, hydration, etc).
+        """
         if self._thread_root is None:
             return None
-        return self._thread_root / "threads" / thread_id / "runtime.json"
+        return self._thread_root / "threads" / thread_id / "summary.json"
 
     def runtime_for(self, thread_id: str) -> int | None:
         """Peek at the persisted runtime without loading the full
         thread. Returns the `session_pb2.AgentRuntime` enum int, or
         None when the thread is unknown (memory miss + disk miss).
         Memory path: return the cached thread's runtime. Disk
-        path: read `runtime.json` only. Used by the POST handler
+        path: read `summary.json` only. Used by the POST handler
         to short-circuit a mismatched request with 400 before any
         per-turn work runs."""
         cached = self._threads.get(thread_id)
         if cached is not None:
             return cached.runtime
-        path = self._runtime_path(thread_id)
+        path = self._summary_path(thread_id)
         if path is None or not path.exists():
             return None
         try:
@@ -309,9 +473,105 @@ class ThreadRegistry:
             return int(data.get("runtime", session_pb2.AGENT_RUNTIME_PYDANTIC_AI))
         except (OSError, json.JSONDecodeError, ValueError) as e:
             log.warning(
-                "runtime_file_load_failed", thread_id=thread_id, error=str(e)
+                "summary_file_load_failed", thread_id=thread_id, error=str(e)
             )
             return None
+
+    def list_summaries(
+        self, include_archived: bool = False
+    ) -> list[dict[str, Any]]:
+        """Iterate every per-thread `summary.json` on disk and
+        return the raw row dicts, newest first by `started_at_ms`.
+        The chunk 4 `GET /agent/threads` projects these into the
+        proto `ThreadSummary` shape; the registry stays
+        wire-agnostic.
+
+        Disk-scan cost is O(N) opens, but each file is ~200B so
+        even thousands of threads stay under ~100ms total. When
+        the scan starts dominating list latency, add an in-memory
+        LRU keyed by thread_id and invalidate it on `persist()` /
+        `archive()`.
+        """
+        if self._thread_root is None:
+            return []
+        threads_dir = self._thread_root / "threads"
+        if not threads_dir.exists():
+            return []
+        summaries: list[dict[str, Any]] = []
+        for child in threads_dir.iterdir():
+            if not child.is_dir():
+                continue
+            summary_path = child / "summary.json"
+            if not summary_path.exists():
+                continue
+            try:
+                data = json.loads(summary_path.read_text("utf-8"))
+            except (OSError, json.JSONDecodeError) as e:
+                log.warning(
+                    "summary_file_skip", thread_id=child.name, error=str(e)
+                )
+                continue
+            if not include_archived and bool(data.get("archived", False)):
+                continue
+            summaries.append(data)
+        summaries.sort(
+            key=lambda s: int(s.get("started_at_ms", 0)), reverse=True
+        )
+        return summaries
+
+    def archive(self, thread_id: str) -> bool:
+        """Soft-archive: set `archived=True` on state.json + summary
+        sidecar. Idempotent. Returns True when a thread was flipped
+        (memory or disk), False when the thread doesn't exist.
+
+        Codex sqlite under `codex_homes/local/<thread_id>/` is
+        intentionally left in place; chunk 4 archive only hides
+        the thread from the default list. A future "delete forever"
+        endpoint would close the codex session pool entry + sweep
+        the tree."""
+        if self._thread_root is None:
+            return False
+        # Memory path: flip the in-memory copy first, then persist.
+        cached = self._threads.get(thread_id)
+        if cached is not None:
+            if cached.archived:
+                return True
+            cached.archived = True
+            self.persist(cached)
+            return True
+        # Disk-only path: load via from_state_dict, flip, persist.
+        loaded = self._load_from_disk(thread_id)
+        if loaded is None:
+            return False
+        if loaded.archived:
+            return True
+        loaded.archived = True
+        self._threads[thread_id] = loaded
+        if thread_id not in self._locks:
+            self._locks[thread_id] = asyncio.Lock()
+        self.persist(loaded)
+        return True
+
+    def transcript_for(
+        self, thread_id: str, include_archived: bool = False
+    ) -> AgentThread | None:
+        """Load the full `AgentThread` for replay. Memory path first,
+        then disk. Used by `GET /agent/thread/{id}` to project the
+        full transcript via `narratives_per_turn` +
+        `user_questions_per_turn` + `claims`.
+
+        `include_archived=False` returns None for archived threads
+        so the default detail endpoint stays consistent with the
+        default list view. The handler can pass True to bypass
+        when the client explicitly asks for an archived row."""
+        thread = self._threads.get(thread_id) or self._load_from_disk(
+            thread_id
+        )
+        if thread is None:
+            return None
+        if thread.archived and not include_archived:
+            return None
+        return thread
 
     def _load_from_disk(self, thread_id: str) -> AgentThread | None:
         path = self._state_path(thread_id)
@@ -418,12 +678,13 @@ class ThreadRegistry:
         `<thread_root>/threads/<thread_id>/`:
 
         - `state.json`: full thread state (message_history, claims,
-          bindings, per-turn tool calls, runtime, codex provider
-          thread id, ...).
-        - `runtime.json`: tiny sidecar carrying just the runtime int.
-          Read by `runtime_for` on the request path WITHOUT loading
-          state.json; lets the POST handler validate
-          `AgentRequest.runtime` against the persisted lock cheaply.
+          bindings, per-turn tool calls, narratives_per_turn,
+          runtime, archived, ...).
+        - `summary.json` (chunk 4, replaces chunk-3 `runtime.json`):
+          full history-row payload  thread_id, runtime, started_at,
+          turn_count, title, last_user_question, archived. Read by
+          `GET /agent/threads` so the list endpoint never opens
+          state.json. ~200 bytes per file; same atomic-write path.
 
         Both files use the same `tempfile + os.replace` atomic-write
         idiom so a crash mid-write never leaves a half-baked file
@@ -434,18 +695,10 @@ class ThreadRegistry:
             return
         state_path.parent.mkdir(parents=True, exist_ok=True)
         self._atomic_write_json(state_path, thread.to_state_dict())
-        # Runtime sidecar. Cheap enough to rewrite every turn so we
-        # don't need a separate "first turn only" branch; the value
-        # never changes after thread creation either way.
-        runtime_path = self._runtime_path(thread.thread_id)
-        if runtime_path is not None:
+        summary_path = self._summary_path(thread.thread_id)
+        if summary_path is not None:
             self._atomic_write_json(
-                runtime_path,
-                {
-                    "runtime": thread.runtime,
-                    "runtime_name": session_pb2.AgentRuntime.Name(thread.runtime),
-                    "created_at_ms": thread.started_at_ms,
-                },
+                summary_path, _build_summary_row(thread)
             )
 
     @staticmethod

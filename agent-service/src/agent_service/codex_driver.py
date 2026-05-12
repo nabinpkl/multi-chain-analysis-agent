@@ -83,7 +83,7 @@ from agent_service.policy.constitution import judge_narrative
 from agent_service.policy.placeholder import validate_refs
 from agent_service.policy.structural import verify_chip_values
 from multichain.wire.shared.v1 import provenance_pb2
-from agent_service.thread_state import AgentThread
+from agent_service.thread_state import AgentThread, NarrativeSnapshot
 from multichain.wire.agent.v1 import (
     narrative_pb2,
     session_pb2,
@@ -562,15 +562,23 @@ async def run_turn_codex(
                         pattern=e.pattern,
                         runtime="codex",
                     )
+                    rejection_text = (
+                        "Your message contained chat-template-style "
+                        "tokens or other non-natural-language patterns "
+                        "that aren't supported in this conversation. "
+                        "Please rephrase in plain English."
+                    )
+                    # Chunk 4: persist the rejection so history replay
+                    # shows the same shape the live UI saw  a bubble
+                    # explaining why we shut the turn down.
+                    thread.record_turn_narrative(
+                        turn,
+                        NarrativeSnapshot(text=rejection_text),
+                    )
                     yield _frame(
                         "Narrative",
                         narrative_pb2.NarrativeWithRefs(
-                            text=(
-                                "Your message contained chat-template-style "
-                                "tokens or other non-natural-language patterns "
-                                "that aren't supported in this conversation. "
-                                "Please rephrase in plain English."
-                            ),
+                            text=rejection_text,
                             provenance=[],
                         ),
                     )
@@ -702,14 +710,35 @@ async def run_turn_codex(
                     "accepts a snapshot_id."
                 )
 
+                # `actor_id=thread_id` is the chunk 3.6 isolation
+                # key. `CodexAppServerSessionPool` indexes its
+                # session entries on `(profile_id, actor_id, ...)`,
+                # and `prepare_actor_codex_home` materializes the
+                # codex_home subtree at
+                # `<CODEX_HOME_ROOT>/local/<thread_id>/`. Each chat
+                # thread now gets its own subprocess + sqlite +
+                # config + prompt cache, so a "new chat" click
+                # really starts cold and threads don't bleed
+                # prompt-cache state into one another.
                 codex_request = CodexRunRequest(
                     prompt=request.user_question,
-                    actor_id="codex_home",
+                    actor_id=thread_id,
                     provider_thread_id=(
                         thread.codex_provider_thread_id or None
                     ),
                     developer_instructions=turn_dev_instructions,
                     context_items=context_items,
+                )
+
+                # Stamp the provider_thread_id we're handing codex
+                # BEFORE the stream runs. Pairs with
+                # `CODEX_PROVIDER_THREAD_ID_RECEIVED` below; mismatch
+                # = silent cache split. Empty string on turn 0 (no
+                # prior thread to resume), which is the expected
+                # "this is a fresh codex thread" signal.
+                turn_span.set_attribute(
+                    spans.Attrs.CODEX_PROVIDER_THREAD_ID_SENT,
+                    codex_request.provider_thread_id or "",
                 )
 
                 yield _frame(
@@ -749,6 +778,15 @@ async def run_turn_codex(
                 # full `TurnToolCallRecord` once the output lands.
                 # Keyed by `tool_id` (codex's per-call id).
                 pending_tool_calls: dict[str, tuple[str, dict[str, Any]]] = {}
+                # Chunk 3.7 cost observability. Codex emits
+                # TOKEN_USAGE_UPDATED multiple times during a turn
+                # (after each model call). We keep the LATEST snapshot
+                # rather than summing; the `.last` breakdown already
+                # represents this turn's cost and the `.total` is
+                # thread-cumulative through this turn. None on turns
+                # codex doesn't bother emitting (e.g. an immediate
+                # cancel).
+                latest_token_usage: Any = None
                 while True:
                     source, payload = await codex_queue.get()
                     if source == "codex_done":
@@ -830,6 +868,9 @@ async def run_turn_codex(
                                 )
                     elif evt.type == CodexRunEventType.MESSAGE_COMPLETED:
                         final_text = evt.final_text or ""
+                    elif evt.type == CodexRunEventType.TOKEN_USAGE_UPDATED:
+                        if evt.token_usage is not None:
+                            latest_token_usage = evt.token_usage
 
                 # Ensure the worker task is fully done (the sentinel
                 # was already delivered, but the future may still
@@ -851,10 +892,93 @@ async def run_turn_codex(
                 if provider_thread_id_local:
                     thread.codex_provider_thread_id = provider_thread_id_local
 
+                # Chunk 3.7 cost observability stamps. Together with
+                # the `CODEX_PROVIDER_THREAD_ID_SENT` attr above:
+                # - `sent != received` (when sent != "") => silent
+                #   cache split. The thread continues but codex
+                #   re-minted its sqlite-side thread; prompt cache
+                #   was NOT reused this turn.
+                # - `cache_hit_rate`: cached_input/input from the
+                #   `.last` breakdown (this turn). 1.0 = fully
+                #   cached, 0.0 = cold; -1.0 sentinel when
+                #   input_tokens=0 (metadata-only turn, division
+                #   would be undefined).
+                # - `.last.*`: this turn's cost.
+                # - `.total.*`: thread-cumulative cost through this
+                #   turn.
+                turn_span.set_attribute(
+                    spans.Attrs.CODEX_PROVIDER_THREAD_ID_RECEIVED,
+                    provider_thread_id_local or "",
+                )
+                cache_hit_rate: float = -1.0
+                if latest_token_usage is not None:
+                    last = latest_token_usage.last
+                    total = latest_token_usage.total
+                    turn_span.set_attribute(
+                        spans.Attrs.CODEX_TOKENS_LAST_TOTAL,
+                        last.total_tokens,
+                    )
+                    turn_span.set_attribute(
+                        spans.Attrs.CODEX_TOKENS_LAST_INPUT,
+                        last.input_tokens,
+                    )
+                    turn_span.set_attribute(
+                        spans.Attrs.CODEX_TOKENS_LAST_CACHED_INPUT,
+                        last.cached_input_tokens,
+                    )
+                    turn_span.set_attribute(
+                        spans.Attrs.CODEX_TOKENS_LAST_OUTPUT,
+                        last.output_tokens,
+                    )
+                    turn_span.set_attribute(
+                        spans.Attrs.CODEX_TOKENS_LAST_REASONING,
+                        last.reasoning_output_tokens,
+                    )
+                    turn_span.set_attribute(
+                        spans.Attrs.CODEX_TOKENS_TOTAL_TOTAL,
+                        total.total_tokens,
+                    )
+                    turn_span.set_attribute(
+                        spans.Attrs.CODEX_TOKENS_TOTAL_INPUT,
+                        total.input_tokens,
+                    )
+                    turn_span.set_attribute(
+                        spans.Attrs.CODEX_TOKENS_TOTAL_CACHED_INPUT,
+                        total.cached_input_tokens,
+                    )
+                    turn_span.set_attribute(
+                        spans.Attrs.CODEX_TOKENS_TOTAL_OUTPUT,
+                        total.output_tokens,
+                    )
+                    turn_span.set_attribute(
+                        spans.Attrs.CODEX_TOKENS_TOTAL_REASONING,
+                        total.reasoning_output_tokens,
+                    )
+                    if last.input_tokens > 0:
+                        cache_hit_rate = (
+                            last.cached_input_tokens / last.input_tokens
+                        )
+                    if latest_token_usage.model_context_window is not None:
+                        turn_span.set_attribute(
+                            spans.Attrs.CODEX_MODEL_CONTEXT_WINDOW,
+                            latest_token_usage.model_context_window,
+                        )
+                turn_span.set_attribute(
+                    spans.Attrs.CODEX_CACHE_HIT_RATE, cache_hit_rate
+                )
+
                 log.info(
                     "codex_turn_complete",
                     thread_id=thread_id,
-                    provider_thread_id=provider_thread_id_local,
+                    provider_thread_id_sent=codex_request.provider_thread_id
+                    or "",
+                    provider_thread_id_received=provider_thread_id_local,
+                    cache_hit_rate=cache_hit_rate,
+                    tokens_last_total=(
+                        latest_token_usage.last.total_tokens
+                        if latest_token_usage
+                        else 0
+                    ),
                     tool_events=tool_events,
                     final_chars=len(final_text),
                     streamed_chars=streamed_chars,
@@ -952,15 +1076,29 @@ async def run_turn_codex(
                                 spans.Attrs.GATE_REASON, verdict.reason
                             )
                         if verdict.verdict in ("retract", "reject"):
+                            retraction_reason = (
+                                verdict.reason
+                                or f"constitution {verdict.verdict}"
+                            )
                             ret = narrative_pb2.NarrativeRetracted(
                                 text=final_text,
-                                reason=verdict.reason
-                                or f"constitution {verdict.verdict}",
+                                reason=retraction_reason,
                             )
                             if handles.debug_public:
                                 ret.debug_reason = (
                                     f"constitution: {verdict.reason}"
                                 )
+                            # Chunk 4 history record: retracted snapshot
+                            # carries the retraction reason so the
+                            # replay path can render the same muted /
+                            # amber bubble the live UI renders.
+                            thread.record_turn_narrative(
+                                turn,
+                                NarrativeSnapshot(
+                                    text=final_text,
+                                    retracted_reason=retraction_reason,
+                                ),
+                            )
                             yield _frame("NarrativeRetracted", ret)
                             narrative_retracted = True
                     role_timings["policy"] = role_timings.get(
@@ -968,6 +1106,14 @@ async def run_turn_codex(
                     ) + (time.monotonic() - role_t_const)
 
                 if not narrative_retracted:
+                    # Chunk 4 history record: approved snapshot. Provenance
+                    # stays empty in this MVP (matches what we emit on
+                    # the live frame); when assembled provenance gets
+                    # wired into the codex path, populate here too.
+                    thread.record_turn_narrative(
+                        turn,
+                        NarrativeSnapshot(text=final_text),
+                    )
                     yield _frame(
                         "Narrative",
                         narrative_pb2.NarrativeWithRefs(

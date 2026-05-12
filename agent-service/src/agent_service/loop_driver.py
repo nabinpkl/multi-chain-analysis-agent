@@ -392,6 +392,16 @@ async def run_turn(
                         )
                 for claim in outcome.approved_claims:
                     thread.record_claim(claim)
+                # Chunk 4 history record. Core captures the final
+                # narrative snapshot (approved or retracted) and
+                # returns it on the outcome; we persist it onto
+                # the thread so the history-reopen path can replay
+                # the prose. None on early-exit paths that never
+                # reached a narrative emission point.
+                if outcome.narrative_snapshot is not None:
+                    thread.record_turn_narrative(
+                        turn, outcome.narrative_snapshot
+                    )
 
                 yield _terminal_done(turn_started_at_ms, role_timings)
 

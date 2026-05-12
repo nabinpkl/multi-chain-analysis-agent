@@ -153,21 +153,39 @@ services:
       # on the host so state survives `docker compose down` and is
       # inspectable from the host with `ls`.
       - THREAD_ROOT=/var/threads
+      # Per-thread codex_home root. The codex driver passes this to
+      # `prepare_actor_codex_home(actor_id=thread_id, ...)` so each
+      # chat thread gets its own subtree at
+      # `<CODEX_HOME_ROOT>/local/<thread_id>/` carrying that thread's
+      # codex sqlite, generated config, and a symlinked auth.json.
+      # Distinct from THREAD_ROOT so production can keep small JSON
+      # thread state on a different volume than the much larger
+      # per-thread codex sqlite.
+      - CODEX_HOME_ROOT=/var/codex_homes
     volumes:
       - ./data/agent-service/threads:/var/threads
       # Host codex auth + base config, mounted read-only so the
-      # container can spawn `codex` without re-logging in. Chunk 3
-      # uses `prepare_actor_codex_home` to materialize a per-thread
-      # codex_home under `${THREAD_ROOT}/threads/<thread_id>/...`;
-      # that helper symlinks `auth.json` and seeds `config.toml`
-      # from this base path. Read-only by design: writes (sqlite,
-      # logs, per-session state) land in the per-thread codex_home,
-      # never on the host.
+      # container can spawn `codex` without re-logging in.
+      # `prepare_actor_codex_home` symlinks `auth.json` from this
+      # base path into each per-thread codex_home, and seeds
+      # `config.toml` from the base's `model`/`personality`/etc.
+      # Read-only by design: writes (sqlite, logs, per-thread
+      # state) land in the per-thread codex_home below, never on
+      # the host base.
       #
       # ${HOME} expands from the user's docker compose invocation,
       # so this works across machines as long as the user has run
       # `codex login` once on the host.
       - ${HOME}/.codex:/root/.codex:ro
+      # Per-thread codex_homes tree. Default host path is
+      # `./codex_homes` at the repo root for visibility (`ls
+      # codex_homes/local/` shows one dir per thread). Override
+      # `CODEX_HOMES_HOST_PATH` in `.env` / shell to point at an
+      # off-repo path for production. The host dir is gitignored
+      # (see `.gitignore`); the in-container path stays fixed at
+      # `/var/codex_homes` so the Python config doesn't change
+      # across environments.
+      - ${CODEX_HOMES_HOST_PATH:-./codex_homes}:/var/codex_homes
     depends_on:
       api:
         condition: service_started

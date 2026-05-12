@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package multichain.wire.agent.v1;
+
+import "multichain/wire/agent/v1/claim.proto";
+import "multichain/wire/agent/v1/session.proto";
+import "multichain/wire/shared/v1/provenance.proto";
+
+// One row in the history list. Populated by reading the per-thread
+// `summary.json` sidecar (chunk 4); no full `state.json` read
+// required for the list view, so the endpoint stays cheap even at
+// a few thousand archived threads.
+//
+// `title` is the truncated first user_question (max ~80 chars);
+// `last_user_question` is the most recent question text the user
+// sent on this thread, used as the row's preview text. Both are
+// deterministic projections of state, not LLM-generated.
+message ThreadSummary {
+  string thread_id = 1;
+  AgentRuntime runtime = 2;
+  uint64 started_at_ms = 3;
+  uint32 turn_count = 4;
+  string title = 5;
+  string last_user_question = 6;
+  bool archived = 7;
+}
+
+message ThreadList {
+  repeated ThreadSummary threads = 1;
+}
+
+// One turn re-projected for transcript playback when the user opens
+// a prior thread. Mirrors the SSE frame shapes the live path emits,
+// but flattened: claims + narrative + retraction reason all in one
+// place, no Done / Progress / GatePath noise (transcripts are
+// content-only, not the live event log).
+//
+// `narrative_text` is empty when the turn never produced prose
+// (e.g. boundary rejection or pre-chunk-4 thread missing the
+// `narratives_per_turn` field). The frontend renders no bubble in
+// that case.
+message TranscriptTurn {
+  uint32 turn = 1;
+  string user_question = 2;
+  repeated Claim claims = 3;
+  string narrative_text = 4;
+  repeated multichain.wire.shared.v1.ProvenanceRef narrative_provenance = 5;
+  string narrative_retracted_reason = 6;  // empty = narrative was approved
+}
+
+message ThreadTranscript {
+  ThreadSummary thread = 1;
+  repeated TranscriptTurn turns = 2;
+}

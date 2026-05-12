@@ -2,12 +2,15 @@
 
 import { useGraphFocus } from "@/stores/use-graph-focus";
 import { useAgentSwitches } from "@/stores/use-agent-switches";
+import { useRuntimeSelector } from "@/stores/use-runtime-selector";
+import { AgentRuntime } from "@/lib/wire/multichain/wire/agent/v1/session_pb";
 import type { AgentStreamState } from "@/hooks/use-agent-stream";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AgentEmptyState } from "./agent-empty-state";
 import { AgentClaimList } from "./agent-claim-list";
 import { AgentInput } from "./agent-input";
 import { BuilderViewToggle } from "./builder-view-toggle";
+import { HistoryMenu } from "./history-menu";
 import { ModelsPanel } from "./models-panel";
 import { RuntimePanel } from "./runtime-panel";
 import { SwitchPanel } from "./switch-panel";
@@ -36,10 +39,12 @@ export function AgentSheet({
 }) {
   const focusedAddr = useGraphFocus((s) => s.focusedAddr);
   const builderViewOn = useAgentSwitches((s) => s.builderViewOn);
+  const runtime = useRuntimeSelector((s) => s.runtime);
   const { status, turns, progress, threadId, turn, ask, reset, stop } =
     agentStream;
   const inFlight = status.kind === "sending" || status.kind === "streaming";
   const showTurnChip = threadId !== null && (turn > 0 || turns.length > 0);
+  const showRuntimeCue = threadId !== null;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange} modal={false}>
@@ -51,13 +56,17 @@ export function AgentSheet({
           <div className="flex items-center justify-between gap-2 pr-8">
             <span className="text-[0.7rem] uppercase tracking-[2px] text-mca-text flex items-center gap-2">
               agent
+              {showRuntimeCue ? (
+                <RuntimeCuePill runtime={runtime} />
+              ) : null}
               {showTurnChip ? (
                 <span className="text-[0.55rem] tabular-nums text-mca-muted normal-case border border-mca-border rounded px-1.5 py-0.5">
                   turn {turn + 1}
                 </span>
               ) : null}
             </span>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <HistoryMenu agentStream={agentStream} />
               <BuilderViewToggle />
               <button
                 onClick={reset}
@@ -183,6 +192,30 @@ function TraceLink({
         </a>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Chunk 4 chrome cue. Renders next to the "agent" header label
+ * whenever a thread is loaded, so the active runtime is always
+ * visible without opening the builder view. Color matches the
+ * `RuntimeChip` rows in `HistoryMenu` (amber codex / sky-blue
+ * pydantic) so a user clicking a history row sees the chip color
+ * follow them into the chrome.
+ */
+function RuntimeCuePill({ runtime }: { runtime: AgentRuntime }) {
+  const isCodex = runtime === AgentRuntime.CODEX;
+  return (
+    <span
+      className={`text-[0.5rem] tabular-nums normal-case font-mono shrink-0 rounded px-1 py-0.5 border ${
+        isCodex
+          ? "border-amber-500/50 text-amber-600 bg-amber-500/10"
+          : "border-sky-500/50 text-sky-600 bg-sky-500/10"
+      }`}
+      title={`active runtime: ${isCodex ? "codex" : "pydantic-ai"}`}
+    >
+      {isCodex ? "codex" : "pydantic"}
+    </span>
   );
 }
 

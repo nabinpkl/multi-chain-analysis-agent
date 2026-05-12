@@ -181,6 +181,55 @@ class Attrs:
     DIFF_UNCHANGED_COUNT: Final = "mcae.diff.unchanged_count"
     DIFF_PRIMITIVES_REPLAYED: Final = "mcae.diff.primitives_replayed"
 
+    # Codex runtime observability. Stamped on the `mcae.turn` root
+    # span when `runtime=codex`. Together they answer two questions
+    # one trace at a time:
+    #
+    #   1. Did the prompt cache stay continuous across this thread?
+    #      Compare `sent` (id we resumed) vs `received` (id codex
+    #      emitted back). On a successful resume the two match;
+    #      mismatch (or `sent=""` past turn 0) means codex silently
+    #      forked a fresh thread and the cache split.
+    #
+    #   2. What did this turn actually cost? Codex's
+    #      `CodexTokenUsage` carries a `.last` breakdown (this turn)
+    #      and a `.total` breakdown (thread-cumulative). We stamp
+    #      `last.*` for per-turn cost analysis and `total.*` for
+    #      thread-cumulative budgeting. `cache_hit_rate` is the
+    #      ratio `cached_input / input` from the `.last` breakdown;
+    #      a healthy resumed turn should sit near 1.0.
+    #
+    # All keys are bare scalars (no JSON), so SQL queries on
+    # otel_traces / Langfuse can aggregate directly.
+    CODEX_PROVIDER_THREAD_ID_SENT: Final = (
+        "codex.provider_thread_id.sent"
+    )
+    CODEX_PROVIDER_THREAD_ID_RECEIVED: Final = (
+        "codex.provider_thread_id.received"
+    )
+    CODEX_TOKENS_LAST_TOTAL: Final = "codex.tokens.last.total"
+    CODEX_TOKENS_LAST_INPUT: Final = "codex.tokens.last.input"
+    CODEX_TOKENS_LAST_CACHED_INPUT: Final = (
+        "codex.tokens.last.cached_input"
+    )
+    CODEX_TOKENS_LAST_OUTPUT: Final = "codex.tokens.last.output"
+    CODEX_TOKENS_LAST_REASONING: Final = "codex.tokens.last.reasoning"
+    CODEX_TOKENS_TOTAL_TOTAL: Final = "codex.tokens.total.total"
+    CODEX_TOKENS_TOTAL_INPUT: Final = "codex.tokens.total.input"
+    CODEX_TOKENS_TOTAL_CACHED_INPUT: Final = (
+        "codex.tokens.total.cached_input"
+    )
+    CODEX_TOKENS_TOTAL_OUTPUT: Final = "codex.tokens.total.output"
+    CODEX_TOKENS_TOTAL_REASONING: Final = "codex.tokens.total.reasoning"
+    # Float in [0.0, 1.0]; 0.0 = no cache hit, 1.0 = fully cached.
+    # NaN-safe sentinel  -1.0  for turns whose input_tokens==0
+    # (rare, but happens on metadata-only turns).
+    CODEX_CACHE_HIT_RATE: Final = "codex.cache_hit_rate"
+    # Model context window codex reports for this turn. Useful for
+    # eval-side "how close are we to the cap" questions; stamped
+    # only when the codex event carries it.
+    CODEX_MODEL_CONTEXT_WINDOW: Final = "codex.model_context_window"
+
 
 # Per-attribute byte cap on the JSON payloads attached to primitive
 # spans. 8 KiB is large enough for the wallet_profile envelope (one

@@ -63,6 +63,7 @@ from agent_service.boundary import (
 )
 from agent_service.core.envelope import TurnEnvelope
 from agent_service.core.sink import TurnSink
+from agent_service.thread_state import NarrativeSnapshot
 from agent_service.llm_retry import with_provider_retry
 from agent_service.policy import constitution as constitution_module
 from agent_service.policy import structural as structural_module
@@ -123,6 +124,13 @@ class TurnOutcome:
     new_message_history: list[Any] = field(default_factory=list)
     tool_call_records: list[ToolCallRecord] = field(default_factory=list)
     approved_claims: list[claim_pb2.Claim] = field(default_factory=list)
+    # Chunk 4 history replay. The final narrative this turn produced
+    # (approved, retracted, or boundary-rejected). None when the
+    # turn never reached a narrative emission point  e.g. an early
+    # error before the model ran. The chat driver writes this onto
+    # `thread.record_turn_narrative` so the reopen path can replay
+    # the prose.
+    narrative_snapshot: "NarrativeSnapshot | None" = None
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +234,9 @@ async def run_one_turn(
         turn_span.set_attribute(spans.Attrs.TURN_TOOL_CALLS, 0)
         turn_span.set_attribute(spans.Attrs.TURN_NARRATIVE_CHARS, len(sse_text))
         log.info("user_input_rejected_at_boundary", pattern=e.pattern)
-        return TurnOutcome()
+        return TurnOutcome(
+            narrative_snapshot=NarrativeSnapshot(text=sse_text),
+        )
 
     # ------ Planning progress ------
     await sink.emit(
@@ -460,6 +470,7 @@ async def run_one_turn(
         # per-claim path; a downstream filter on
         # SpanName='gate.placeholder' AND parent_span name discriminates
         # which case it covered.
+        narrative_snapshot: NarrativeSnapshot | None = None
         with _tracer.start_as_current_span(spans.GATE_PLACEHOLDER) as pg:
             pg.set_attribute(spans.Attrs.GATE_VERSION, _PLACEHOLDER_VERSION)
             ref_err = validate_refs(narrative_text, len(assembled_provenance))
@@ -469,12 +480,18 @@ async def run_one_turn(
                 nar_span.set_attribute(
                     spans.Attrs.NARRATIVE_VERDICT, spans.VERDICT_RETRACTED
                 )
+                placeholder_reason = ref_err.to_human_string()
                 ret = narrative_pb2.NarrativeRetracted(
-                    text=sse_text, reason=ref_err.to_human_string()
+                    text=sse_text, reason=placeholder_reason
                 )
                 if debug_public:
                     ret.debug_reason = f"placeholder_validate: {ref_err.kind}"
                 await sink.emit("NarrativeRetracted", ret)
+                narrative_snapshot = NarrativeSnapshot(
+                    text=sse_text,
+                    provenance=list(assembled_provenance),
+                    retracted_reason=placeholder_reason,
+                )
             else:
                 pg.set_attribute(spans.Attrs.GATE_VERDICT, spans.VERDICT_APPROVED)
 
@@ -506,13 +523,20 @@ async def run_one_turn(
                         spans.Attrs.NARRATIVE_VERDICT,
                         _normalize_verdict(verdict.verdict),
                     )
+                    constitution_reason = (
+                        verdict.reason or f"constitution {verdict.verdict}"
+                    )
                     ret = narrative_pb2.NarrativeRetracted(
-                        text=sse_text,
-                        reason=verdict.reason or f"constitution {verdict.verdict}",
+                        text=sse_text, reason=constitution_reason,
                     )
                     if debug_public:
                         ret.debug_reason = f"constitution: {verdict.reason}"
                     await sink.emit("NarrativeRetracted", ret)
+                    narrative_snapshot = NarrativeSnapshot(
+                        text=sse_text,
+                        provenance=list(assembled_provenance),
+                        retracted_reason=constitution_reason,
+                    )
                 else:
                     nar_span.set_attribute(
                         spans.Attrs.NARRATIVE_VERDICT, spans.VERDICT_APPROVED
@@ -521,6 +545,10 @@ async def run_one_turn(
                         text=sse_text, provenance=assembled_provenance
                     )
                     await sink.emit("Narrative", nar)
+                    narrative_snapshot = NarrativeSnapshot(
+                        text=sse_text,
+                        provenance=list(assembled_provenance),
+                    )
         else:
             # raw-llm or agent-without-grounding: skip constitution.
             nar_span.set_attribute(
@@ -530,6 +558,10 @@ async def run_one_turn(
                 text=sse_text, provenance=assembled_provenance
             )
             await sink.emit("Narrative", nar)
+            narrative_snapshot = NarrativeSnapshot(
+                text=sse_text,
+                provenance=list(assembled_provenance),
+            )
 
     # ------ Per-turn aggregates ------
     # Stamped on the active mcae.turn span so SQL queries can answer
@@ -549,6 +581,7 @@ async def run_one_turn(
         new_message_history=list(result.all_messages()),
         tool_call_records=list(deps.tool_call_records),
         approved_claims=approved_claims,
+        narrative_snapshot=narrative_snapshot,
     )
 
 

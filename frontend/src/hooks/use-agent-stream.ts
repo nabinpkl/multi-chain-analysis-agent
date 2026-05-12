@@ -27,6 +27,10 @@ import {
   NarrativeRetractedSchema,
   NarrativeWithRefsSchema,
 } from "@/lib/wire/multichain/wire/agent/v1/narrative_pb";
+import {
+  ThreadTranscriptSchema,
+  type ThreadTranscript,
+} from "@/lib/wire/multichain/wire/agent/v1/history_pb";
 import { type ProvenanceRef } from "@/lib/wire/multichain/wire/shared/v1/provenance_pb";
 import { useRoleTimings } from "@/stores/use-role-timings";
 import { parseSseStream } from "@/lib/sse-parser";
@@ -179,6 +183,76 @@ export function useAgentStream() {
     setThreadId(null);
     clearThreadId();
   }, [cleanup]);
+
+  /**
+   * Chunk 4 history-reopen. Fetches `GET /agent/thread/{tid}`,
+   * projects the `ThreadTranscript` into the in-memory `turns`
+   * shape the chat scroll already renders, and persists threadId
+   * to localStorage. Caller (the `HistoryMenu`) is responsible
+   * for syncing `useRuntimeSelector` to the loaded thread's
+   * runtime so the runtime chip in the chrome matches what the
+   * server has locked.
+   *
+   * Errors (404 / network) surface via status; the dropdown
+   * caller can show a toast / inline alert.
+   */
+  const loadThread = useCallback(
+    async (tid: string): Promise<ThreadTranscript | null> => {
+      cleanup();
+      setStatus({ kind: "sending" });
+      try {
+        const resp = await fetch(
+          `${agentUrl()}/agent/thread/${tid}`,
+          { method: "GET" },
+        );
+        if (!resp.ok) {
+          setStatus({
+            kind: "error",
+            message: `failed to load thread: ${resp.status}`,
+          });
+          return null;
+        }
+        const body = await resp.text();
+        const transcript = fromJsonString(ThreadTranscriptSchema, body);
+        const hydratedTurns: ChatTurn[] = transcript.turns.map((t) => ({
+          id: `replay-${tid}-${t.turn}`,
+          userText: t.userQuestion ?? "",
+          sentAtMs: Number(transcript.thread?.startedAtMs ?? 0),
+          // Per-turn claim assignment isn't tracked on the server
+          // (claims are FIFO at thread scope); the transcript
+          // attaches all approved claims to the last turn. For
+          // chunk 4 we render at most ONE claim per turn  the
+          // existing chat-scroll shape  so we take the first
+          // claim if any. Future work: real per-turn claim
+          // attribution.
+          claim: t.claims.length > 0 ? t.claims[0] : null,
+          narrative: t.narrativeText || null,
+          narrativeProvenance: t.narrativeProvenance ?? [],
+          narrativeRetractedReason: t.narrativeRetractedReason || null,
+          narrativeRetractedDebug: null,
+          error: null,
+          errorDebug: null,
+          gatePaths: [],
+          diffReply: null,
+        }));
+        setTurns(hydratedTurns);
+        setProgress(null);
+        setThreadId(tid);
+        persistThreadId(tid);
+        setStatus({ kind: "idle" });
+        return transcript;
+      } catch (e) {
+        setStatus({
+          kind: "error",
+          message: `failed to load thread: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        });
+        return null;
+      }
+    },
+    [cleanup],
+  );
 
   /**
    * Cancel the in-flight turn. Fires
@@ -552,7 +626,17 @@ export function useAgentStream() {
   // user message); preserves the existing prop shape consumers see.
   const turn = turns.length;
 
-  return { status, turns, progress, threadId, turn, ask, reset, stop };
+  return {
+    status,
+    turns,
+    progress,
+    threadId,
+    turn,
+    ask,
+    reset,
+    stop,
+    loadThread,
+  };
 }
 
 export type AgentStreamState = ReturnType<typeof useAgentStream>;

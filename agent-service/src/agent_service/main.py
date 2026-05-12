@@ -43,6 +43,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from google.protobuf import json_format
 from sse_starlette.sse import EventSourceResponse
 
+from multichain.wire.agent.v1 import history_pb2 as hist_pb
 from multichain.wire.agent.v1 import session_pb2 as sess_pb
 from multichain.wire.agent.v1 import sse_pb2
 
@@ -90,16 +91,29 @@ async def lifespan(app: FastAPI):
     # need a global `codex` install). When unavailable, we log and
     # leave `codex_driver=None`; the POST handler 503s codex
     # requests rather than silently falling back to pydantic-ai.
+    #
+    # `CODEX_HOME_ROOT` is intentionally decoupled from
+    # `THREAD_ROOT` (chunk 3.6): each chat thread materializes its
+    # OWN codex_home subtree (`actor_id=thread_id`) so prompt cache
+    # + codex sqlite stay isolated across threads. Production
+    # overrides this env to point at a host volume; local dev
+    # defaults to `./codex_homes` relative to the service (the
+    # docker bind mount, when present, replaces the path with
+    # `/var/codex_homes`).
     codex_driver = None
+    codex_home_root = Path(os.environ.get("CODEX_HOME_ROOT", "./codex_homes"))
+    codex_home_root.mkdir(parents=True, exist_ok=True)
     try:
         codex_profile = build_codex_profile(
             data_plane_url=base_url, cwd=Path.cwd()
         )
         codex_driver = build_codex_driver(
             profile=codex_profile,
-            codex_home_root=thread_root / "codex_homes",
+            codex_home_root=codex_home_root,
         )
-        log.info("codex_runtime_ready")
+        log.info(
+            "codex_runtime_ready", codex_home_root=str(codex_home_root)
+        )
     except Exception:  # noqa: BLE001
         log.exception("codex_runtime_init_failed")
 
@@ -548,4 +562,170 @@ async def cancel_turn(thread_id: str, request: Request) -> Response:
         )
     task.cancel()
     log.info("cancel_turn_requested", thread_id=thread_id)
+    return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Chunk 4: thread history
+# ---------------------------------------------------------------------------
+
+
+def _project_summary(row: dict) -> hist_pb.ThreadSummary:
+    """Project a `summary.json` row dict into the proto wire shape
+    `GET /agent/threads` returns. Defensive `.get` because pre-chunk-4
+    summary files (none today but the safety is cheap) wouldn't have
+    `archived` populated."""
+    return hist_pb.ThreadSummary(
+        thread_id=row.get("thread_id", ""),
+        runtime=int(row.get("runtime", sess_pb.AGENT_RUNTIME_PYDANTIC_AI)),
+        started_at_ms=int(row.get("started_at_ms", 0)),
+        turn_count=int(row.get("turn_count", 0)),
+        title=row.get("title", ""),
+        last_user_question=row.get("last_user_question", ""),
+        archived=bool(row.get("archived", False)),
+    )
+
+
+def _project_transcript(thread) -> hist_pb.ThreadTranscript:
+    """Project an `AgentThread` into the full `ThreadTranscript`
+    proto. Walks `user_questions_per_turn` as the canonical turn
+    enumeration; claims and narratives align by turn index. Empty
+    narrative entries map to empty `narrative_text` so the frontend
+    can render a "no narrative recorded" placeholder for pre-chunk-4
+    turns whose state.json never carried the field."""
+    turns: list[hist_pb.TranscriptTurn] = []
+    # Sort by int turn number, not string lexical order, so turn 10
+    # comes after turn 9.
+    turn_indices = sorted(thread.user_questions_per_turn.keys())
+    # `claims` is FIFO-capped at MAX_THREAD_CLAIMS across the whole
+    # thread; we don't track per-turn ownership so for chunk 4 we
+    # attach ALL approved claims to the LAST turn rather than
+    # silently losing them. Future enhancement: store claim ->
+    # turn_index mapping on AgentThread.
+    claims_by_turn: dict[int, list] = {t: [] for t in turn_indices}
+    if turn_indices:
+        claims_by_turn[turn_indices[-1]] = list(thread.claims)
+    for t in turn_indices:
+        snap = thread.narratives_per_turn.get(t)
+        turns.append(
+            hist_pb.TranscriptTurn(
+                turn=t,
+                user_question=thread.user_questions_per_turn.get(t, ""),
+                claims=claims_by_turn.get(t, []),
+                narrative_text=snap.text if snap else "",
+                narrative_provenance=list(snap.provenance) if snap else [],
+                narrative_retracted_reason=(
+                    snap.retracted_reason if snap else ""
+                ),
+            )
+        )
+    summary_row = {
+        "thread_id": thread.thread_id,
+        "runtime": thread.runtime,
+        "started_at_ms": thread.started_at_ms,
+        "turn_count": thread.turn_count,
+        "title": (
+            thread.user_questions_per_turn[turn_indices[0]][:80]
+            if turn_indices
+            else ""
+        ),
+        "last_user_question": (
+            thread.user_questions_per_turn[turn_indices[-1]]
+            if turn_indices
+            else ""
+        ),
+        "archived": thread.archived,
+    }
+    return hist_pb.ThreadTranscript(
+        thread=_project_summary(summary_row),
+        turns=turns,
+    )
+
+
+@app.get("/agent/threads")
+async def list_threads(
+    request: Request, include_archived: bool = False
+) -> Response:
+    """Return a `ThreadList` of summaries for every persisted
+    thread, newest first. The list endpoint reads ONLY each
+    thread's `summary.json` sidecar (~200B), never the full
+    `state.json` (~10KB), so the scan stays cheap up to thousands
+    of threads.
+
+    Query params:
+      * `include_archived=false` (default): hides threads where
+        `archived=true`. The history dropdown is the default UI
+        consumer.
+      * `include_archived=true`: returns every persisted thread.
+        Lets the UI surface an "archived" filter without a
+        separate endpoint.
+
+    Wire format: proto canonical JSON (camelCase). The frontend
+    parses via `fromJsonString(ThreadListSchema, body)`.
+    """
+    handles: LoopHandles = request.app.state.handles
+    summaries = handles.threads.list_summaries(
+        include_archived=include_archived
+    )
+    msg = hist_pb.ThreadList(
+        threads=[_project_summary(row) for row in summaries],
+    )
+    return Response(
+        content=json_format.MessageToJson(
+            msg, preserving_proto_field_name=False, indent=None
+        ),
+        media_type="application/json",
+    )
+
+
+@app.get("/agent/thread/{thread_id}")
+async def get_thread(
+    thread_id: str, request: Request, include_archived: bool = False
+) -> Response:
+    """Return the full `ThreadTranscript` for a thread so the
+    frontend's "reopen" flow can replay the past chat scroll. 404
+    when the thread doesn't exist OR is archived (unless
+    `include_archived=true`).
+
+    The transcript carries the same shape the live SSE path emits,
+    flattened: per-turn `{user_question, claims, narrative_text,
+    narrative_provenance, narrative_retracted_reason}`. Progress /
+    Done / GatePath frames are intentionally not replayed
+    (transcripts are content, not the event log)."""
+    handles: LoopHandles = request.app.state.handles
+    thread = handles.threads.transcript_for(
+        thread_id, include_archived=include_archived
+    )
+    if thread is None:
+        raise HTTPException(
+            status_code=404, detail="thread not found"
+        )
+    msg = _project_transcript(thread)
+    return Response(
+        content=json_format.MessageToJson(
+            msg, preserving_proto_field_name=False, indent=None
+        ),
+        media_type="application/json",
+    )
+
+
+@app.post("/agent/thread/{thread_id}/archive", status_code=204)
+async def archive_thread(thread_id: str, request: Request) -> Response:
+    """Soft-archive: flips `archived=true` on `state.json` +
+    `summary.json`. Idempotent; archiving an already-archived
+    thread is a no-op 204. Returns 404 when the thread doesn't
+    exist on disk OR in memory.
+
+    Archive does NOT touch `codex_homes/local/<thread_id>/`
+    codex sqlite trees are preserved so an unarchive-and-resume
+    keeps prompt cache continuity. The on-disk codex_home cost
+    accumulates with archived threads; manual `rm -rf` is the
+    only purge path for now."""
+    handles: LoopHandles = request.app.state.handles
+    ok = handles.threads.archive(thread_id)
+    if not ok:
+        raise HTTPException(
+            status_code=404, detail="thread not found"
+        )
+    log.info("thread_archived", thread_id=thread_id)
     return Response(status_code=204)

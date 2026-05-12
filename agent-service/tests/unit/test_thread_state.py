@@ -7,13 +7,18 @@ import asyncio
 
 import pytest
 
+from pathlib import Path
+
 from agent_service.thread_state import (
     MAX_THREAD_CLAIMS,
     MAX_THREAD_TOOL_CALL_TURNS,
     AgentThread,
+    NarrativeSnapshot,
     ThreadRegistry,
     TurnToolCallRecord,
 )
+from multichain.wire.agent.v1 import session_pb2
+from multichain.wire.shared.v1 import provenance_pb2
 
 
 def _make_thread(thread_id: str = "t1") -> AgentThread:
@@ -97,3 +102,173 @@ async def test_registry_serializes_concurrent_turns_on_same_thread():
     await asyncio.gather(task1, task2)
 
     assert order == ["first-acquired", "first-released", "second-acquired"]
+
+
+# ---------------------------------------------------------------------------
+# Chunk 4: narrative + archive round-trips, summary sidecar
+# ---------------------------------------------------------------------------
+
+
+def _wallet_ref(addr: str) -> provenance_pb2.ProvenanceRef:
+    return provenance_pb2.ProvenanceRef(
+        wallet=provenance_pb2.WalletRef(addr=addr, idx=0)
+    )
+
+
+def _number_ref(metric: str, value: float) -> provenance_pb2.ProvenanceRef:
+    return provenance_pb2.ProvenanceRef(
+        number=provenance_pb2.NumberRef(metric=metric, value=value)
+    )
+
+
+def test_narrative_snapshot_round_trip_via_state_dict():
+    """NarrativeSnapshot (with two different provenance kinds) survives
+    to_state_dict -> from_state_dict cleanly. Guards the chunk 4
+    serialization shape against silent breakage in `MessageToJson` /
+    `Parse` on the ProvenanceRef oneof."""
+    t = _make_thread()
+    t.record_turn_user_question(0, "profile this wallet")
+    t.record_turn_narrative(
+        0,
+        NarrativeSnapshot(
+            text="Wallet ${ref:1} is a whale.",
+            provenance=[
+                _wallet_ref("DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"),
+                _number_ref("volume_lamports", 37_917_586_924.0),
+            ],
+            retracted_reason="",
+        ),
+    )
+    dumped = t.to_state_dict()
+    loaded = AgentThread.from_state_dict(dumped)
+
+    snap = loaded.narratives_per_turn[0]
+    assert snap.text == "Wallet ${ref:1} is a whale."
+    assert snap.retracted_reason == ""
+    assert len(snap.provenance) == 2
+    assert snap.provenance[0].WhichOneof("ref") == "wallet"
+    assert snap.provenance[0].wallet.addr == (
+        "DLZSeiq2xjikgwcniQB6B89uodkbQHrTcco6mJu9UNuK"
+    )
+    assert snap.provenance[1].WhichOneof("ref") == "number"
+    assert snap.provenance[1].number.metric == "volume_lamports"
+    assert snap.provenance[1].number.value == 37_917_586_924.0
+
+
+def test_retracted_narrative_round_trip():
+    t = _make_thread()
+    t.record_turn_user_question(0, "q")
+    t.record_turn_narrative(
+        0,
+        NarrativeSnapshot(
+            text="this was retracted",
+            provenance=[],
+            retracted_reason="constitution retract: off-topic",
+        ),
+    )
+    loaded = AgentThread.from_state_dict(t.to_state_dict())
+    assert (
+        loaded.narratives_per_turn[0].retracted_reason
+        == "constitution retract: off-topic"
+    )
+
+
+def test_archived_field_round_trip():
+    t = _make_thread()
+    t.archived = True
+    loaded = AgentThread.from_state_dict(t.to_state_dict())
+    assert loaded.archived is True
+
+
+def test_pre_chunk4_state_dict_loads_with_defaults():
+    """A state.json without `narratives_per_turn` or `archived` (pre-
+    chunk-4 era) loads cleanly with empty defaults. Guards the
+    additive-only schema rule."""
+    legacy = {
+        "thread_id": "old",
+        "started_at_ms": 1,
+        "turn_count": 0,
+        "runtime": session_pb2.AGENT_RUNTIME_PYDANTIC_AI,
+        "message_history": "[]",
+        "claims": [],
+        "bindings": {},
+        "tool_calls_per_turn": {},
+        "user_questions_per_turn": {},
+        # NO narratives_per_turn, NO archived, NO schema_version.
+    }
+    loaded = AgentThread.from_state_dict(legacy)
+    assert loaded.narratives_per_turn == {}
+    assert loaded.archived is False
+
+
+def test_persist_writes_summary_sidecar(tmp_path: Path):
+    """`persist()` writes both state.json AND summary.json with the
+    row payload `GET /agent/threads` returns."""
+    import json
+
+    reg = ThreadRegistry(thread_root=tmp_path)
+    thread = AgentThread(
+        thread_id="t-summary",
+        started_at_ms=1778500000000,
+        turn_count=2,
+        runtime=session_pb2.AGENT_RUNTIME_CODEX,
+    )
+    thread.record_turn_user_question(0, "first question")
+    thread.record_turn_user_question(1, "second question")
+    reg._threads["t-summary"] = thread
+    reg.persist(thread)
+
+    summary_path = tmp_path / "threads" / "t-summary" / "summary.json"
+    assert summary_path.exists()
+    summary = json.loads(summary_path.read_text())
+    assert summary["thread_id"] == "t-summary"
+    assert summary["runtime"] == session_pb2.AGENT_RUNTIME_CODEX
+    assert summary["runtime_name"] == "AGENT_RUNTIME_CODEX"
+    assert summary["title"] == "first question"
+    assert summary["last_user_question"] == "second question"
+    assert summary["turn_count"] == 2
+    assert summary["archived"] is False
+    assert summary["schema_version"] == 1
+
+
+def test_list_summaries_orders_newest_first_and_hides_archived(
+    tmp_path: Path,
+):
+    reg = ThreadRegistry(thread_root=tmp_path)
+    for tid, started in [("old", 1), ("new", 100), ("mid", 50)]:
+        thread = AgentThread(thread_id=tid, started_at_ms=started)
+        reg._threads[tid] = thread
+        reg.persist(thread)
+    # Archive the newest.
+    assert reg.archive("new") is True
+
+    visible = reg.list_summaries(include_archived=False)
+    assert [r["thread_id"] for r in visible] == ["mid", "old"]
+
+    all_rows = reg.list_summaries(include_archived=True)
+    assert [r["thread_id"] for r in all_rows] == ["new", "mid", "old"]
+
+
+def test_transcript_for_returns_archived_only_when_asked(
+    tmp_path: Path,
+):
+    reg = ThreadRegistry(thread_root=tmp_path)
+    thread = AgentThread(thread_id="t", started_at_ms=1, archived=True)
+    reg._threads["t"] = thread
+    reg.persist(thread)
+
+    assert reg.transcript_for("t", include_archived=False) is None
+    got = reg.transcript_for("t", include_archived=True)
+    assert got is not None
+    assert got.thread_id == "t"
+
+
+def test_archive_idempotent(tmp_path: Path):
+    reg = ThreadRegistry(thread_root=tmp_path)
+    thread = AgentThread(thread_id="t", started_at_ms=1)
+    reg._threads["t"] = thread
+    reg.persist(thread)
+
+    assert reg.archive("t") is True
+    assert reg.archive("t") is True
+    assert reg.archive("nope") is False
