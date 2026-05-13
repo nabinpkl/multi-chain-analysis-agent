@@ -42,6 +42,7 @@ from codex_agent_driver import (
 )
 
 from agent_service.evals.probes.llm_judge import JudgeVerdict
+from agent_service.llm_runtime import to_strict_json_schema
 from agent_service.policy.constitution import ConstitutionVerdict
 
 
@@ -135,8 +136,8 @@ def main() -> int:
         # ----------------------------------------------------------------
         # Case 1: JudgeVerdict (flat).
         # ----------------------------------------------------------------
-        print("\n=== JudgeVerdict (flat) ===")
-        jv_schema = JudgeVerdict.model_json_schema()
+        print("\n=== JudgeVerdict (flat, strict-wrapped) ===")
+        jv_schema = to_strict_json_schema(JudgeVerdict.model_json_schema())
         print(f"  schema keys: {sorted(jv_schema.keys())}")
         try:
             jv_text = _one_shot(
@@ -158,8 +159,8 @@ def main() -> int:
         # Case 2: ConstitutionVerdict (Literal enum + nested optional
         # model + list of nested models).
         # ----------------------------------------------------------------
-        print("\n=== ConstitutionVerdict (Literal + nested optional + lists) ===")
-        cv_schema = ConstitutionVerdict.model_json_schema()
+        print("\n=== ConstitutionVerdict (Literal + nested optional + lists, strict-wrapped) ===")
+        cv_schema = to_strict_json_schema(ConstitutionVerdict.model_json_schema())
         print(f"  schema keys: {sorted(cv_schema.keys())}")
         if "$defs" in cv_schema:
             print(f"  $defs: {sorted(cv_schema['$defs'].keys())}")
