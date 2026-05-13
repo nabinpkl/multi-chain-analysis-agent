@@ -352,6 +352,35 @@ def test_llm_call_used_model_rejects_neither_name_nor_env() -> None:
         LlmCallUsedModelSpec(probe_id="p")
 
 
+def test_eval_allow_shared_family_disables_judge_family_guard(monkeypatch) -> None:
+    """`EVAL_ALLOW_SHARED_FAMILY=true` collapses the leakage guard
+    to a no-op so a judge model can share a family prefix with one
+    of the agent stage models. Default (unset / false) keeps the
+    guard active."""
+    from agent_service.evals.schema import LlmJudgeSpec
+
+    monkeypatch.setenv("AGENT_PRIMARY_MODEL", "openai/gpt-5.4-mini")
+    monkeypatch.setenv("AGENT_POLICY_MODEL", "openai/gpt-5.4-mini")
+
+    monkeypatch.delenv("EVAL_ALLOW_SHARED_FAMILY", raising=False)
+    with pytest.raises(ValidationError, match="forbidden family"):
+        LlmJudgeSpec(
+            probe_id="p",
+            rubric="score 1.0 if X else 0.0",
+            target_attrs=["mcae.narrative.text"],
+            model="openai/gpt-5.4-mini",
+        )
+
+    monkeypatch.setenv("EVAL_ALLOW_SHARED_FAMILY", "true")
+    spec = LlmJudgeSpec(
+        probe_id="p",
+        rubric="score 1.0 if X else 0.0",
+        target_attrs=["mcae.narrative.text"],
+        model="openai/gpt-5.4-mini",
+    )
+    assert spec.model == "openai/gpt-5.4-mini"
+
+
 def test_typed_spec_consumed_directly_by_layer_2_signature() -> None:
     """Sanity check that typed *Spec classes are usable as direct
     function arguments without the `args` indirection that the

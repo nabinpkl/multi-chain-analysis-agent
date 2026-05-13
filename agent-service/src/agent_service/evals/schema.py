@@ -94,6 +94,26 @@ _AGENT_STAGE_MODEL_ENV_VARS: tuple[str, ...] = (
 )
 
 
+_ALLOW_SHARED_FAMILY_TRUTHY: frozenset[str] = frozenset(
+    {"1", "true", "yes", "on"}
+)
+
+
+def _shared_family_allowed() -> bool:
+    """Return True when `EVAL_ALLOW_SHARED_FAMILY` env opts out of
+    the eval-judge family-leakage guard.
+
+    The guard exists to prevent preference leakage when the judge
+    shares a family with the agent under test. The escape hatch
+    here is for cases where the developer accepts that bias (e.g.
+    iterating on rubric wording locally, or running an experiment
+    where the leakage is intentionally documented). Default off.
+    """
+    return os.environ.get("EVAL_ALLOW_SHARED_FAMILY", "").strip().lower() in (
+        _ALLOW_SHARED_FAMILY_TRUTHY
+    )
+
+
 def _judge_forbidden_families() -> tuple[str, ...]:
     """Family prefixes that the eval-judge MUST NOT use, derived
     from the env vars naming the agent's stage models.
@@ -104,12 +124,18 @@ def _judge_forbidden_families() -> tuple[str, ...]:
     itself' bias). The validator below uses this list to reject
     any judge model whose family-prefix matches.
 
+    Returns an empty tuple when `EVAL_ALLOW_SHARED_FAMILY` is set
+    truthy, which collapses the validator's family check to a
+    no-op.
+
     Reads env on every call rather than caching at import time so
     a process started before .env loaded (e.g. a stray subprocess)
     still picks up the right list once env is available. The cost
     is one os.environ lookup per validator invocation, which is
     negligible compared to anything else the validator does.
     """
+    if _shared_family_allowed():
+        return ()
     families: set[str] = set()
     for var in _AGENT_STAGE_MODEL_ENV_VARS:
         model_id = os.environ.get(var, "")
