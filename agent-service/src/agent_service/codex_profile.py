@@ -120,6 +120,41 @@ def build_codex_profile(
     )
 
 
+# Helper profile for non-agent codex calls (constitution gate, eval
+# judge, repeat detector under codex runtime mode). Reused across
+# every helper call in the process so the session pool can amortize
+# the subprocess spawn. No MCP servers (helpers are pure text-in /
+# JSON-out), no built-in tools, ephemeral threads so codex's sqlite
+# never grows. The developer message is supplied per-call via
+# `CodexRunRequest.developer_instructions`; this stub exists only so
+# the profile-level fingerprint is stable.
+_HELPER_PROFILE_STUB_INSTRUCTIONS = (
+    "You are a structured-output helper. Each turn you receive a "
+    "developer message containing the full task prompt and an "
+    "outputSchema. Emit one JSON object conforming to the schema."
+)
+
+
+def build_codex_helper_profile(*, cwd: Path) -> CodexAgentProfile:
+    """Build the codex profile used by `llm_runtime.runtime_call` on
+    the codex path. Separate from `build_codex_profile` because the
+    analyst profile pins MCP tools and snapshot context, neither of
+    which apply to helpers.
+    """
+    return CodexAgentProfile(
+        id="mcae-helper",
+        cwd=cwd,
+        developer_instructions=_HELPER_PROFILE_STUB_INSTRUCTIONS,
+        sandbox="read-only",
+        approval_policy="never",
+        builtin_tools=frozenset(),
+        ephemeral_default=True,
+        project_root_markers=(),
+        trusted_projects=(cwd,),
+        mcp_servers=(),
+    )
+
+
 def build_codex_driver(
     *,
     profile: CodexAgentProfile,

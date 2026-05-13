@@ -1,6 +1,5 @@
-"""LLM-as-judge probe: read N span attrs, ask a third-family judge
-model to score against a rubric, parse a structured verdict, pass
-if the score meets `pass_threshold`.
+"""LLM-as-judge probe: read N span attrs, ask a judge model to score
+against a rubric, pass if the score meets `pass_threshold`.
 
 Use sparingly. Deterministic probes are strictly more reliable for
 what they assert; this probe fills the qualitative gap they cannot
@@ -8,59 +7,68 @@ reach (tone, off-topic-ness, did-the-answer-match-the-question,
 is-the-explanation-coherent-given-claims, did-the-gate-decide-
 correctly).
 
-The judge call goes through the same `with_provider_retry` wrapper
-the agent uses for its own LLM calls. A single transient failure
-retries; persistent failure surfaces as `passed=False, error=...`
-in the persisted ProbeResult. We deliberately do NOT auto-flip
-judge-call failures to `inconclusive=True`: the runner's
-infra-health detector reads the agent's `agent run` span, not the
-eval's judge call. Judge-call failure is an eval-tooling problem
-(judge model down, throttled), distinct from the agent under test
-having a terminal failure. Operator sees the error in the JSON
-and re-runs.
+The judge call goes through `agent_service.llm_runtime.runtime_call`
+which dispatches between two backends based on `AGENT_DEFAULT_RUNTIME`:
 
-Output mode: plain-text completion with manual JSON extraction,
-NOT pydantic_ai's `output_type=JudgeVerdict` tool-calling mode.
-Reason: many free-tier OpenRouter models don't expose the
-`tool_choice` parameter (verified empirically 2026-05-06: gemma,
-baidu/cobuddy, owl-alpha all 404'd on tool_choice). Plain-text
-completion works on every text-generation model. We extract the
-first JSON object from the response and validate against
-JudgeVerdict; if extraction or validation fails, that surfaces as
-`passed=False, error=...` so the operator can decide (model is
-broken vs prompt needs tightening).
+- **codex**: spawns / reuses the `mcae-helper` codex subprocess
+  authenticated via `~/.codex/auth.json` (ChatGPT subscription, no
+  per-call billing). The pydantic schema is wrapped through
+  `to_strict_json_schema` and passed as codex's `outputSchema`, so
+  the final assistant message is server-enforced JSON. No retry
+  wrapper; codex's own internals handle transient hiccups.
+- **pydantic_ai**: builds a pydantic-ai `Agent` against the configured
+  free-tier provider (Gemini today) and parses the first JSON object
+  from the text response. Wrapped in `with_provider_retry` for
+  transient-failure handling because free-tier providers occasionally
+  return malformed payloads or stall.
 
-Bias prevention: `LlmJudgeSpec.model` is validated at YAML load
-time against `_LLM_JUDGE_FORBIDDEN_FAMILIES` so the judge cannot
-share a family with any stage of the agent under test (preference
-leakage, ICLR 2026). We trust the validator and do not re-check
-here.
+Bias prevention: `LlmJudgeSpec.model` is validated at YAML load time
+against `_LLM_JUDGE_FORBIDDEN_FAMILIES` so the judge cannot share a
+family with any stage of the agent under test (preference leakage,
+ICLR 2026). The validator targets pydantic-ai-shaped model ids; on
+codex we don't pass `spec.model` because codex picks its model
+centrally via `CODEX_HELPER_MODEL`. Operator wires the runtime + the
+matching model env; the family guard stays on for the pydantic-ai
+path.
+
+Output mode (pydantic-ai path): plain-text completion with manual
+JSON extraction, NOT pydantic_ai's `output_type=JudgeVerdict` tool-
+calling mode. Many free-tier OpenRouter models don't expose
+`tool_choice` (verified empirically 2026-05-06: gemma, baidu/cobuddy,
+owl-alpha all 404'd on it). Plain-text completion works on every
+text-generation model. `runtime_call` does the parse + validate so
+the probe just catches the resulting `ValueError`.
 """
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Any
 
 import structlog
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from pydantic_ai import Agent
+from pydantic import BaseModel, ConfigDict, Field
 
 from agent_service.evals.ch import ClickHouseClient
 from agent_service.evals.schema import LlmJudgeSpec, ProbeResult
-from agent_service import llm
-from agent_service.llm_retry import with_provider_retry
+from agent_service.llm_runtime import (
+    Runtime,
+    RuntimeCallParseError,
+    resolve_helper_runtime,
+    runtime_call,
+)
 
 log = structlog.get_logger(__name__)
 
 
 class JudgeVerdict(BaseModel):
-    """Structured shape the judge's text response is parsed into.
-    Score in [0, 1]; reason is a short operator-facing string for
-    triage. We accept plain text from the judge and extract the
-    first JSON object that matches; not all free-tier models expose
-    pydantic_ai's tool-calling output mode."""
+    """Structured shape the judge's response is parsed into. Score in
+    [0, 1]; reason is a short operator-facing string for triage.
+
+    `extra="forbid"` so the strict-schema walker in `llm_runtime`
+    emits `additionalProperties: false` everywhere the codex path
+    requires it. On the pydantic-ai path the same constraint just
+    means an unrecognized field would fail validation, which is what
+    we want for a judge response."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -94,46 +102,6 @@ Rules:
   score=0.0 with a reason explaining the ambiguity rather than guessing."""
 
 
-_DECODER = json.JSONDecoder()
-
-
-def _parse_verdict(text: str) -> JudgeVerdict:
-    """Extract and validate the first JSON object from the judge's
-    plain-text response. Uses `json.JSONDecoder.raw_decode` for the
-    extraction, NOT a regex, because regexes can't reliably find
-    balanced braces (e.g. when the judge writes `${ref:N}` inside
-    a string field, a non-greedy regex stops at the inner `}`).
-    raw_decode reads exactly one JSON value starting at a given
-    index, returns the parsed object, and tells us where it stopped.
-
-    Raises ValueError with a diagnostic on extraction or validation
-    failure so the probe can surface a parse-error to the operator
-    without losing the raw response."""
-    # Skip whitespace and any preamble text before the first `{`.
-    start = text.find("{")
-    if start == -1:
-        raise ValueError(
-            f"no JSON object found in judge response (first 200 chars): {text[:200]!r}"
-        )
-    try:
-        parsed, _end = _DECODER.raw_decode(text, start)
-    except json.JSONDecodeError as e:
-        raise ValueError(
-            f"judge JSON did not parse: {e}; "
-            f"text starting at first {{: {text[start:start+200]!r}"
-        ) from e
-    if not isinstance(parsed, dict):
-        raise ValueError(
-            f"judge response is not a JSON object: {type(parsed).__name__}"
-        )
-    try:
-        return JudgeVerdict.model_validate(parsed)
-    except ValidationError as e:
-        raise ValueError(
-            f"judge JSON did not match schema: {e}; parsed: {parsed!r}"
-        ) from e
-
-
 def _build_user_prompt(rubric: str, attrs: dict[str, str]) -> str:
     """Compose the user-facing message: rubric first, then evidence
     keyed by span attribute name. The judge sees the attr names so
@@ -164,8 +132,6 @@ async def _read_attrs(
     """
     if not attrs:
         return {}
-    # Build one SELECT with one argMaxIf per requested attr. Single
-    # query is cheaper than N queries even at low cardinality.
     selects: list[str] = []
     params: dict[str, Any] = {"tid": trace_id}
     for i, attr in enumerate(attrs):
@@ -198,9 +164,6 @@ async def run(
     started = datetime.now(timezone.utc)
     try:
         attrs = await _read_attrs(trace_id, ch, spec.target_attrs)
-        # If every attr came back empty, the trace doesn't have the
-        # spans the case author expected. Fail loudly with a
-        # diagnostic; don't waste a judge call.
         if all(not v for v in attrs.values()):
             return ProbeResult(
                 run_id=run_id,
@@ -223,27 +186,61 @@ async def run(
                 finished_at=datetime.now(timezone.utc),
             )
 
-        # Plain-text output, NOT output_type=JudgeVerdict. Many
-        # free-tier OpenRouter models don't support tool_choice (the
-        # mechanism pydantic_ai uses for structured output); using
-        # text completion + manual parse opens the model market.
-        agent: Agent[None, str] = Agent(
-            model=llm.make_model("judge", model_id=spec.model),
-            output_type=str,
-            system_prompt=_JUDGE_SYSTEM_PROMPT,
-        )
+        # Runtime selection. The spec's `model` is pydantic-ai-shaped
+        # (e.g. "google/gemini-2.5-flash-lite") and the family-guard
+        # validator already rejected anything sharing a family prefix
+        # with the agent stages. On codex we don't pass it: codex picks
+        # its model centrally via `CODEX_HELPER_MODEL`, and the family-
+        # guard premise doesn't apply (one provider, one model family,
+        # the bias literature on cross-family-vs-same-family is about
+        # different inference paths anyway).
+        runtime: Runtime = resolve_helper_runtime()
+        model_id = spec.model if runtime == "pydantic_ai" else None
+
         user_prompt = _build_user_prompt(spec.rubric, attrs)
 
         try:
-            result = await with_provider_retry(
-                lambda: agent.run(user_prompt),
-                label=f"llm_judge:{spec.probe_id}",
+            verdict, _raw = await runtime_call(
+                role="judge",
+                system_prompt=_JUDGE_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                output_model=JudgeVerdict,
+                runtime=runtime,
+                model_id=model_id,
                 per_attempt_timeout_s=45.0,
+            )
+        except RuntimeCallParseError as e:
+            # Parse / validation failure (text response did not match
+            # JudgeVerdict). Surface as a probe error with the raw
+            # diagnostic so the operator can decide.
+            log.warning(
+                "llm_judge_parse_failed",
+                probe_id=spec.probe_id,
+                runtime=runtime,
+                error=str(e)[:200],
+            )
+            return ProbeResult(
+                run_id=run_id,
+                case_id=case_id,
+                probe_id=spec.probe_id,
+                trace_id=trace_id,
+                passed=False,
+                observed={
+                    "judge_runtime": runtime,
+                    "judge_model": spec.model,
+                    "target_attrs": spec.target_attrs,
+                    "judge_call_outcome": "parse_failed",
+                    "raw_response_first_500": e.raw_text[:500],
+                },
+                error=f"judge response parse failed: {str(e)[:300]}",
+                started_at=started,
+                finished_at=datetime.now(timezone.utc),
             )
         except Exception as e:  # noqa: BLE001
             log.warning(
                 "llm_judge_call_failed",
                 probe_id=spec.probe_id,
+                runtime=runtime,
                 error_type=type(e).__name__,
                 error_message=str(e)[:200],
             )
@@ -254,37 +251,12 @@ async def run(
                 trace_id=trace_id,
                 passed=False,
                 observed={
+                    "judge_runtime": runtime,
                     "judge_model": spec.model,
                     "target_attrs": spec.target_attrs,
                     "judge_call_outcome": "exception_after_retry",
                 },
                 error=f"judge call failed: {type(e).__name__}: {str(e)[:200]}",
-                started_at=started,
-                finished_at=datetime.now(timezone.utc),
-            )
-
-        raw_text: str = result.output
-        try:
-            verdict = _parse_verdict(raw_text)
-        except ValueError as e:
-            log.warning(
-                "llm_judge_parse_failed",
-                probe_id=spec.probe_id,
-                error=str(e)[:200],
-            )
-            return ProbeResult(
-                run_id=run_id,
-                case_id=case_id,
-                probe_id=spec.probe_id,
-                trace_id=trace_id,
-                passed=False,
-                observed={
-                    "judge_model": spec.model,
-                    "target_attrs": spec.target_attrs,
-                    "judge_call_outcome": "parse_failed",
-                    "raw_response_first_500": raw_text[:500],
-                },
-                error=f"judge response parse failed: {str(e)[:300]}",
                 started_at=started,
                 finished_at=datetime.now(timezone.utc),
             )
@@ -298,6 +270,7 @@ async def run(
             passed=passed,
             score=verdict.score,
             observed={
+                "judge_runtime": runtime,
                 "judge_model": spec.model,
                 "judge_reason": verdict.reason,
                 "pass_threshold": spec.pass_threshold,
