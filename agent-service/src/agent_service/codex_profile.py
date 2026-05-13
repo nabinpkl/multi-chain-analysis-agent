@@ -92,6 +92,13 @@ def build_codex_profile(
         developer_instructions=_PROFILE_STUB_INSTRUCTIONS,
         sandbox="read-only",
         approval_policy="never",
+        # Lock the agent to MCP tools only. Codex still has built-in
+        # shell, unified_exec, apply_patch, web_search, view_image,
+        # image_generation, computer_use, browser_use, tool_search, and
+        # the apps subsystem on by default; the driver disables each
+        # one in the actor config because none belong to the analyst
+        # tool surface defined below.
+        builtin_tools=frozenset(),
         project_root_markers=(),
         trusted_projects=(cwd,),
         mcp_servers=(
