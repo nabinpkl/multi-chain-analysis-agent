@@ -25,8 +25,10 @@
 
 use std::convert::Infallible;
 
+use std::collections::HashMap;
+
 use axum::body::{Body, Bytes};
-use axum::extract::{FromRequest, Path, Request, State};
+use axum::extract::{FromRequest, Path, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Response, Sse};
@@ -40,7 +42,7 @@ use crate::primitives::{
     PrimitiveError, PrimitiveOutput, community_summary, wallet_profile,
 };
 use crate::snapshot::{TurnSnapshot, current_time_ms};
-use crate::graph::window::window_index;
+use crate::graph::window::{WINDOWS, window_index};
 use crate::state::AppState;
 use crate::wire::generated::multichain::wire::shared::v1 as proto;
 use crate::wire::proto_bridge::{self, BridgeError};
@@ -196,15 +198,35 @@ fn snapshot_gone(snapshot_id: &str, format: WireFormat) -> Response {
 // Routes
 // ---------------------------------------------------------------------------
 
-/// `POST /turn/begin`. Materializes a `TurnSnapshot` against the live
-/// 60s window, stashes it in the cache under a fresh `snapshot_id`
-/// (ulid for sortability), returns the lease descriptor.
+/// Default live-window seconds for `POST /turn/begin` when the caller
+/// doesn't pin one via `?window=N`. 60s is the historical default and
+/// what every production caller currently relies on; widening the
+/// snapshot is opt-in (eval cases, future operator-facing knob).
+const TURN_BEGIN_DEFAULT_WINDOW_SECS: u64 = 60;
+
+/// `POST /turn/begin[?window=N]`. Materializes a `TurnSnapshot` against
+/// the requested live window (default 60s), stashes it in the cache
+/// under a fresh `snapshot_id` (ulid for sortability), returns the
+/// lease descriptor.
+///
+/// `window` query param must be one of the values in
+/// `crate::graph::window::WINDOWS` (`[10, 60, 300, 900, 1800, 3600]`).
+/// Unrecognized values return 400 so the caller can't silently get a
+/// different window than they asked for. Missing / empty param falls
+/// back to the 60s default. The resolved `window_secs` is stamped on
+/// `SnapshotBeginResponse.window_secs` so the caller can see exactly
+/// what was materialized (round-tripping was always the contract; we
+/// just stop ignoring inbound preference).
 ///
 /// Begin requests carry no body, so we don't sniff Content-Type for
 /// the request side. Response wire format defaults to JSON unless
 /// `Accept: application/x-protobuf` is set, matching how curl users
 /// expect to see the lease.
-pub async fn turn_begin(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn turn_begin(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
     let format = match headers
         .get(header::ACCEPT)
         .and_then(|v| v.to_str().ok())
@@ -214,7 +236,28 @@ pub async fn turn_begin(State(state): State<AppState>, headers: HeaderMap) -> Re
         _ => WireFormat::Json,
     };
 
-    let live_window_idx = window_index(60).unwrap_or(1);
+    // Resolve the requested window. Empty / missing falls back to 60s
+    // (preserving the historical contract for every caller that
+    // doesn't opt in); a present-but-invalid value is rejected so a
+    // typo never silently materializes the wrong window.
+    let window_secs: u64 = match params.get("window").map(|s| s.as_str()) {
+        None | Some("") => TURN_BEGIN_DEFAULT_WINDOW_SECS,
+        Some(raw) => match raw.parse::<u64>() {
+            Ok(s) if window_index(s).is_some() => s,
+            _ => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "invalid ?window={raw}; expected one of {:?}",
+                        WINDOWS
+                    ),
+                )
+                    .into_response();
+            }
+        },
+    };
+    let live_window_idx = window_index(window_secs)
+        .expect("window_secs validated above; this is unreachable");
     let analytics = state.analytics.snapshots[live_window_idx].borrow().clone();
 
     let snapshot_id = ulid::Ulid::new().to_string();
@@ -222,7 +265,7 @@ pub async fn turn_begin(State(state): State<AppState>, headers: HeaderMap) -> Re
     let snap = TurnSnapshot::build(
         snapshot_id.clone(),
         live_window_idx,
-        60,
+        window_secs as u32,
         now_ms,
         &state.graph,
         analytics,
@@ -253,7 +296,7 @@ pub async fn turn_begin(State(state): State<AppState>, headers: HeaderMap) -> Re
     let resp = proto::SnapshotBeginResponse {
         snapshot_id,
         expires_at_ms,
-        window_secs: 60,
+        window_secs: window_secs as u32,
         ..Default::default()
     };
     encode_response(format, &resp, StatusCode::OK)

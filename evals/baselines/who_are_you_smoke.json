@@ -1,0 +1,19 @@
+{
+  "suite": "who_are_you_smoke",
+  "captured_at": "2026-05-13T00:43:04.306155Z",
+  "git_sha": "1a82cad926e7",
+  "agent_version": "0.1.0",
+  "agent_primary_model": "gemini-3.1-flash-lite",
+  "agent_policy_model": "gemini-3.1-flash-lite",
+  "eval_judge_model": "gemini-3.1-flash-lite",
+  "results": {
+    "who_are_you_smoke.001": {
+      "narrative-constitution-gate-passes-v4": "pass",
+      "narrative-emitted-approved": "pass",
+      "placeholder-gate-passes-v1": "pass",
+      "snapshot-lease-span-present": "pass",
+      "turn-root-span-present": "pass",
+      "turn-tagged-as-eval": "pass"
+    }
+  }
+}

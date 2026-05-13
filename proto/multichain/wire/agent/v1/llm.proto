@@ -42,3 +42,28 @@ message RoleOverride {
   // provider is "" or "openrouter".
   string model_id = 2;
 }
+
+// Per-turn override for the codex runtime's primary model + reasoning
+// effort. Lives separately from `LlmOverride` because codex's tool
+// surface and provider routing are not symmetric with the
+// openrouter/gemini/local triad the pydantic-ai panel exposes; codex
+// always routes through codex-cli, and the only knobs that change
+// turn-to-turn are the model id and the reasoning effort it asks
+// for. Empty fields fall back to `CODEX_PRIMARY_MODEL` /
+// `CODEX_REASONING_EFFORT` env on the agent-service side (which in
+// turn fall back to codex-cli's own defaults when those are unset).
+//
+// The policy + judge roles stay on the `LlmOverride` panel because
+// the constitution agent runs server-side via pydantic-ai regardless
+// of the primary runtime, and the judge is eval-only.
+message CodexOverride {
+  // Codex-CLI model id (e.g. "gpt-5", "gpt-5-mini", "gpt-5-nano",
+  // "o3", "o3-mini"). Empty = fall through to env / cli default.
+  string model_id = 1;
+  // Codex-CLI reasoning effort: "low" | "medium" | "high". Empty =
+  // fall through to env / cli default. Unrecognized values are
+  // forwarded as-is (codex-cli rejects them with a clear error;
+  // we don't gatekeep here so adding new tiers doesn't need a
+  // proto bump).
+  string reasoning_effort = 2;
+}

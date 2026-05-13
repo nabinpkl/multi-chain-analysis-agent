@@ -145,6 +145,7 @@ def build_agent(
     *,
     drop_rule_ids: Iterable[str] = (),
     llm_override=None,
+    live_window_secs: int = 60,
 ) -> Agent[AgentDeps, str]:
     """Construct the production agent. Three tools, free-form-string
     output (the narrative), system prompt composed from `system_v4.txt`
@@ -165,17 +166,28 @@ def build_agent(
             OpenRouter). Set by the dev builder view's Models
             section; production frontend never populates it. See
             `agent_service.llm.make_model` for resolution rules.
+        live_window_secs: live-window seconds the snapshot will be
+            materialized against. Substituted into the system
+            prompt's `${LIVE_WINDOW_HUMAN}` placeholder so the agent
+            sees the right framing for the window it'll actually
+            analyze. Default 60 matches the data plane's default
+            window and produces "last 60 seconds" prose; eval cases
+            that widen the window pass the value through to keep
+            the prompt aligned with the snapshot.
     """
     agent: Agent[AgentDeps, str] = Agent(
         model=llm.make_model("primary", override=llm_override),
         deps_type=AgentDeps,
         output_type=str,
-        system_prompt=compose_system_prompt(drop_rule_ids=drop_rule_ids),
+        system_prompt=compose_system_prompt(
+            drop_rule_ids=drop_rule_ids,
+            live_window_secs=live_window_secs,
+        ),
     )
 
     @agent.tool
     async def wallet_profile(ctx: RunContext[AgentDeps], addr: str) -> str:
-        """Profile a Solana wallet observed in the live 60-second window.
+        """Profile a Solana wallet observed in the current live window.
 
         Returns a snapshot of role, community, volumes, and top
         counterparties. The result is wrapped in `<external_data>` for

@@ -1,6 +1,7 @@
 pub mod graph_stats;
 pub mod graph_stream;
 pub mod health;
+pub mod observable_wallets;
 pub mod primitives;
 
 use axum::Router;
@@ -23,6 +24,17 @@ pub fn public_router(state: AppState) -> Router {
         .route("/ready", get(health::ready))
         .route("/graph/stream", get(graph_stream::stream))
         .route("/graph/stats", get(graph_stats::stats))
+        // Returns the top-degree wallets currently visible in the
+        // live window. Read-only. Intended for the eval harness so
+        // suite cases that need a "currently observable" wallet can
+        // resolve one on demand instead of pinning an address that
+        // ages out of the window. Safe for the public router because
+        // it surfaces only pubkeys and window-local degree counts
+        // (same shape `/graph/stats` already exposes in aggregate).
+        .route(
+            "/graph/observable_wallets",
+            get(observable_wallets::observable_wallets),
+        )
         .with_state(state)
 }
 

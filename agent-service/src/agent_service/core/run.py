@@ -211,7 +211,7 @@ async def run_one_turn(
             "look at on-chain transfers."
         )
         with _tracer.start_as_current_span(spans.NARRATIVE_EMITTED) as nar_span:
-            sse_text = _resolve_narrative_text(
+            sse_text = resolve_narrative_text(
                 rejection_text,
                 narrative_output_enabled=envelope.switches.channels.narrative_output_enabled,
                 nar_span=nar_span,
@@ -267,18 +267,22 @@ async def run_one_turn(
     await sink.emit(
         "Progress", sse_pb2.Progress(phase="drafting", detail="primary model")
     )
-    # Resolve which agent to run. Production preset (every defense on)
-    # uses the cached startup-built primary_agent. When per-defense
-    # switches drop one or more rules, build a fresh agent per turn
-    # with the right drop set. Pydantic AI Agent setup is sub-
-    # millisecond (no I/O), so the cost is negligible compared to
-    # the LLM call about to follow.
+    # Resolve which agent to run. Production preset (every defense on
+    # AND default live window) uses the cached startup-built
+    # primary_agent. When per-defense switches drop one or more rules
+    # OR the turn opts into a non-default live window, build a fresh
+    # agent per turn with the right drops + window. Pydantic AI Agent
+    # setup is sub-millisecond (no I/O), so the cost is negligible
+    # compared to the LLM call about to follow.
     turn_drops = drops_from_switches(envelope.switches)
+    needs_rebuild = bool(turn_drops) or envelope.live_window_secs != 60
     turn_agent: Agent = (
         build_agent(
-            drop_rule_ids=turn_drops, llm_override=envelope.primary_llm_override
+            drop_rule_ids=turn_drops,
+            llm_override=envelope.primary_llm_override,
+            live_window_secs=envelope.live_window_secs,
         )
-        if turn_drops
+        if needs_rebuild
         else primary_agent
     )
     # 75s per attempt covers a normal multi-tool turn (~25s today)
@@ -442,7 +446,7 @@ async def run_one_turn(
         # text so a "model wrote uncited audit numbers but we
         # suppressed" path is observable distinct from "model wrote
         # nothing".
-        sse_text = _resolve_narrative_text(
+        sse_text = resolve_narrative_text(
             narrative_text,
             narrative_output_enabled=envelope.switches.channels.narrative_output_enabled,
             nar_span=nar_span,
@@ -590,7 +594,7 @@ async def run_one_turn(
 # ---------------------------------------------------------------------------
 
 
-def _resolve_narrative_text(
+def resolve_narrative_text(
     raw_text: str,
     *,
     narrative_output_enabled: bool,

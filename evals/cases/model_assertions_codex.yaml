@@ -1,0 +1,60 @@
+# Model-rotation tripwire for the codex runtime. Opt-in; not part
+# of the day-to-day smoke run. Run via:
+#
+#     just eval evals/cases/model_assertions_codex.yaml
+#
+# What this catches: `CODEX_PRIMARY_MODEL` env-configured codex model
+# rotates (operator swaps it) without baseline refresh. The probe
+# reads the env at validator time and asserts the trace's
+# `gen_ai.request.model` matches. If they disagree, either:
+#   - operator forgot to re-mint after swapping the env, OR
+#   - codex CLI ignored the requested model and routed against its
+#     own default.
+#
+# The constitution agent runs server-side via pydantic-ai regardless
+# of primary runtime, so the policy-model assertion (env-driven via
+# `AGENT_POLICY_MODEL`) still applies on a codex turn the same way
+# it does on a pydantic turn  the constitution agent fires inside
+# the codex turn, just routed through pydantic-ai.
+#
+# Lives outside the day-to-day smoke suites for the same reason as
+# `model_assertions_pydantic.yaml`: runtime-pinned cases pollute
+# runtime-agnostic suite files. This file is the explicit opt-in.
+
+- case_id: model_assertions.codex.primary
+  suite: model_assertions_codex
+  inputs:
+    runtime: AGENT_RUNTIME_CODEX
+    userQuestion: "Profile this wallet."
+    context:
+      focus:
+        wallet:
+          id: "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC"
+    switches:
+      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true, defendMemoInjection: true }
+      dontFabricate: true
+      channels: { narrativeOutputEnabled: true, externalTextInputEnabled: true }
+  probes:
+    - probe_id: turn-root-span-present
+      kind: has_matching_span
+      span_name: mcae.turn
+
+    - probe_id: codex-primary-model-used
+      kind: llm_call_used_model
+      model_env: CODEX_PRIMARY_MODEL
+
+    # Reads `AGENT_POLICY_MODEL` env at validator time. The constitution
+    # agent runs server-side via pydantic-ai regardless of primary
+    # runtime, so its model is governed by the same env var as the
+    # pydantic-ai suite. Hardcoding the model name here re-introduces
+    # the rotation trap this file was written to surface; resolve via
+    # env so a configured swap is what trips the probe, not the
+    # probe itself.
+    - probe_id: policy-model-used
+      kind: llm_call_used_model
+      model_env: AGENT_POLICY_MODEL
+
+    - probe_id: no-error-on-turn-root
+      kind: no_span_with_status
+      span_name: mcae.turn
+      status: error

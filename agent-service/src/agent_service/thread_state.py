@@ -211,6 +211,17 @@ class AgentThread:
     # `MAX_THREAD_TOOL_CALL_TURNS` so memory + disk usage stay
     # bounded the same way other per-turn maps do.
     narratives_per_turn: dict[int, NarrativeSnapshot] = field(default_factory=dict)
+    # Chunk 4. Per-turn ownership map for approved claims. The flat
+    # `claims` list above is FIFO-capped at MAX_THREAD_CLAIMS and
+    # has no turn attribution (the constitution gate's
+    # `same_turn_claims` payload doesn't need it). This map keeps
+    # the same Claim protos keyed by their emit-turn so the
+    # transcript replay can render each turn's chips on the right
+    # bubble. Same FIFO posture as `tool_calls_per_turn`: cap by
+    # turn-count, drop the oldest turn's bucket when over cap.
+    claims_per_turn: dict[int, list[claim_pb2.Claim]] = field(
+        default_factory=dict
+    )
     # Chunk 4. Soft-archive flag. Threads with `archived=True` are
     # hidden from the default history list (`GET /agent/threads`)
     # but still resumable via `GET /agent/thread/{id}`. No GC; the
@@ -238,6 +249,18 @@ class AgentThread:
         writes once per turn anyway)."""
         self.user_questions_per_turn[turn] = question
         self._evict_oldest_turn_if_needed()
+
+    def record_turn_claim(self, turn: int, claim: claim_pb2.Claim) -> None:
+        """Record an approved claim under its emitting turn. Both
+        drivers call this alongside `record_claim` so the flat
+        thread-level list (used by the constitution gate) and the
+        per-turn map (used by transcript replay) stay in sync. FIFO
+        eviction matches `tool_calls_per_turn`: drop the oldest
+        turn's bucket once the turn-count cap is exceeded."""
+        self.claims_per_turn.setdefault(turn, []).append(claim)
+        while len(self.claims_per_turn) > MAX_THREAD_TOOL_CALL_TURNS:
+            oldest = min(self.claims_per_turn.keys())
+            self.claims_per_turn.pop(oldest, None)
 
     def record_turn_narrative(
         self, turn: int, snapshot: NarrativeSnapshot
@@ -315,6 +338,15 @@ class AgentThread:
                 str(turn): snap.to_dict()
                 for turn, snap in self.narratives_per_turn.items()
             },
+            "claims_per_turn": {
+                str(turn): [
+                    json_format.MessageToJson(
+                        c, preserving_proto_field_name=False
+                    )
+                    for c in cs
+                ]
+                for turn, cs in self.claims_per_turn.items()
+            },
         }
 
     @classmethod
@@ -345,6 +377,19 @@ class AgentThread:
             int(turn_str): NarrativeSnapshot.from_dict(snap)
             for turn_str, snap in data.get("narratives_per_turn", {}).items()
         }
+        # `claims_per_turn` is chunk 4. Pre-chunk-4 state.json files
+        # lack the key; the empty map means the reopened transcript
+        # falls back to the (already-bounded) flat `claims` list
+        # rendered against the last turn  same shape the chunk-4
+        # MVP shipped with for compatibility.
+        claims_per_turn: dict[int, list[claim_pb2.Claim]] = {}
+        for turn_str, cs in data.get("claims_per_turn", {}).items():
+            bucket: list[claim_pb2.Claim] = []
+            for c_json in cs:
+                claim = claim_pb2.Claim()
+                json_format.Parse(c_json, claim, ignore_unknown_fields=True)
+                bucket.append(claim)
+            claims_per_turn[int(turn_str)] = bucket
         return cls(
             thread_id=data["thread_id"],
             started_at_ms=int(data["started_at_ms"]),
@@ -358,6 +403,7 @@ class AgentThread:
             tool_calls_per_turn=tool_calls,
             user_questions_per_turn=user_questions,
             narratives_per_turn=narratives,
+            claims_per_turn=claims_per_turn,
         )
 
 

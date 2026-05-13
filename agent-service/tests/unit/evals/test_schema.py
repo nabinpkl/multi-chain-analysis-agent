@@ -295,6 +295,63 @@ def test_probe_result_keys_compose_with_case_and_run() -> None:
     assert result.probe_id == case.probes[0].probe_id
 
 
+# ---------------------------------------------------------------------------
+# LlmCallUsedModelSpec env-fallback (CODEX_PRIMARY_MODEL tripwire pattern)
+# ---------------------------------------------------------------------------
+
+
+def test_llm_call_used_model_literal_name(monkeypatch) -> None:
+    """Plain `model_name: "x"` shape keeps working unchanged. Most
+    cases (policy model assertions, runtime-pinned primary assertions
+    pointing at known literals) take this path."""
+    spec = LlmCallUsedModelSpec(probe_id="p", model_name="x/y:z")
+    assert spec.model_name == "x/y:z"
+    assert spec.model_env is None
+
+
+def test_llm_call_used_model_env_fallback_resolves_at_validate_time(
+    monkeypatch,
+) -> None:
+    """`model_env: CODEX_PRIMARY_MODEL` reads the env at parse time
+    and pins `model_name`. Mirrors `LlmJudgeSpec.model` falling back
+    to `EVAL_JUDGE_MODEL`. The probe implementation always reads
+    `spec.model_name` regardless of which path the YAML took."""
+    monkeypatch.setenv("CODEX_PRIMARY_MODEL", "gpt-5-mini")
+    spec = LlmCallUsedModelSpec(probe_id="p", model_env="CODEX_PRIMARY_MODEL")
+    assert spec.model_name == "gpt-5-mini"
+    assert spec.model_env == "CODEX_PRIMARY_MODEL"
+
+
+def test_llm_call_used_model_env_must_be_set(monkeypatch) -> None:
+    """If the named env var is unset/empty, validation fails loudly
+    at YAML-load time. Mirrors how `LlmJudgeSpec` rejects an empty
+    `EVAL_JUDGE_MODEL` so probe-time failures don't surprise the
+    operator mid-run."""
+    monkeypatch.delenv("CODEX_PRIMARY_MODEL", raising=False)
+    with pytest.raises(ValidationError, match="env var is unset"):
+        LlmCallUsedModelSpec(probe_id="p", model_env="CODEX_PRIMARY_MODEL")
+
+
+def test_llm_call_used_model_rejects_both_name_and_env(monkeypatch) -> None:
+    """Exactly one of model_name / model_env. Both-set is ambiguous
+    (which wins?) so we reject at validate time rather than pick a
+    silent winner."""
+    monkeypatch.setenv("CODEX_PRIMARY_MODEL", "gpt-5-mini")
+    with pytest.raises(ValidationError, match="exactly one"):
+        LlmCallUsedModelSpec(
+            probe_id="p",
+            model_name="x/y:z",
+            model_env="CODEX_PRIMARY_MODEL",
+        )
+
+
+def test_llm_call_used_model_rejects_neither_name_nor_env() -> None:
+    """Both-empty is also invalid; the probe needs SOMETHING to
+    assert against."""
+    with pytest.raises(ValidationError, match="must set"):
+        LlmCallUsedModelSpec(probe_id="p")
+
+
 def test_typed_spec_consumed_directly_by_layer_2_signature() -> None:
     """Sanity check that typed *Spec classes are usable as direct
     function arguments without the `args` indirection that the

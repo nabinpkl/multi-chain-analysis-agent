@@ -54,6 +54,16 @@ pub struct AgentRequestView<'a> {
     ///
     /// Field 8: `runtime`
     pub runtime: ::buffa::EnumValue<super::super::AgentRuntime>,
+    /// Per-turn codex model + reasoning-effort override. Honored only
+    /// when `runtime == AGENT_RUNTIME_CODEX`; pydantic-ai turns ignore
+    /// this field. Empty / missing = fall through to
+    /// `CODEX_PRIMARY_MODEL` + `CODEX_REASONING_EFFORT` env vars on the
+    /// agent service. See `llm.proto` for shape.
+    ///
+    /// Field 9: `codex_override`
+    pub codex_override: ::buffa::MessageFieldView<
+        super::super::__buffa::view::CodexOverrideView<'a>,
+    >,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> AgentRequestView<'a> {
@@ -218,6 +228,30 @@ impl<'a> AgentRequestView<'a> {
                         ::buffa::types::decode_int32(&mut cur)?,
                     );
                 }
+                9u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 9u32,
+                            expected: 2u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    if depth == 0 {
+                        return Err(::buffa::DecodeError::RecursionLimitExceeded);
+                    }
+                    let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                    match view.codex_override.as_mut() {
+                        Some(existing) => existing._merge_into_view(sub, depth - 1)?,
+                        None => {
+                            view.codex_override = ::buffa::MessageFieldView::set(
+                                super::super::__buffa::view::CodexOverrideView::_decode_depth(
+                                    sub,
+                                    depth - 1,
+                                )?,
+                            );
+                        }
+                    }
+                }
                 _ => {
                     ::buffa::encoding::skip_field_depth(tag, &mut cur, depth)?;
                     let span_len = before_tag.len() - cur.len();
@@ -275,6 +309,14 @@ impl<'a> ::buffa::MessageView<'a> for AgentRequestView<'a> {
                 None => ::buffa::MessageField::none(),
             },
             runtime: self.runtime,
+            codex_override: match self.codex_override.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::CodexOverride,
+                    >::some(v.to_owned_message())
+                }
+                None => ::buffa::MessageField::none(),
+            },
             __buffa_unknown_fields: self
                 .__buffa_unknown_fields
                 .to_owned()
@@ -332,6 +374,14 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentRequestView<'a> {
             if val != 0 {
                 size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
             }
+        }
+        if self.codex_override.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.codex_override.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
@@ -407,6 +457,15 @@ impl<'a> ::buffa::ViewEncode<'a> for AgentRequestView<'a> {
                     .encode(buf);
                 ::buffa::types::encode_int32(val, buf);
             }
+        }
+        if self.codex_override.is_set() {
+            ::buffa::encoding::Tag::new(
+                    9u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
+                .encode(buf);
+            ::buffa::encoding::encode_varint(__cache.consume_next() as u64, buf);
+            self.codex_override.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }

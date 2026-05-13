@@ -149,6 +149,12 @@ class Attrs:
     # Snapshot lease + primitives.
     SNAPSHOT_ID: Final = "mcae.snapshot.id"
     SNAPSHOT_DURATION_MS: Final = "mcae.snapshot.duration_ms"
+    # Live-window seconds the snapshot was materialized against, as
+    # resolved by the data plane (`SnapshotBeginResponse.window_secs`).
+    # Stamped on the lease span + the turn root so OTel queries can
+    # filter / group by window without correlating against the inbound
+    # request body.
+    SNAPSHOT_WINDOW_SECS: Final = "mcae.snapshot.window_secs"
     PRIMITIVE_DURATION_MS: Final = "mcae.primitive.duration_ms"
     PRIMITIVE_OUTPUT_DIGEST: Final = "mcae.primitive.output_digest"  # sha256-12 of body
     PRIMITIVE_INPUT_ADDR: Final = "mcae.primitive.input.addr"
@@ -229,6 +235,44 @@ class Attrs:
     # eval-side "how close are we to the cap" questions; stamped
     # only when the codex event carries it.
     CODEX_MODEL_CONTEXT_WINDOW: Final = "codex.model_context_window"
+
+    # ----- OpenTelemetry GenAI semantic-convention bridge -----
+    #
+    # Langfuse auto-converts any OTel span carrying `gen_ai.*` keys
+    # into a "GENERATION" observation. That observation type is what
+    # Langfuse uses to compute `totalCost` from its model-pricing
+    # table AND to render the token-count column on the traces list.
+    # Without these attrs, codex turns show up as plain spans with
+    # `totalCost: 0` and no token column populated.
+    #
+    # Pydantic AI's `instrument_all(use_aggregated_usage_attribute
+    # _names=True)` already stamps the same keys on its own LLM call
+    # spans (`otel.py:107`). We mirror those exact key names on the
+    # codex turn-root span so Langfuse treats both runtimes
+    # uniformly  same trace shape, same usage column, same cost
+    # calculation.
+    #
+    # Stamped from `CodexTokenUsage.last` (per-turn breakdown) so
+    # one OTel span = one turn = one generation observation. The
+    # `.total` (thread-cumulative) breakdown stays on the
+    # `codex.tokens.total.*` keys above for our own SQL/eval
+    # aggregations; it's not propagated into the gen_ai keys
+    # because Langfuse expects them to be turn-scoped.
+    GEN_AI_SYSTEM: Final = "gen_ai.system"
+    GEN_AI_REQUEST_MODEL: Final = "gen_ai.request.model"
+    GEN_AI_RESPONSE_MODEL: Final = "gen_ai.response.model"
+    GEN_AI_USAGE_INPUT_TOKENS: Final = "gen_ai.usage.input_tokens"
+    GEN_AI_USAGE_OUTPUT_TOKENS: Final = "gen_ai.usage.output_tokens"
+    GEN_AI_USAGE_TOTAL_TOKENS: Final = "gen_ai.usage.total_tokens"
+    # Langfuse extension key for prompt-cache hits. Maps to
+    # `usage_details.cache_read_input_tokens` on the Langfuse
+    # generation observation, which is how the dashboard renders
+    # the "cached" segment of the input-token bar. Codex reports
+    # this on every TOKEN_USAGE_UPDATED event as
+    # `last.cached_input_tokens` (subset of `last.input_tokens`).
+    GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: Final = (
+        "gen_ai.usage.cache_read_input_tokens"
+    )
 
 
 # Per-attribute byte cap on the JSON payloads attached to primitive

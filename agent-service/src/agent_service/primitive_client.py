@@ -234,12 +234,28 @@ class PrimitiveClient:
     # Snapshot lease
     # -----------------------------------------------------------------
 
-    async def begin_turn(self) -> SnapshotLease:
-        # Empty body; only Accept header matters for the response format.
+    async def begin_turn(
+        self, window_secs: int | None = None
+    ) -> SnapshotLease:
+        """Lease a snapshot for one agent turn.
+
+        Empty body; only `Accept` header matters for the response
+        format. When `window_secs` is set, it's forwarded as
+        `?window=N` on the URL so the Rust side materializes that
+        window instead of its 60s default. Accepted values are the
+        `WINDOWS` enum on the Rust side
+        (`[10, 60, 300, 900, 1800, 3600]`); anything else returns
+        400 from the data plane and we raise. `None` (default)
+        preserves the historical contract for every caller that
+        doesn't opt in.
+        """
+        url = "/turn/begin"
+        if window_secs is not None:
+            url = f"/turn/begin?window={int(window_secs)}"
         with _tracer.start_as_current_span(spans.SNAPSHOT_LEASE) as span:
             t0 = time.monotonic()
             resp = await self._client.post(
-                "/turn/begin", headers={"Accept": CT_PROTOBUF}
+                url, headers={"Accept": CT_PROTOBUF}
             )
             dur_ms = int((time.monotonic() - t0) * 1000)
             span.set_attribute(spans.Attrs.SNAPSHOT_DURATION_MS, dur_ms)
@@ -251,6 +267,13 @@ class PrimitiveClient:
             msg = snap_pb.SnapshotBeginResponse()
             msg.ParseFromString(resp.content)
             span.set_attribute(spans.Attrs.SNAPSHOT_ID, msg.snapshot_id)
+            # Stamp the resolved window on the lease span so traces
+            # can attribute "this turn was over a 15-minute slice"
+            # without correlating against the request body. Source of
+            # truth is what Rust materialized, not what we asked for.
+            span.set_attribute(
+                spans.Attrs.SNAPSHOT_WINDOW_SECS, msg.window_secs
+            )
             return SnapshotLease(
                 snapshot_id=msg.snapshot_id,
                 expires_at_ms=msg.expires_at_ms,

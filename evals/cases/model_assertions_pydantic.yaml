@@ -1,0 +1,60 @@
+# Provider-fallback tripwire for the pydantic-ai runtime. Opt-in;
+# not part of the day-to-day smoke run. Run via:
+#
+#     just eval evals/cases/model_assertions_pydantic.yaml
+#
+# What this catches: silent provider-side fallback on the pydantic-ai
+# path. OpenRouter occasionally re-routes a throttled model to a
+# sibling. `AGENT_PRIMARY_MODEL` env still names the original; the
+# baseline-level model_deltas (commit 03ad7d2) doesn't notice
+# because env didn't change. But `gen_ai.request.model` on the chat
+# span comes back as the fallback name. This case reads that
+# attribute via `llm_call_used_model` and pins it.
+#
+# Why pinned to pydantic-ai: only the OpenRouter / pydantic-ai
+# combination has the silent-fallback failure mode. Codex's own
+# model selection is a different shape (codex-cli config, no
+# automatic provider-side fallback we've observed). The codex-side
+# analog tripwire lives in `model_assertions_codex.yaml`.
+#
+# Why opt-in: the day-to-day smoke suites should stay runtime-
+# agnostic. Mixing a runtime-pinned case into a shared smoke suite
+# means a "just eval wallet_profile_smoke.yaml" against codex
+# silently force-dispatches one case to pydantic-ai, which is
+# confusing. This file segregates the runtime-specific assertions
+# behind an explicit opt-in.
+
+- case_id: model_assertions.pydantic.primary
+  suite: model_assertions_pydantic
+  inputs:
+    runtime: AGENT_RUNTIME_PYDANTIC_AI
+    userQuestion: "Profile this wallet."
+    context:
+      focus:
+        wallet:
+          id: "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC"
+    switches:
+      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true, defendMemoInjection: true }
+      dontFabricate: true
+      channels: { narrativeOutputEnabled: true, externalTextInputEnabled: true }
+  probes:
+    - probe_id: turn-root-span-present
+      kind: has_matching_span
+      span_name: mcae.turn
+
+    # Reads `AGENT_PRIMARY_MODEL` env at validator time and asserts
+    # the trace's `gen_ai.request.model` matches. Catches silent
+    # OpenRouter fallback when the configured model is throttled.
+    - probe_id: primary-model-used
+      kind: llm_call_used_model
+      model_env: AGENT_PRIMARY_MODEL
+
+    # Same shape for the policy (constitution) model.
+    - probe_id: policy-model-used
+      kind: llm_call_used_model
+      model_env: AGENT_POLICY_MODEL
+
+    - probe_id: no-error-on-turn-root
+      kind: no_span_with_status
+      span_name: mcae.turn
+      status: error

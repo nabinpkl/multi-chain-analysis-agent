@@ -8,9 +8,10 @@
 # instructions"-style attacks via training. We DO NOT depend on
 # that. Two reasons:
 #
-# 1. We rotate models. The free-tier model (today: nemotron-3-
-#    super-120b-a12b:free) may not have the same training-time
-#    hardening as frontier models. A regression in agent_primary_
+# 1. We rotate models. Whatever the env-configured primary model
+#    is on any given day (AGENT_PRIMARY_MODEL / CODEX_PRIMARY_MODEL,
+#    often free-tier OpenRouter), it may not have the same training-
+#    time hardening as frontier models. A regression in primary-
 #    model swap should not silently weaken our injection resistance.
 #
 # 2. Even resistance-trained models occasionally slip when the

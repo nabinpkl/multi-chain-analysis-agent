@@ -219,10 +219,76 @@ class NoSpanWithStatusSpec(_ProbeSpecBase):
 class LlmCallUsedModelSpec(_ProbeSpecBase):
     """Pass if any `chat <model>` span in the trace has
     `gen_ai.request.model == model_name`. Useful for asserting the
-    eval ran against the expected primary or policy model."""
+    eval ran against the expected primary or policy model.
+
+    Two ways to declare the expected model:
+
+    1. **Literal `model_name`**: hardcode the model id in the YAML.
+       Right for cases where the assertion is tied to a specific
+       fixed model (e.g. policy model is always
+       `openai/gpt-oss-20b:free` regardless of operator config).
+
+    2. **Env-resolved `model_env`**: name an env var
+       (`CODEX_PRIMARY_MODEL`, `AGENT_PRIMARY_MODEL`, etc); the
+       validator reads it at parse time and pins
+       `model_name = os.environ[model_env]`. Right for primary-
+       model assertions where the operator chooses the model at
+       service config time and the case should track that choice.
+       Mirrors `LlmJudgeSpec.model` falling back to
+       `EVAL_JUDGE_MODEL` env  same env-driven tripwire pattern
+       for the whole class of "assert the configured model
+       matches reality."
+
+    Exactly one of `model_name` / `model_env` must be set; the
+    validator rejects both-empty and both-set. After validation
+    `model_name` is always concrete at runtime so the probe code
+    stays simple."""
 
     kind: Literal["llm_call_used_model"] = "llm_call_used_model"
-    model_name: str
+    model_name: str | None = Field(
+        default=None,
+        description=(
+            "Literal model id (`gen_ai.request.model` attribute value) "
+            "the assertion looks for. Mutually exclusive with `model_env`."
+        ),
+    )
+    model_env: str | None = Field(
+        default=None,
+        description=(
+            "Name of an env var (`CODEX_PRIMARY_MODEL` etc) the "
+            "validator reads at parse time to populate `model_name`. "
+            "Mutually exclusive with `model_name`."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _resolve_model_name(self) -> "LlmCallUsedModelSpec":
+        if self.model_name and self.model_env:
+            raise ValueError(
+                "llm_call_used_model probe: set exactly one of "
+                "`model_name` / `model_env`, not both"
+            )
+        if self.model_name:
+            return self
+        if self.model_env:
+            resolved = os.environ.get(self.model_env, "").strip()
+            if not resolved:
+                raise ValueError(
+                    f"llm_call_used_model probe asserts model_env="
+                    f"{self.model_env!r} but that env var is unset / "
+                    f"empty; either set the env or switch to a literal "
+                    f"`model_name`"
+                )
+            # Pin the resolved value into model_name so the probe
+            # implementation reads one concrete field regardless of
+            # which path the YAML took. Mirrors how `LlmJudgeSpec`
+            # resolves `model` from env.
+            object.__setattr__(self, "model_name", resolved)
+            return self
+        raise ValueError(
+            "llm_call_used_model probe: must set `model_name` or "
+            "`model_env`"
+        )
 
 
 class LlmJudgeSpec(_ProbeSpecBase):

@@ -80,13 +80,51 @@ def test_compose_empty_drop_set_returns_source_verbatim_fixture():
 
 
 def test_compose_empty_drop_set_returns_real_prompt_verbatim():
-    """The byte-identity guarantee on the real prompt. This is the
-    regression guard for production preset == today's flat behavior:
-    if anyone refactors the composer or the prompt in a way that
-    breaks identity for the empty drop set, every committed eval
-    baseline could silently shift."""
+    """The byte-identity guarantee on the real prompt, modulo the
+    `${LIVE_WINDOW_HUMAN}` placeholder substitution that's the only
+    intentional transformation on the default-window path. With the
+    default 60s window the placeholder renders as "60 seconds"  the
+    exact literal text the prompt carried before parameterization
+    so the production preset is observably equivalent to today's
+    flat behavior. If anyone refactors the composer in a way that
+    breaks this invariant for the empty drop set, every committed
+    eval baseline could silently shift."""
     raw = load_prompt("system_v4")
-    assert compose_system_prompt() == raw
+    expected = raw.replace("${LIVE_WINDOW_HUMAN}", "60 seconds")
+    assert compose_system_prompt() == expected
+    # And: an unwidened compose still contains the literal "60
+    # seconds" (the placeholder was replaced).
+    assert "60 seconds" in compose_system_prompt()
+    assert "${LIVE_WINDOW_HUMAN}" not in compose_system_prompt()
+
+
+def test_compose_widens_live_window_substitutes_human_string():
+    """Widening to 900s renders "15 minutes" everywhere the
+    placeholder appears, with no leftover "60 seconds" string. Same
+    coverage shape for the other enum values guards against
+    formatter drift."""
+    out_900 = compose_system_prompt(live_window_secs=900)
+    assert "15 minutes" in out_900
+    assert "60 seconds" not in out_900
+    assert "${LIVE_WINDOW_HUMAN}" not in out_900
+
+    out_300 = compose_system_prompt(live_window_secs=300)
+    assert "5 minutes" in out_300
+    assert "60 seconds" not in out_300
+
+    out_3600 = compose_system_prompt(live_window_secs=3600)
+    assert "1 hour" in out_3600
+    assert "60 seconds" not in out_3600
+
+
+def test_compose_unknown_window_falls_back_to_seconds_suffix():
+    """An off-enum value (which Rust would 400 on, but the composer
+    is permissive so future enum extensions don't crash the prompt
+    path) renders as a bare "N seconds" string. Substitution still
+    happens; the placeholder never leaks into the rendered prompt."""
+    out = compose_system_prompt(live_window_secs=7200)
+    assert "7200 seconds" in out
+    assert "${LIVE_WINDOW_HUMAN}" not in out
 
 
 # ---------------------------------------------------------------------------

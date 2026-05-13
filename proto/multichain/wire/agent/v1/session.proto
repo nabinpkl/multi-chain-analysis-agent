@@ -42,6 +42,12 @@ message AgentRequest {
   // to PYDANTIC_AI server-side, keeping pre-chunk-3 clients
   // working unchanged.
   AgentRuntime runtime = 8;
+  // Per-turn codex model + reasoning-effort override. Honored only
+  // when `runtime == AGENT_RUNTIME_CODEX`; pydantic-ai turns ignore
+  // this field. Empty / missing = fall through to
+  // `CODEX_PRIMARY_MODEL` + `CODEX_REASONING_EFFORT` env vars on the
+  // agent service. See `llm.proto` for shape.
+  CodexOverride codex_override = 9;
 }
 
 // Which agent core handles this thread. PYDANTIC_AI is the in-

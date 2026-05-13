@@ -6,11 +6,12 @@
 # `has_matching_span` on `mcae.claim.emitted` would assert the
 # wrong invariant for a no-tool turn.
 #
-# Versions pinned today (2026-05-05):
+# Versions pinned today (2026-05-12):
 #   placeholder gate            v1
 #   narrative_constitution gate v4
-#   policy model (constitution) openai/gpt-oss-20b:free
-#   primary model               nvidia/nemotron-3-super-120b-a12b:free
+#   policy model (constitution) env-driven via AGENT_POLICY_MODEL
+#   primary model               env-driven via AGENT_PRIMARY_MODEL (pydantic-ai)
+#                               or CODEX_PRIMARY_MODEL (codex runtime)
 
 - case_id: who_are_you.basic
   suite: who_are_you
@@ -54,9 +55,13 @@
       gate_kind: narrative_constitution
       version: "v4"
 
+    # Reads `AGENT_POLICY_MODEL` env at validator time so model rotations
+    # don't trip this probe. Asserts the trace's `gen_ai.request.model`
+    # matches the env-configured policy model; catches the case where
+    # an operator swaps the env without intending to.
     - probe_id: policy-model-used-by-constitution-gate
       kind: llm_call_used_model
-      model_name: "openai/gpt-oss-20b:free"
+      model_env: AGENT_POLICY_MODEL
 
     - probe_id: no-error-on-turn-root
       kind: no_span_with_status
@@ -83,6 +88,11 @@
 
 - case_id: who_are_you.detail
   suite: who_are_you
+  # Runtime-agnostic. Exercises whichever runtime the server defaults
+  # to (codex out of the box, pydantic-ai via `AGENT_DEFAULT_RUNTIME=
+  # pydantic_ai`). The model-name tripwire that used to live on this
+  # case has moved to `model_assertions_{pydantic,codex}.yaml` so
+  # this suite stays runtime-portable.
   inputs:
     userQuestion: "Tell me what you can help me with in detail."
     context:
@@ -112,10 +122,6 @@
       kind: span_latency_p50_under
       span_name: mcae.turn
       ms: 90000
-
-    - probe_id: primary-model-used
-      kind: llm_call_used_model
-      model_name: "nvidia/nemotron-3-super-120b-a12b:free"
 
     - probe_id: no-error-on-turn-root
       kind: no_span_with_status

@@ -36,6 +36,12 @@ os.environ.setdefault("AGENT_API_KEY", "test-dummy-key")
 os.environ.setdefault("AGENT_PRIMARY_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
 os.environ.setdefault("AGENT_POLICY_MODEL", "openai/gpt-oss-20b:free")
 os.environ.setdefault("EVAL_JUDGE_MODEL", "openrouter/owl-alpha")
+# Codex primary model. Mirrors `AGENT_PRIMARY_MODEL` for the codex
+# runtime; case YAML probes that assert via `model_env:
+# CODEX_PRIMARY_MODEL` resolve at parse time, so the env has to be
+# set for case-load validation to pass. `setdefault` so a real .env
+# wins in integration runs.
+os.environ.setdefault("CODEX_PRIMARY_MODEL", "gpt-5")
 
 # Disable OTel SDK before any agent_service module imports. The lifespan
 # handler calls init_otel(), which would otherwise spin up a real

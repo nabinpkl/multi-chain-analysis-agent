@@ -60,6 +60,39 @@ from agent_service.thread_state import RuntimeMismatchError, ThreadRegistry
 log = structlog.get_logger(__name__)
 
 
+def _resolve_default_runtime() -> int:
+    """Return the runtime to use when an `AgentRequest` arrives with
+    `runtime=AGENT_RUNTIME_UNSPECIFIED`. Reads `AGENT_DEFAULT_RUNTIME`
+    from the environment, accepting either the bare enum suffix
+    (`pydantic_ai`, `codex`) or the full proto name
+    (`AGENT_RUNTIME_PYDANTIC_AI`, `AGENT_RUNTIME_CODEX`).
+
+    **Default is codex.** When the env is unset, every UNSPECIFIED
+    request dispatches to codex. Pydantic-ai is now the explicit
+    opt-out via `AGENT_DEFAULT_RUNTIME=pydantic_ai`. The two runtimes
+    aren't parallel paths to the same outcome  they're two different
+    agents with different harnesses, models, and orchestration  so
+    both stay in the repo. Default-codex is the operational call: the
+    cost / cache-hit-rate / streaming behavior is what we want to
+    exercise day-to-day, and pydantic-ai is the comparison knob.
+
+    Unrecognized values fall back to codex (the same default) with
+    a warning so a typo doesn't silently dispatch to something
+    unintended.
+    """
+    raw = os.environ.get("AGENT_DEFAULT_RUNTIME", "").strip().lower()
+    if raw in ("pydantic_ai", "pydantic-ai", "agent_runtime_pydantic_ai"):
+        return sess_pb.AGENT_RUNTIME_PYDANTIC_AI
+    if not raw or raw in ("codex", "agent_runtime_codex"):
+        return sess_pb.AGENT_RUNTIME_CODEX
+    log.warning(
+        "agent_default_runtime_unrecognized",
+        value=raw,
+        fallback="AGENT_RUNTIME_CODEX",
+    )
+    return sess_pb.AGENT_RUNTIME_CODEX
+
+
 # ---------------------------------------------------------------------------
 # App lifecycle
 # ---------------------------------------------------------------------------
@@ -103,6 +136,17 @@ async def lifespan(app: FastAPI):
     codex_driver = None
     codex_home_root = Path(os.environ.get("CODEX_HOME_ROOT", "./codex_homes"))
     codex_home_root.mkdir(parents=True, exist_ok=True)
+    # Codex primary model + reasoning effort, env-driven. Mirrors
+    # the `AGENT_PRIMARY_MODEL` / `AGENT_POLICY_MODEL` pattern on the
+    # pydantic-ai side. Empty / unset falls through to codex-cli's
+    # own default (today gpt-5.5, varies across cli versions). Set
+    # `CODEX_PRIMARY_MODEL=gpt-5-mini` to dial cost / quality
+    # without code change. `CODEX_REASONING_EFFORT` mirrors the same
+    # shape; codex CLI accepts `low | medium | high` today.
+    codex_primary_model = os.environ.get("CODEX_PRIMARY_MODEL", "").strip() or None
+    codex_reasoning_effort = (
+        os.environ.get("CODEX_REASONING_EFFORT", "").strip() or None
+    )
     try:
         codex_profile = build_codex_profile(
             data_plane_url=base_url, cwd=Path.cwd()
@@ -112,7 +156,10 @@ async def lifespan(app: FastAPI):
             codex_home_root=codex_home_root,
         )
         log.info(
-            "codex_runtime_ready", codex_home_root=str(codex_home_root)
+            "codex_runtime_ready",
+            codex_home_root=str(codex_home_root),
+            codex_primary_model=codex_primary_model or "<cli_default>",
+            codex_reasoning_effort=codex_reasoning_effort or "<cli_default>",
         )
     except Exception:  # noqa: BLE001
         log.exception("codex_runtime_init_failed")
@@ -125,6 +172,11 @@ async def lifespan(app: FastAPI):
         threads=threads,
         debug_public=debug_public,
         codex_driver=codex_driver,
+        codex_home_root=codex_home_root if codex_driver is not None else None,
+        codex_primary_model=codex_primary_model if codex_driver is not None else None,
+        codex_reasoning_effort=(
+            codex_reasoning_effort if codex_driver is not None else None
+        ),
     )
     app.state.handles = handles
     # Backwards-compat alias for tests still poking at app.state.primitive_client
@@ -247,20 +299,87 @@ async def local_models() -> dict:
 
 @app.get("/agent/config/role-defaults")
 async def role_defaults() -> dict[str, str]:
-    """Expose the per-role env-driven model ids (`AGENT_PRIMARY_MODEL`,
-    `AGENT_POLICY_MODEL`, `EVAL_JUDGE_MODEL`) so the builder view can
-    render the actual id in its "use the default" dropdown option
+    """Expose the per-role env-driven model ids so the builder view
+    can render the actual id in its "use the default" dropdown option
     instead of the abstract phrase "env default." Builders need to
-    see *which* model the production preset would pick (currently
-    e.g. `nvidia/nemotron-3-super-120b-a12b:free` for primary, the
-    timeout offender we identified) without ssh'ing into the
-    container or grep'ing `.env`. Empty string when an env var is
-    unset, mirroring the wire contract for `RoleOverride`.
+    see *which* model the production preset would pick without
+    ssh'ing into the container or grep'ing `.env`. Empty string when
+    an env var is unset, mirroring the wire contract for the
+    matching override messages.
+
+    Keys:
+      - `primary`, `policy`, `judge`: pydantic-ai role defaults
+        (`AGENT_PRIMARY_MODEL` / `AGENT_POLICY_MODEL` /
+        `EVAL_JUDGE_MODEL`). Drive the per-role dropdowns in
+        `ModelsPanel`.
+      - `codexPrimary`, `codexReasoningEffort`: codex-runtime
+        defaults (`CODEX_PRIMARY_MODEL` /
+        `CODEX_REASONING_EFFORT`). Drive the codex section of
+        `ModelsPanel` that's visible when the runtime selector is
+        on `AGENT_RUNTIME_CODEX`. The codex CLI's own internal
+        default kicks in below these envs (varies by codex-cli
+        version, today `gpt-5.x`), which the panel surfaces as
+        "(cli default)" when this field is empty.
     """
     return {
         "primary": os.environ.get("AGENT_PRIMARY_MODEL", ""),
         "policy": os.environ.get("AGENT_POLICY_MODEL", ""),
         "judge": os.environ.get("EVAL_JUDGE_MODEL", ""),
+        "codexPrimary": os.environ.get("CODEX_PRIMARY_MODEL", ""),
+        "codexReasoningEffort": os.environ.get(
+            "CODEX_REASONING_EFFORT", ""
+        ),
+    }
+
+
+# Codex-CLI supported model ids. Pinned in code rather than fetched
+# at runtime because codex-cli doesn't expose a list-models endpoint;
+# the accepted set lives in the CLI binary itself. Curated to match
+# what the CLI version in `second-brain/packages/codex-agent-driver`
+# accepts as of the current pin (codex-cli 0.130, May 2026):
+#   - gpt-5 family: gpt-5, gpt-5-mini, gpt-5-nano
+#   - o-series:     o3, o3-mini, o3-pro
+# Bumping the codex-cli pin AND the supported model set may diverge;
+# when that happens, refresh this list and the eval probe in
+# `model_assertions_codex.yaml` together. The empty string is the
+# "fall through to env / cli default" pick the panel uses to clear
+# a per-turn override.
+_CODEX_MODEL_CATALOG: list[dict[str, str]] = [
+    {"id": "gpt-5", "name": "gpt-5"},
+    {"id": "gpt-5-mini", "name": "gpt-5-mini (faster, cheaper)"},
+    {"id": "gpt-5-nano", "name": "gpt-5-nano (fastest, cheapest)"},
+    {"id": "o3", "name": "o3 (reasoning)"},
+    {"id": "o3-mini", "name": "o3-mini (reasoning, smaller)"},
+    {"id": "o3-pro", "name": "o3-pro (reasoning, larger)"},
+]
+# Codex reasoning-effort tiers the CLI accepts. Same pinning logic
+# as `_CODEX_MODEL_CATALOG`; the catalog and these tiers drift with
+# the CLI version.
+_CODEX_REASONING_EFFORTS: list[str] = ["low", "medium", "high"]
+
+
+@app.get("/agent/codex/models")
+async def codex_models() -> dict:
+    """Return the codex-CLI model catalog + reasoning-effort tiers
+    the panel renders in its codex section.
+
+    Codex CLI ships its supported model list inside the binary; there
+    is no list-models endpoint to proxy. We hand-curate the catalog
+    here to keep one source of truth on the agent-service side, and
+    bump it when the codex-cli pin in
+    `second-brain/packages/codex-agent-driver` changes.
+
+    Returns one canonical shape (mirroring the other `/agent/*/models`
+    endpoints): `{"reachable": True, "models": [{id, name}],
+    "reasoningEfforts": ["low", "medium", "high"]}`. `reachable` is
+    always `True` because the catalog is in-process; if a future
+    version routes through the codex daemon's own list endpoint we
+    keep the field for the failure mode.
+    """
+    return {
+        "reachable": True,
+        "models": _CODEX_MODEL_CATALOG,
+        "reasoningEfforts": _CODEX_REASONING_EFFORTS,
     }
 
 
@@ -406,16 +525,18 @@ async def agent_turn(request: Request) -> EventSourceResponse:
     if req.thread_id and not handles.threads.exists(req.thread_id):
         raise HTTPException(status_code=404, detail="thread_id not found")
 
-    # Resolve runtime. UNSPECIFIED on the wire falls back to
-    # PYDANTIC_AI server-side (chunk 3 backward-compat). On resume,
-    # the request's runtime must agree with the persisted lock from
+    # Resolve runtime. UNSPECIFIED on the wire falls back to the
+    # server-configured default (`AGENT_DEFAULT_RUNTIME` env, see
+    # `_resolve_default_runtime`); default-of-default is PYDANTIC_AI
+    # so the chunk 3 backward-compat shape holds. On resume, the
+    # request's runtime must agree with the persisted lock from
     # thread creation; mismatch is a 400 so the client can show
     # "start a new chat to switch runtime" without a silent runtime
     # swap.
     requested_runtime = (
         req.runtime
         if req.runtime != sess_pb.AGENT_RUNTIME_UNSPECIFIED
-        else sess_pb.AGENT_RUNTIME_PYDANTIC_AI
+        else _resolve_default_runtime()
     )
     if req.thread_id:
         stored_runtime = handles.threads.runtime_for(req.thread_id)
@@ -597,14 +718,19 @@ def _project_transcript(thread) -> hist_pb.ThreadTranscript:
     # Sort by int turn number, not string lexical order, so turn 10
     # comes after turn 9.
     turn_indices = sorted(thread.user_questions_per_turn.keys())
-    # `claims` is FIFO-capped at MAX_THREAD_CLAIMS across the whole
-    # thread; we don't track per-turn ownership so for chunk 4 we
-    # attach ALL approved claims to the LAST turn rather than
-    # silently losing them. Future enhancement: store claim ->
-    # turn_index mapping on AgentThread.
-    claims_by_turn: dict[int, list] = {t: [] for t in turn_indices}
-    if turn_indices:
-        claims_by_turn[turn_indices[-1]] = list(thread.claims)
+    # Per-turn claim attribution lives on `thread.claims_per_turn`
+    # (chunk 4 follow-up). For pre-chunk-4 state.json files that key
+    # is empty; in that case fall back to attaching the bounded
+    # flat `claims` list to the last turn so reopened legacy threads
+    # still render their chips somewhere instead of dropping them.
+    if thread.claims_per_turn:
+        claims_by_turn: dict[int, list] = {
+            t: list(thread.claims_per_turn.get(t, [])) for t in turn_indices
+        }
+    else:
+        claims_by_turn = {t: [] for t in turn_indices}
+        if turn_indices:
+            claims_by_turn[turn_indices[-1]] = list(thread.claims)
     for t in turn_indices:
         snap = thread.narratives_per_turn.get(t)
         turns.append(

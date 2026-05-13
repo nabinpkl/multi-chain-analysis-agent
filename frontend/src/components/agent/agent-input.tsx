@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useGraphFocus } from "@/stores/use-graph-focus";
 import { useAgentSwitches } from "@/stores/use-agent-switches";
 import { useLlmOverride } from "@/stores/use-llm-override";
+import { useCodexOverride } from "@/stores/use-codex-override";
 import {
   AgentRequestSchema,
   type AgentRequest,
@@ -18,6 +19,7 @@ import {
   ViewContextSchema,
 } from "@/lib/wire/multichain/wire/agent/v1/entity_pb";
 import {
+  CodexOverrideSchema,
   LlmOverrideSchema,
   RoleOverrideSchema,
 } from "@/lib/wire/multichain/wire/agent/v1/llm_pb";
@@ -53,6 +55,8 @@ export function AgentInput({
   const primaryOverride = useLlmOverride((s) => s.primary);
   const policyOverride = useLlmOverride((s) => s.policy);
   const judgeOverride = useLlmOverride((s) => s.judge);
+  const codexModelId = useCodexOverride((s) => s.modelId);
+  const codexReasoningEffort = useCodexOverride((s) => s.reasoningEffort);
 
   const inFlight = status.kind === "sending" || status.kind === "streaming";
 
@@ -106,6 +110,20 @@ export function AgentInput({
           }),
         })
       : undefined;
+    // Codex per-turn override (dev-only). Only attach the wire field
+    // when at least one knob is pinned; an unset CodexOverride means
+    // "fall through to CODEX_PRIMARY_MODEL / CODEX_REASONING_EFFORT
+    // env on the agent service." The backend ignores this field on
+    // pydantic-ai turns, so attaching it on a non-codex runtime is a
+    // no-op (we still skip it when empty just to keep prod traces
+    // clean).
+    const codexOverride =
+      codexModelId !== "" || codexReasoningEffort !== ""
+        ? create(CodexOverrideSchema, {
+            modelId: codexModelId,
+            reasoningEffort: codexReasoningEffort,
+          })
+        : undefined;
 
     const request = create(AgentRequestSchema, {
       userQuestion: trimmed,
@@ -117,6 +135,7 @@ export function AgentInput({
       switches,
       showTrace: builderViewOn,
       llmOverride,
+      codexOverride,
     });
     onSend(request);
     setText("");

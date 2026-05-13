@@ -235,6 +235,19 @@ pub struct AgentRequest {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
     )]
     pub runtime: ::buffa::EnumValue<AgentRuntime>,
+    /// Per-turn codex model + reasoning-effort override. Honored only
+    /// when `runtime == AGENT_RUNTIME_CODEX`; pydantic-ai turns ignore
+    /// this field. Empty / missing = fall through to
+    /// `CODEX_PRIMARY_MODEL` + `CODEX_REASONING_EFFORT` env vars on the
+    /// agent service. See `llm.proto` for shape.
+    ///
+    /// Field 9: `codex_override`
+    #[serde(
+        rename = "codexOverride",
+        alias = "codex_override",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub codex_override: ::buffa::MessageField<CodexOverride>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -250,6 +263,7 @@ impl ::core::fmt::Debug for AgentRequest {
             .field("run_type", &self.run_type)
             .field("llm_override", &self.llm_override)
             .field("runtime", &self.runtime)
+            .field("codex_override", &self.codex_override)
             .finish()
     }
 }
@@ -319,6 +333,14 @@ impl ::buffa::Message for AgentRequest {
             if val != 0 {
                 size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
             }
+        }
+        if self.codex_override.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.codex_override.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
@@ -393,6 +415,15 @@ impl ::buffa::Message for AgentRequest {
                     .encode(buf);
                 ::buffa::types::encode_int32(val, buf);
             }
+        }
+        if self.codex_override.is_set() {
+            ::buffa::encoding::Tag::new(
+                    9u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
+                .encode(buf);
+            ::buffa::encoding::encode_varint(__cache.consume_next() as u64, buf);
+            self.codex_override.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -506,6 +537,20 @@ impl ::buffa::Message for AgentRequest {
                     ::buffa::types::decode_int32(buf)?,
                 );
             }
+            9u32 => {
+                if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
+                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                        field_number: 9u32,
+                        expected: 2u8,
+                        actual: tag.wire_type() as u8,
+                    });
+                }
+                ::buffa::Message::merge_length_delimited(
+                    self.codex_override.get_or_insert_default(),
+                    buf,
+                    depth,
+                )?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, depth)?);
@@ -522,6 +567,7 @@ impl ::buffa::Message for AgentRequest {
         self.run_type.clear();
         self.llm_override = ::buffa::MessageField::none();
         self.runtime = ::buffa::EnumValue::from(0);
+        self.codex_override = ::buffa::MessageField::none();
         self.__buffa_unknown_fields.clear();
     }
 }

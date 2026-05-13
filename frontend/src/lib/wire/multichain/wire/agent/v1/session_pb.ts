@@ -6,7 +6,7 @@ import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2"
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import type { ViewContext } from "./entity_pb";
 import { file_multichain_wire_agent_v1_entity } from "./entity_pb";
-import type { LlmOverride } from "./llm_pb";
+import type { CodexOverride, LlmOverride } from "./llm_pb";
 import { file_multichain_wire_agent_v1_llm } from "./llm_pb";
 import type { AgentSwitches } from "./switches_pb";
 import { file_multichain_wire_agent_v1_switches } from "./switches_pb";
@@ -16,7 +16,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file multichain/wire/agent/v1/session.proto.
  */
 export const file_multichain_wire_agent_v1_session: GenFile = /*@__PURE__*/
-  fileDesc("CiZtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc2Vzc2lvbi5wcm90bxIYbXVsdGljaGFpbi53aXJlLmFnZW50LnYxItoCCgxBZ2VudFJlcXVlc3QSFQoNdXNlcl9xdWVzdGlvbhgBIAEoCRI2Cgdjb250ZXh0GAIgASgLMiUubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLlZpZXdDb250ZXh0EhYKCXRocmVhZF9pZBgDIAEoCUgAiAEBEjkKCHN3aXRjaGVzGAQgASgLMicubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkFnZW50U3dpdGNoZXMSEgoKc2hvd190cmFjZRgFIAEoCBIQCghydW5fdHlwZRgGIAEoCRI7CgxsbG1fb3ZlcnJpZGUYByABKAsyJS5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuTGxtT3ZlcnJpZGUSNwoHcnVudGltZRgIIAEoDjImLm11bHRpY2hhaW4ud2lyZS5hZ2VudC52MS5BZ2VudFJ1bnRpbWVCDAoKX3RocmVhZF9pZCJuCglBZ2VudERvbmUSEgoKZWxhcHNlZF9tcxgBIAEoDRIQCgh0cmFjZV9pZBgCIAEoCRI7Cgxyb2xlX3RpbWluZ3MYAyABKAsyJS5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuUm9sZVRpbWluZ3MiRgoLUm9sZVRpbWluZ3MSEgoKcHJpbWFyeV9tcxgBIAEoDRIRCglwb2xpY3lfbXMYAiABKA0SEAoIanVkZ2VfbXMYAyABKA0qZQoMQWdlbnRSdW50aW1lEh0KGUFHRU5UX1JVTlRJTUVfVU5TUEVDSUZJRUQQABIdChlBR0VOVF9SVU5USU1FX1BZREFOVElDX0FJEAESFwoTQUdFTlRfUlVOVElNRV9DT0RFWBACYgZwcm90bzM", [file_multichain_wire_agent_v1_entity, file_multichain_wire_agent_v1_llm, file_multichain_wire_agent_v1_switches]);
+  fileDesc("CiZtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvc2Vzc2lvbi5wcm90bxIYbXVsdGljaGFpbi53aXJlLmFnZW50LnYxIpsDCgxBZ2VudFJlcXVlc3QSFQoNdXNlcl9xdWVzdGlvbhgBIAEoCRI2Cgdjb250ZXh0GAIgASgLMiUubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLlZpZXdDb250ZXh0EhYKCXRocmVhZF9pZBgDIAEoCUgAiAEBEjkKCHN3aXRjaGVzGAQgASgLMicubXVsdGljaGFpbi53aXJlLmFnZW50LnYxLkFnZW50U3dpdGNoZXMSEgoKc2hvd190cmFjZRgFIAEoCBIQCghydW5fdHlwZRgGIAEoCRI7CgxsbG1fb3ZlcnJpZGUYByABKAsyJS5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuTGxtT3ZlcnJpZGUSNwoHcnVudGltZRgIIAEoDjImLm11bHRpY2hhaW4ud2lyZS5hZ2VudC52MS5BZ2VudFJ1bnRpbWUSPwoOY29kZXhfb3ZlcnJpZGUYCSABKAsyJy5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuQ29kZXhPdmVycmlkZUIMCgpfdGhyZWFkX2lkIm4KCUFnZW50RG9uZRISCgplbGFwc2VkX21zGAEgASgNEhAKCHRyYWNlX2lkGAIgASgJEjsKDHJvbGVfdGltaW5ncxgDIAEoCzIlLm11bHRpY2hhaW4ud2lyZS5hZ2VudC52MS5Sb2xlVGltaW5ncyJGCgtSb2xlVGltaW5ncxISCgpwcmltYXJ5X21zGAEgASgNEhEKCXBvbGljeV9tcxgCIAEoDRIQCghqdWRnZV9tcxgDIAEoDSplCgxBZ2VudFJ1bnRpbWUSHQoZQUdFTlRfUlVOVElNRV9VTlNQRUNJRklFRBAAEh0KGUFHRU5UX1JVTlRJTUVfUFlEQU5USUNfQUkQARIXChNBR0VOVF9SVU5USU1FX0NPREVYEAJiBnByb3RvMw", [file_multichain_wire_agent_v1_entity, file_multichain_wire_agent_v1_llm, file_multichain_wire_agent_v1_switches]);
 
 /**
  * User question + ViewContext. `thread_id` is None on the first
@@ -91,6 +91,17 @@ export type AgentRequest = Message<"multichain.wire.agent.v1.AgentRequest"> & {
    * @generated from field: multichain.wire.agent.v1.AgentRuntime runtime = 8;
    */
   runtime: AgentRuntime;
+
+  /**
+   * Per-turn codex model + reasoning-effort override. Honored only
+   * when `runtime == AGENT_RUNTIME_CODEX`; pydantic-ai turns ignore
+   * this field. Empty / missing = fall through to
+   * `CODEX_PRIMARY_MODEL` + `CODEX_REASONING_EFFORT` env vars on the
+   * agent service. See `llm.proto` for shape.
+   *
+   * @generated from field: multichain.wire.agent.v1.CodexOverride codex_override = 9;
+   */
+  codexOverride?: CodexOverride | undefined;
 };
 
 /**

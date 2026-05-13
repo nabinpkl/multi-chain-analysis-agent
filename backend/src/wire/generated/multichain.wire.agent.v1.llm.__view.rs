@@ -462,3 +462,186 @@ impl<'v> ::buffa::DefaultViewInstance for RoleOverrideView<'v> {
             ))
     }
 }
+/// Per-turn override for the codex runtime's primary model + reasoning
+/// effort. Lives separately from `LlmOverride` because codex's tool
+/// surface and provider routing are not symmetric with the
+/// openrouter/gemini/local triad the pydantic-ai panel exposes; codex
+/// always routes through codex-cli, and the only knobs that change
+/// turn-to-turn are the model id and the reasoning effort it asks
+/// for. Empty fields fall back to `CODEX_PRIMARY_MODEL` /
+/// `CODEX_REASONING_EFFORT` env on the agent-service side (which in
+/// turn fall back to codex-cli's own defaults when those are unset).
+///
+/// The policy + judge roles stay on the `LlmOverride` panel because
+/// the constitution agent runs server-side via pydantic-ai regardless
+/// of the primary runtime, and the judge is eval-only.
+#[derive(Clone, Debug, Default)]
+pub struct CodexOverrideView<'a> {
+    /// Codex-CLI model id (e.g. "gpt-5", "gpt-5-mini", "gpt-5-nano",
+    /// "o3", "o3-mini"). Empty = fall through to env / cli default.
+    ///
+    /// Field 1: `model_id`
+    pub model_id: &'a str,
+    /// Codex-CLI reasoning effort: "low" | "medium" | "high". Empty =
+    /// fall through to env / cli default. Unrecognized values are
+    /// forwarded as-is (codex-cli rejects them with a clear error;
+    /// we don't gatekeep here so adding new tiers doesn't need a
+    /// proto bump).
+    ///
+    /// Field 2: `reasoning_effort`
+    pub reasoning_effort: &'a str,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> CodexOverrideView<'a> {
+    /// Decode from `buf`, enforcing a recursion depth limit for nested messages.
+    ///
+    /// Called by [`::buffa::MessageView::decode_view`] with [`::buffa::RECURSION_LIMIT`]
+    /// and by generated sub-message decode arms with `depth - 1`.
+    ///
+    /// **Not part of the public API.** Named with a leading underscore to
+    /// signal that it is for generated-code use only.
+    #[doc(hidden)]
+    pub fn _decode_depth(
+        buf: &'a [u8],
+        depth: u32,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let mut view = Self::default();
+        view._merge_into_view(buf, depth)?;
+        ::core::result::Result::Ok(view)
+    }
+    /// Merge fields from `buf` into this view (proto merge semantics).
+    ///
+    /// Repeated fields append; singular fields last-wins; singular
+    /// MESSAGE fields merge recursively. Used by sub-message decode
+    /// arms when the same field appears multiple times on the wire.
+    ///
+    /// **Not part of the public API.**
+    #[doc(hidden)]
+    pub fn _merge_into_view(
+        &mut self,
+        buf: &'a [u8],
+        depth: u32,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        let _ = depth;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur: &'a [u8] = buf;
+        while !cur.is_empty() {
+            let before_tag = cur;
+            let tag = ::buffa::encoding::Tag::decode(&mut cur)?;
+            match tag.field_number() {
+                1u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 1u32,
+                            expected: 2u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    view.model_id = ::buffa::types::borrow_str(&mut cur)?;
+                }
+                2u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 2u32,
+                            expected: 2u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    view.reasoning_effort = ::buffa::types::borrow_str(&mut cur)?;
+                }
+                _ => {
+                    ::buffa::encoding::skip_field_depth(tag, &mut cur, depth)?;
+                    let span_len = before_tag.len() - cur.len();
+                    view.__buffa_unknown_fields.push_raw(&before_tag[..span_len]);
+                }
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+}
+impl<'a> ::buffa::MessageView<'a> for CodexOverrideView<'a> {
+    type Owned = super::super::CodexOverride;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        Self::_decode_depth(buf, ::buffa::RECURSION_LIMIT)
+    }
+    fn decode_view_with_limit(
+        buf: &'a [u8],
+        depth: u32,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        Self::_decode_depth(buf, depth)
+    }
+    /// Convert this view to the owned message type.
+    #[allow(clippy::redundant_closure, clippy::useless_conversion)]
+    #[allow(clippy::needless_update)]
+    fn to_owned_message(&self) -> super::super::CodexOverride {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        super::super::CodexOverride {
+            model_id: self.model_id.to_string(),
+            reasoning_effort: self.reasoning_effort.to_string(),
+            __buffa_unknown_fields: self
+                .__buffa_unknown_fields
+                .to_owned()
+                .unwrap_or_default()
+                .into(),
+            ..::core::default::Default::default()
+        }
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for CodexOverrideView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.model_id.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.model_id) as u32;
+        }
+        if !self.reasoning_effort.is_empty() {
+            size
+                += 1u32
+                    + ::buffa::types::string_encoded_len(&self.reasoning_effort) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.model_id.is_empty() {
+            ::buffa::encoding::Tag::new(
+                    1u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
+                .encode(buf);
+            ::buffa::types::encode_string(&self.model_id, buf);
+        }
+        if !self.reasoning_effort.is_empty() {
+            ::buffa::encoding::Tag::new(
+                    2u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
+                .encode(buf);
+            ::buffa::types::encode_string(&self.reasoning_effort, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+impl<'v> ::buffa::DefaultViewInstance for CodexOverrideView<'v> {
+    fn default_view_instance<'a>() -> &'a Self
+    where
+        Self: 'a,
+    {
+        static VALUE: ::buffa::__private::OnceBox<CodexOverrideView<'static>> = ::buffa::__private::OnceBox::new();
+        VALUE
+            .get_or_init(|| ::buffa::alloc::boxed::Box::new(
+                <CodexOverrideView<'static>>::default(),
+            ))
+    }
+}

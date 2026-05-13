@@ -31,6 +31,10 @@ from pydantic_ai import Agent
 
 from agent_service import llm
 from agent_service.llm_retry import with_provider_retry
+from agent_service.prompts.composer import (
+    DEFAULT_LIVE_WINDOW_SECS,
+    substitute_live_window,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -79,11 +83,28 @@ class _Deps:
     context beyond the prompt content itself."""
 
 
-def _system_prompt() -> str:
-    return _PROMPT_PATH.read_text(encoding="utf-8")
+def _system_prompt(live_window_secs: int = DEFAULT_LIVE_WINDOW_SECS) -> str:
+    """Load `policy_v4.txt` and substitute the `${LIVE_WINDOW_HUMAN}`
+    placeholder with the human string for `live_window_secs`.
+
+    Shares the formatter with `prompts/composer.substitute_live_window`
+    so the constitution gate's framing of "the agent analyzes a
+    ${window} live window" stays in lockstep with the primary agent's
+    "user is viewing the last ${window} of transfers." If the two
+    drift, the gate retracts correct narratives on any non-default
+    window. Default 60s reproduces the historical prompt content
+    byte-for-byte at run time.
+    """
+    return substitute_live_window(
+        _PROMPT_PATH.read_text(encoding="utf-8"), live_window_secs
+    )
 
 
-def build_constitution_agent(*, llm_override=None) -> Agent[_Deps, ConstitutionVerdict]:
+def build_constitution_agent(
+    *,
+    llm_override=None,
+    live_window_secs: int = DEFAULT_LIVE_WINDOW_SECS,
+) -> Agent[_Deps, ConstitutionVerdict]:
     """Construct the policy gate agent. One model call per invocation;
     no tools; structured output via Pydantic AI's native output_type.
 
@@ -95,12 +116,20 @@ def build_constitution_agent(*, llm_override=None) -> Agent[_Deps, ConstitutionV
     a specific provider + model id for this turn; populated by the
     loop driver from `request.llm_override.policy`. None = production
     preset.
+
+    `live_window_secs` is threaded into the policy prompt's
+    `${LIVE_WINDOW_HUMAN}` placeholder so the gate's framing matches
+    whatever window the snapshot was materialized against. Lifespan
+    startup builds with the 60s default; the loop driver rebuilds
+    per-turn when a request widens the window. Agent setup is sub-
+    millisecond (no I/O), so per-turn rebuild is cheap compared to
+    the LLM call that follows.
     """
     return Agent(
         model=llm.make_model("policy", override=llm_override),
         deps_type=_Deps,
         output_type=ConstitutionVerdict,
-        system_prompt=_system_prompt(),
+        system_prompt=_system_prompt(live_window_secs),
     )
 
 

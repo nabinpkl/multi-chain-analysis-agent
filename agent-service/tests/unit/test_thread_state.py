@@ -17,7 +17,7 @@ from agent_service.thread_state import (
     ThreadRegistry,
     TurnToolCallRecord,
 )
-from multichain.wire.agent.v1 import session_pb2
+from multichain.wire.agent.v1 import claim_pb2, session_pb2
 from multichain.wire.shared.v1 import provenance_pb2
 
 
@@ -194,11 +194,62 @@ def test_pre_chunk4_state_dict_loads_with_defaults():
         "bindings": {},
         "tool_calls_per_turn": {},
         "user_questions_per_turn": {},
-        # NO narratives_per_turn, NO archived, NO schema_version.
+        # NO narratives_per_turn, NO archived, NO schema_version,
+        # NO claims_per_turn.
     }
     loaded = AgentThread.from_state_dict(legacy)
     assert loaded.narratives_per_turn == {}
     assert loaded.archived is False
+    assert loaded.claims_per_turn == {}
+
+
+def _make_claim(thread_id: str, headline: str) -> claim_pb2.Claim:
+    claim = claim_pb2.Claim(
+        id=f"claim-{headline}",
+        thread_id=thread_id,
+        kind=claim_pb2.CLAIM_KIND_PROFILE,
+        headline=headline,
+        body_markdown=f"body for {headline}",
+    )
+    claim.policy_verdict.approved.SetInParent()
+    return claim
+
+
+def test_claims_per_turn_round_trip_preserves_attribution():
+    """Two turns each emit their own claim; after a state.json
+    round-trip the per-turn ownership map keys back onto the same
+    turns so the transcript replay path can render each turn's chips
+    on its own bubble (chunk 4 follow-up; prior to this the flat
+    claims list was attached to the last turn only)."""
+    t = _make_thread()
+    t.record_turn_user_question(0, "profile X")
+    t.record_turn_user_question(1, "profile Y")
+    c0 = _make_claim("t1", "X is a whale")
+    c1 = _make_claim("t1", "Y is a router")
+    t.record_claim(c0)
+    t.record_turn_claim(0, c0)
+    t.record_claim(c1)
+    t.record_turn_claim(1, c1)
+
+    loaded = AgentThread.from_state_dict(t.to_state_dict())
+
+    assert set(loaded.claims_per_turn.keys()) == {0, 1}
+    assert len(loaded.claims_per_turn[0]) == 1
+    assert loaded.claims_per_turn[0][0].headline == "X is a whale"
+    assert loaded.claims_per_turn[1][0].headline == "Y is a router"
+
+
+def test_claims_per_turn_evicts_oldest_turn():
+    """FIFO eviction by turn-count, matching the tool-call /
+    user-question maps. Once the cap is hit the smallest turn's
+    bucket falls off; surviving buckets keep their claim contents
+    intact."""
+    t = _make_thread()
+    for turn in range(MAX_THREAD_TOOL_CALL_TURNS + 4):
+        t.record_turn_claim(turn, _make_claim("t1", f"claim-{turn}"))
+    assert len(t.claims_per_turn) == MAX_THREAD_TOOL_CALL_TURNS
+    # First four turns dropped (0, 1, 2, 3). Smallest survivor = 4.
+    assert min(t.claims_per_turn.keys()) == 4
 
 
 def test_persist_writes_summary_sidecar(tmp_path: Path):

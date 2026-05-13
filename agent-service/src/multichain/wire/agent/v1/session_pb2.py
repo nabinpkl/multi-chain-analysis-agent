@@ -27,19 +27,19 @@ from multichain.wire.agent.v1 import llm_pb2 as multichain_dot_wire_dot_agent_do
 from multichain.wire.agent.v1 import switches_pb2 as multichain_dot_wire_dot_agent_dot_v1_dot_switches__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n&multichain/wire/agent/v1/session.proto\x12\x18multichain.wire.agent.v1\x1a%multichain/wire/agent/v1/entity.proto\x1a\"multichain/wire/agent/v1/llm.proto\x1a\'multichain/wire/agent/v1/switches.proto\"\xaf\x03\n\x0c\x41gentRequest\x12#\n\ruser_question\x18\x01 \x01(\tR\x0cuserQuestion\x12?\n\x07\x63ontext\x18\x02 \x01(\x0b\x32%.multichain.wire.agent.v1.ViewContextR\x07\x63ontext\x12 \n\tthread_id\x18\x03 \x01(\tH\x00R\x08threadId\x88\x01\x01\x12\x43\n\x08switches\x18\x04 \x01(\x0b\x32\'.multichain.wire.agent.v1.AgentSwitchesR\x08switches\x12\x1d\n\nshow_trace\x18\x05 \x01(\x08R\tshowTrace\x12\x19\n\x08run_type\x18\x06 \x01(\tR\x07runType\x12H\n\x0cllm_override\x18\x07 \x01(\x0b\x32%.multichain.wire.agent.v1.LlmOverrideR\x0bllmOverride\x12@\n\x07runtime\x18\x08 \x01(\x0e\x32&.multichain.wire.agent.v1.AgentRuntimeR\x07runtimeB\x0c\n\n_thread_id\"\x8f\x01\n\tAgentDone\x12\x1d\n\nelapsed_ms\x18\x01 \x01(\rR\telapsedMs\x12\x19\n\x08trace_id\x18\x02 \x01(\tR\x07traceId\x12H\n\x0crole_timings\x18\x03 \x01(\x0b\x32%.multichain.wire.agent.v1.RoleTimingsR\x0broleTimings\"d\n\x0bRoleTimings\x12\x1d\n\nprimary_ms\x18\x01 \x01(\rR\tprimaryMs\x12\x1b\n\tpolicy_ms\x18\x02 \x01(\rR\x08policyMs\x12\x19\n\x08judge_ms\x18\x03 \x01(\rR\x07judgeMs*e\n\x0c\x41gentRuntime\x12\x1d\n\x19\x41GENT_RUNTIME_UNSPECIFIED\x10\x00\x12\x1d\n\x19\x41GENT_RUNTIME_PYDANTIC_AI\x10\x01\x12\x17\n\x13\x41GENT_RUNTIME_CODEX\x10\x02\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n&multichain/wire/agent/v1/session.proto\x12\x18multichain.wire.agent.v1\x1a%multichain/wire/agent/v1/entity.proto\x1a\"multichain/wire/agent/v1/llm.proto\x1a\'multichain/wire/agent/v1/switches.proto\"\xff\x03\n\x0c\x41gentRequest\x12#\n\ruser_question\x18\x01 \x01(\tR\x0cuserQuestion\x12?\n\x07\x63ontext\x18\x02 \x01(\x0b\x32%.multichain.wire.agent.v1.ViewContextR\x07\x63ontext\x12 \n\tthread_id\x18\x03 \x01(\tH\x00R\x08threadId\x88\x01\x01\x12\x43\n\x08switches\x18\x04 \x01(\x0b\x32\'.multichain.wire.agent.v1.AgentSwitchesR\x08switches\x12\x1d\n\nshow_trace\x18\x05 \x01(\x08R\tshowTrace\x12\x19\n\x08run_type\x18\x06 \x01(\tR\x07runType\x12H\n\x0cllm_override\x18\x07 \x01(\x0b\x32%.multichain.wire.agent.v1.LlmOverrideR\x0bllmOverride\x12@\n\x07runtime\x18\x08 \x01(\x0e\x32&.multichain.wire.agent.v1.AgentRuntimeR\x07runtime\x12N\n\x0e\x63odex_override\x18\t \x01(\x0b\x32\'.multichain.wire.agent.v1.CodexOverrideR\rcodexOverrideB\x0c\n\n_thread_id\"\x8f\x01\n\tAgentDone\x12\x1d\n\nelapsed_ms\x18\x01 \x01(\rR\telapsedMs\x12\x19\n\x08trace_id\x18\x02 \x01(\tR\x07traceId\x12H\n\x0crole_timings\x18\x03 \x01(\x0b\x32%.multichain.wire.agent.v1.RoleTimingsR\x0broleTimings\"d\n\x0bRoleTimings\x12\x1d\n\nprimary_ms\x18\x01 \x01(\rR\tprimaryMs\x12\x1b\n\tpolicy_ms\x18\x02 \x01(\rR\x08policyMs\x12\x19\n\x08judge_ms\x18\x03 \x01(\rR\x07judgeMs*e\n\x0c\x41gentRuntime\x12\x1d\n\x19\x41GENT_RUNTIME_UNSPECIFIED\x10\x00\x12\x1d\n\x19\x41GENT_RUNTIME_PYDANTIC_AI\x10\x01\x12\x17\n\x13\x41GENT_RUNTIME_CODEX\x10\x02\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'multichain.wire.agent.v1.session_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_AGENTRUNTIME']._serialized_start=866
-  _globals['_AGENTRUNTIME']._serialized_end=967
+  _globals['_AGENTRUNTIME']._serialized_start=946
+  _globals['_AGENTRUNTIME']._serialized_end=1047
   _globals['_AGENTREQUEST']._serialized_start=185
-  _globals['_AGENTREQUEST']._serialized_end=616
-  _globals['_AGENTDONE']._serialized_start=619
-  _globals['_AGENTDONE']._serialized_end=762
-  _globals['_ROLETIMINGS']._serialized_start=764
-  _globals['_ROLETIMINGS']._serialized_end=864
+  _globals['_AGENTREQUEST']._serialized_end=696
+  _globals['_AGENTDONE']._serialized_start=699
+  _globals['_AGENTDONE']._serialized_end=842
+  _globals['_ROLETIMINGS']._serialized_start=844
+  _globals['_ROLETIMINGS']._serialized_end=944
 # @@protoc_insertion_point(module_scope)

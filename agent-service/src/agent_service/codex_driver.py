@@ -43,9 +43,12 @@ plan's "out of scope" section or marked for a 3.5 follow-up):
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import sqlite3
 import time
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -71,6 +74,7 @@ from agent_service.core.run import (
     _claims_to_judgement_payload,
     _normalize_verdict,
     _set_retracted,
+    resolve_narrative_text,
 )
 from agent_service.diff_replay import run_repeat_path
 from agent_service.repeat_detector import detect_repeat
@@ -79,12 +83,20 @@ from agent_service.llm_retry import begin_role_timing_capture, with_provider_ret
 from agent_service.policy import constitution as constitution_module
 from agent_service.policy import structural as structural_module
 from agent_service.policy.binding_store import build_binding
-from agent_service.policy.constitution import judge_narrative
+from agent_service.policy.constitution import (
+    build_constitution_agent,
+    judge_narrative,
+)
 from agent_service.policy.placeholder import validate_refs
 from agent_service.policy.structural import verify_chip_values
+from agent_service.prompts.composer import (
+    compose_system_prompt,
+    drops_from_switches,
+)
 from multichain.wire.shared.v1 import provenance_pb2
 from agent_service.thread_state import AgentThread, NarrativeSnapshot
 from multichain.wire.agent.v1 import (
+    claim_pb2,
     narrative_pb2,
     session_pb2,
     sse_pb2,
@@ -98,6 +110,91 @@ _tracer = trace.get_tracer(__name__)
 # the pydantic-ai path uses; one value across runtimes so probes
 # can group on `gate.placeholder.version` without runtime branching.
 _PLACEHOLDER_VERSION = "v1"
+
+# Codex-specific tool-surface delta vs `system_v4.txt`. The system
+# prompt is authored for the pydantic-ai surface which exposes
+# `emit_claim` (singular, called once per claim); codex's MCP surface
+# exposes `emit_claims` (batched plural, one call per turn). We
+# substitute the tool name in the composed prompt below so codex sees
+# a single, correct name everywhere, then add this footer to encode
+# the batching rule the MCP schema can't express on its own ("one
+# call per turn, all claims"). Anything else policy-shaped MUST live
+# in `system_v4.txt` so both runtimes inherit it.
+_CODEX_EMIT_TOOL_NAME = "emit_claims"
+_PYDANTIC_EMIT_TOOL_NAME = "emit_claim"
+_CODEX_TOOL_SURFACE_FOOTER = (
+    "<codex_tool_surface>\n"
+    "`emit_claims` is batched plural: pass ALL claims for this turn "
+    "in ONE call. Do not split chips across multiple invocations. "
+    "Every read-side tool that accepts `snapshot_id` MUST receive "
+    "the value provided in the snapshot pin below.\n"
+    "</codex_tool_surface>"
+)
+
+
+def _adapt_system_prompt_for_codex(text: str) -> str:
+    """Rewrite the pydantic-ai-shaped tool name in the composed system
+    prompt to the codex tool surface name. Three backtick-quoted
+    mentions live in `prompts/system_v4.txt`; substituting them keeps
+    the codex prompt consistent (the model never sees the wrong tool
+    name) while preserving a single authored source for policy. If
+    `system_v4.txt` gains new tool-name mentions, this substitution
+    catches them automatically because the match is on the backtick-
+    quoted form.
+    """
+    return text.replace(
+        f"`{_PYDANTIC_EMIT_TOOL_NAME}`",
+        f"`{_CODEX_EMIT_TOOL_NAME}`",
+    )
+
+# Tool-name to primitive-span-name mapping. The pydantic-ai path
+# emits these spans via `primitive_client.py` (one per `await`
+# against the data plane). The codex path doesn't go through
+# `primitive_client`  codex's own MCP client talks straight to
+# `backend/src/mcp.rs`  so the spans are missing today. We
+# synthesize equivalents from TOOL_STARTED/TOOL_COMPLETED events
+# so eval probes (`tool_called_with_args`,
+# `span_latency_p50_under(mcae.primitive.wallet_profile)`) treat
+# both runtimes uniformly. Only the three read-side primitives are
+# wrapped; `emit_claims` is the write-side channel and gets its own
+# `mcae.claim.emitted` span shape (chunk 3.5 future).
+_PRIMITIVE_SPAN_NAMES: dict[str, str] = {
+    "wallet_profile": spans.PRIMITIVE_WALLET_PROFILE,
+    "community_summary": spans.PRIMITIVE_COMMUNITY_SUMMARY,
+    "get_token_info": spans.PRIMITIVE_GET_TOKEN_INFO,
+}
+
+
+def _capped_json(value: Any, cap: int = spans.PRIMITIVE_PAYLOAD_MAX_BYTES) -> str:
+    """Serialize `value` to JSON and cap it at `cap` bytes, matching
+    the convention used by `primitive_client._proto_to_capped_json`.
+    On overflow the returned string ends with the literal
+    ` ...[truncated, total=N]` so SQL filters can identify caps.
+    """
+    if value is None:
+        return ""
+    try:
+        s = json.dumps(value, default=str, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return ""
+    if len(s.encode("utf-8")) <= cap:
+        return s
+    # Re-encode the prefix to a safe boundary so the truncation marker
+    # appended below doesn't slice through a multi-byte char.
+    encoded = s.encode("utf-8")
+    prefix = encoded[:cap].decode("utf-8", errors="ignore")
+    return f"{prefix} ...[truncated, total={len(encoded)}]"
+
+
+def _digest12(payload: str | bytes | None) -> str:
+    """sha256 → first 12 hex chars. Same shape `primitive_client`
+    stamps on `mcae.primitive.output_digest` so cross-runtime
+    digest comparison works (identical tool inputs produce
+    identical digests regardless of runtime)."""
+    if payload is None:
+        return ""
+    raw = payload.encode("utf-8") if isinstance(payload, str) else payload
+    return hashlib.sha256(raw).hexdigest()[:12]
 
 # Generic error message; surfaces to user on failure. Raw exception
 # crosses the wire only when `debug_public` is set.
@@ -344,6 +441,62 @@ def _record_tool_output_binding(
     thread.bindings.record(binding)
 
 
+def _read_codex_model(
+    *,
+    codex_home_root: Path | None,
+    thread_id: str,
+    provider_thread_id: str,
+) -> str | None:
+    """Read the model name codex actually used for this thread from
+    its sqlite. Codex persists `(id, model, model_provider, ...)`
+    rows in `state_5.sqlite::threads` keyed by the codex-side
+    provider_thread_id; we recover that id from the
+    `MESSAGE_COMPLETED` event chain and look it up here so the
+    `gen_ai.request.model` attribute we stamp on the turn span
+    matches the actual model codex routed against (e.g. `gpt-5.5`
+    vs the developer-instruction text claiming `gpt-5-codex`).
+
+    All errors collapse to `None`. The caller stamps tokens
+    without a model when this returns None; Langfuse then shows
+    usage but no auto-cost. This is the soft-fail path  one
+    sqlite read out of band shouldn't be able to break a turn.
+
+    Codex runs its sqlite in WAL mode, so this read does not
+    block while codex holds the same db open from its subprocess
+    side. Read-only `mode=ro` is belt-and-suspenders to make that
+    contract explicit.
+    """
+    if codex_home_root is None or not provider_thread_id:
+        return None
+    db_path = (
+        Path(codex_home_root)
+        / "local"
+        / thread_id
+        / "sqlite"
+        / "state_5.sqlite"
+    )
+    if not db_path.exists():
+        return None
+    try:
+        uri = f"file:{db_path}?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=0.5) as conn:
+            row = conn.execute(
+                "SELECT model FROM threads WHERE id = ?",
+                (provider_thread_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        model = row[0]
+        return str(model) if model else None
+    except sqlite3.Error as e:
+        log.warning(
+            "codex_model_sqlite_read_failed",
+            thread_id=thread_id,
+            error=str(e),
+        )
+        return None
+
+
 def _pump_codex_events(
     *,
     driver: CodexAppServerDriver,
@@ -411,60 +564,123 @@ def _emit_claims_from_drain(
             thread_id=thread_id,
             turn_started_at_ms=turn_started_at_ms,
         )
-        if not claim.provenance:
-            _set_retracted(
-                claim, "claim has empty provenance; cite at least one entity"
-            )
-            out.append((claim, False))
-            continue
-        with _tracer.start_as_current_span(spans.GATE_PLACEHOLDER) as g:
-            g.set_attribute(spans.Attrs.GATE_VERSION, _PLACEHOLDER_VERSION)
-            ref_err = validate_refs(
-                claim.body_markdown, len(claim.provenance)
-            )
-            if ref_err is not None:
-                g.set_attribute(
-                    spans.Attrs.GATE_VERDICT, spans.VERDICT_RETRACTED
-                )
-                g.set_attribute(
-                    spans.Attrs.GATE_REASON, ref_err.to_human_string()
-                )
-                _set_retracted(claim, ref_err.to_human_string())
-                out.append((claim, False))
-                continue
-            g.set_attribute(spans.Attrs.GATE_VERDICT, spans.VERDICT_APPROVED)
 
-        # Chunk 3.5 item 6: structural value-compare gate. Runs on
-        # codex claims now that `_record_tool_output_binding`
-        # populates `thread.bindings` from the {value, provenance}
-        # envelope. Only retracts when `dont_fabricate` is on; when
-        # off the gate observes-without-acting so the ablation
-        # suite can compare gated vs ungated codex behavior.
-        with _tracer.start_as_current_span(spans.GATE_STRUCTURAL) as g:
-            g.set_attribute(spans.Attrs.GATE_VERSION, structural_module.VERSION)
-            g.set_attribute(
-                spans.Attrs.GATE_BINDING_SIZE,
-                len(thread.bindings.all_numbers()),
+        # Phase-2 eval observability. Wrap each claim in
+        # `mcae.claim.emitted` so the gate spans nest underneath
+        # (matching the pydantic-ai trace shape in
+        # `core/run.py:311`). Stamping `mcae.claim.source_kind`
+        # makes `claim_grounded_in(source_kind=primitive)` work
+        # on codex; without this attribute the probe vacuously
+        # passed because no spans matched. Final
+        # `mcae.claim.verdict` is set right before each `out.append`
+        # so a single span query gives the per-claim outcome
+        # history regardless of which gate (or pydantic
+        # validation) retracted it.
+        with _tracer.start_as_current_span(spans.CLAIM_EMITTED) as claim_span:
+            claim_span.set_attribute(spans.Attrs.CLAIM_ID, claim.id)
+            claim_span.set_attribute(
+                spans.Attrs.CLAIM_KIND, claim_pb2.ClaimKind.Name(claim.kind)
             )
-            struct_err = verify_chip_values(
-                list(claim.provenance), thread.bindings
+            claim_span.set_attribute(
+                spans.Attrs.CLAIM_HEADLINE, claim.headline
             )
-            if struct_err is not None and dont_fabricate:
-                g.set_attribute(
-                    spans.Attrs.GATE_VERDICT, spans.VERDICT_RETRACTED
+            claim_span.set_attribute(
+                spans.Attrs.CLAIM_PROVENANCE_COUNT, len(claim.provenance)
+            )
+            claim_span.set_attribute(
+                spans.Attrs.CLAIM_BODY_CHARS, len(claim.body_markdown)
+            )
+            # `primitive` because the codex MCP surface today is
+                # `wallet_profile` + `community_summary` +
+                # `get_token_info`  all typed primitives whose
+                # output envelopes feed the binding store. When
+                # codex eventually gets `sql_explore`-style tools
+                # the source_kind for those claims becomes
+                # `exploratory`; this stays the only call-site
+                # that needs the conditional.
+            claim_span.set_attribute(
+                spans.Attrs.CLAIM_SOURCE_KIND,
+                spans.SOURCE_KIND_PRIMITIVE,
+            )
+
+            if not claim.provenance:
+                _set_retracted(
+                    claim,
+                    "claim has empty provenance; cite at least one entity",
                 )
-                g.set_attribute(
-                    spans.Attrs.GATE_REASON, struct_err.to_human_string()
+                claim_span.set_attribute(
+                    spans.Attrs.CLAIM_VERDICT, spans.VERDICT_RETRACTED
                 )
-                g.set_attribute(
-                    spans.Attrs.GATE_FAILED_CHIP,
-                    str(getattr(struct_err, "kind", "unknown")),
-                )
-                _set_retracted(claim, struct_err.to_human_string())
                 out.append((claim, False))
                 continue
-            g.set_attribute(spans.Attrs.GATE_VERDICT, spans.VERDICT_APPROVED)
-        out.append((claim, True))
+            with _tracer.start_as_current_span(spans.GATE_PLACEHOLDER) as g:
+                g.set_attribute(
+                    spans.Attrs.GATE_VERSION, _PLACEHOLDER_VERSION
+                )
+                ref_err = validate_refs(
+                    claim.body_markdown, len(claim.provenance)
+                )
+                if ref_err is not None:
+                    g.set_attribute(
+                        spans.Attrs.GATE_VERDICT, spans.VERDICT_RETRACTED
+                    )
+                    g.set_attribute(
+                        spans.Attrs.GATE_REASON, ref_err.to_human_string()
+                    )
+                    _set_retracted(claim, ref_err.to_human_string())
+                    claim_span.set_attribute(
+                        spans.Attrs.CLAIM_VERDICT, spans.VERDICT_RETRACTED
+                    )
+                    out.append((claim, False))
+                    continue
+                g.set_attribute(
+                    spans.Attrs.GATE_VERDICT, spans.VERDICT_APPROVED
+                )
+
+            # Chunk 3.5 item 6: structural value-compare gate.
+            # Runs on codex claims now that
+            # `_record_tool_output_binding` populates
+            # `thread.bindings` from the {value, provenance}
+            # envelope. Only retracts when `dont_fabricate` is on;
+            # when off the gate observes-without-acting so the
+            # ablation suite can compare gated vs ungated codex
+            # behavior.
+            with _tracer.start_as_current_span(spans.GATE_STRUCTURAL) as g:
+                g.set_attribute(
+                    spans.Attrs.GATE_VERSION, structural_module.VERSION
+                )
+                g.set_attribute(
+                    spans.Attrs.GATE_BINDING_SIZE,
+                    len(thread.bindings.all_numbers()),
+                )
+                struct_err = verify_chip_values(
+                    list(claim.provenance), thread.bindings
+                )
+                if struct_err is not None and dont_fabricate:
+                    g.set_attribute(
+                        spans.Attrs.GATE_VERDICT, spans.VERDICT_RETRACTED
+                    )
+                    g.set_attribute(
+                        spans.Attrs.GATE_REASON,
+                        struct_err.to_human_string(),
+                    )
+                    g.set_attribute(
+                        spans.Attrs.GATE_FAILED_CHIP,
+                        str(getattr(struct_err, "kind", "unknown")),
+                    )
+                    _set_retracted(claim, struct_err.to_human_string())
+                    claim_span.set_attribute(
+                        spans.Attrs.CLAIM_VERDICT, spans.VERDICT_RETRACTED
+                    )
+                    out.append((claim, False))
+                    continue
+                g.set_attribute(
+                    spans.Attrs.GATE_VERDICT, spans.VERDICT_APPROVED
+                )
+            claim_span.set_attribute(
+                spans.Attrs.CLAIM_VERDICT, spans.VERDICT_APPROVED
+            )
+            out.append((claim, True))
     return out
 
 
@@ -524,6 +740,14 @@ async def run_turn_codex(
     drained: list[dict[str, Any]] = []
     thread_for_persist: AgentThread | None = None
     data_plane_url = handles.primitive_client.base_url  # set in PrimitiveClient
+    # Phase-2 eval spans hoisted to outer scope so the bottom-of-
+    # function finally can close them if an exception unwinds the
+    # turn before the happy-path `.end()` call fires. Each span is
+    # manually managed (not via `with`) because the codex worker
+    # loop is one linear sequence and wrapping it in a `with` block
+    # would re-indent hundreds of lines.
+    chat_span: Any = None
+    pending_tool_spans: dict[str, tuple[Any, float]] = {}
 
     try:
         thread, lock = await handles.threads.get_or_create(
@@ -548,7 +772,37 @@ async def run_turn_codex(
                 turn_span.set_attribute(
                     spans.Attrs.TURN_USER_QUESTION, request.user_question
                 )
+                # Cockpit-pattern observables for the channel switches.
+                # Pydantic-ai stamps these on the turn root in
+                # `core/run.py:180-187`; mirroring them here keeps the
+                # `channel_narrative_off` probe runtime-agnostic and
+                # lets dashboards filter turns by channel state without
+                # branching on `runtime`.
+                turn_span.set_attribute(
+                    spans.Attrs.TURN_CHANNEL_NARRATIVE_OUTPUT_ENABLED,
+                    request.switches.channels.narrative_output_enabled,
+                )
+                turn_span.set_attribute(
+                    spans.Attrs.TURN_CHANNEL_EXTERNAL_TEXT_INPUT_ENABLED,
+                    request.switches.channels.external_text_input_enabled,
+                )
                 turn_span.set_attribute("runtime", "codex")
+
+                # Resolve the live-window seconds for this turn. Proto
+                # default 0 means "caller didn't pin a window; use the
+                # data-plane default". Non-zero flows through to the
+                # snapshot lease (so the snapshot covers the right
+                # slice) AND the system prompt (so the agent's framing
+                # matches what the snapshot will actually contain).
+                # Mirror of the pydantic-ai resolution in
+                # `loop_driver.py`.
+                requested_window_secs: int | None = (
+                    int(request.context.live_window_secs)
+                    if request.HasField("context")
+                    and request.context.live_window_secs
+                    else None
+                )
+                effective_window_secs = requested_window_secs or 60
 
                 # Boundary check: same rail as pydantic-ai. Chat-template
                 # spoofing patterns get rejected before codex ever sees
@@ -568,19 +822,77 @@ async def run_turn_codex(
                         "that aren't supported in this conversation. "
                         "Please rephrase in plain English."
                     )
+                    # Boundary-side observability parity with pydantic-ai
+                    # (`core/run.py:213-235`). Stamp the same attrs the
+                    # pydantic boundary stamps so eval probes work
+                    # uniformly: the narrative span wraps the rejection
+                    # emit, and turn-level zero counters keep the
+                    # attribute set identical to the normal-completion
+                    # shape (just zeroed). Without these, the refusal-
+                    # suite probes (`zero-tool-calls-on-injection`,
+                    # `narrative-emitted-approved`, etc) fail under
+                    # codex because the attributes don't exist.
+                    with _tracer.start_as_current_span(
+                        spans.NARRATIVE_EMITTED
+                    ) as nar_span:
+                        nar_span.set_attribute(
+                            spans.Attrs.NARRATIVE_VERDICT,
+                            spans.VERDICT_APPROVED,
+                        )
+                        # Apply the narrative-output channel switch.
+                        # Channel off => empty text, suppressed=true on
+                        # the span. Channel on => unchanged text,
+                        # length stamped. Shared helper with the
+                        # pydantic-ai path (`core/run.py`).
+                        sse_text = resolve_narrative_text(
+                            rejection_text,
+                            narrative_output_enabled=(
+                                request.switches.channels.narrative_output_enabled
+                            ),
+                            nar_span=nar_span,
+                        )
+                        if sse_text:
+                            nar_span.set_attribute(
+                                spans.Attrs.NARRATIVE_TEXT, sse_text
+                            )
+                        nar_span.set_attribute(
+                            spans.Attrs.NARRATIVE_ASSEMBLED_PROVENANCE_COUNT,
+                            0,
+                        )
+                        turn_span.set_attribute(
+                            spans.Attrs.TURN_UNSAFE_INPUT_REJECTED, "true"
+                        )
+                        turn_span.set_attribute(
+                            spans.Attrs.TURN_UNSAFE_INPUT_PATTERN, e.pattern
+                        )
                     # Chunk 4: persist the rejection so history replay
                     # shows the same shape the live UI saw  a bubble
-                    # explaining why we shut the turn down.
+                    # explaining why we shut the turn down. The
+                    # snapshot stores the SSE-shaped text (post-
+                    # suppression) so reopens render the same thing
+                    # the live user saw.
                     thread.record_turn_narrative(
                         turn,
-                        NarrativeSnapshot(text=rejection_text),
+                        NarrativeSnapshot(text=sse_text),
                     )
                     yield _frame(
                         "Narrative",
                         narrative_pb2.NarrativeWithRefs(
-                            text=rejection_text,
+                            text=sse_text,
                             provenance=[],
                         ),
+                    )
+                    # Stamp turn-level zero counters so the boundary-
+                    # short-circuit produces the same attribute set as
+                    # the normal-completion path. Eval probes assert
+                    # against these (`mcae.turn.tool_calls=0`,
+                    # `mcae.turn.claims_emitted=0`) to verify the
+                    # rejection didn't silently fire any tools.
+                    turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_EMITTED, 0)
+                    turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_APPROVED, 0)
+                    turn_span.set_attribute(spans.Attrs.TURN_TOOL_CALLS, 0)
+                    turn_span.set_attribute(
+                        spans.Attrs.TURN_NARRATIVE_CHARS, len(sse_text)
                     )
                     yield _terminal_done(turn_started_at_ms, role_timings)
                     return
@@ -647,7 +959,9 @@ async def run_turn_codex(
                                 reason=outcome.reason,
                                 runtime="codex",
                             )
-                            lease = await handles.primitive_client.begin_turn()
+                            lease = await handles.primitive_client.begin_turn(
+                                window_secs=requested_window_secs,
+                            )
                             snapshot_id = lease.snapshot_id
                             async for frame in run_repeat_path(
                                 handles=handles,
@@ -662,9 +976,23 @@ async def run_turn_codex(
                             return
 
                 # Snapshot lease. Same `PrimitiveClient.begin_turn` the
-                # pydantic-ai path uses; one snapshot per turn.
-                lease = await handles.primitive_client.begin_turn()
+                # pydantic-ai path uses; one snapshot per turn. The
+                # `requested_window_secs` was resolved earlier from
+                # `request.context.live_window_secs`; `None` lets the
+                # data plane apply its 60s default.
+                lease = await handles.primitive_client.begin_turn(
+                    window_secs=requested_window_secs,
+                )
                 snapshot_id = lease.snapshot_id
+                # Stamp the resolved window on the turn root span so
+                # OTel queries can attribute "this codex turn ran over
+                # a 15-minute slice" without correlating against the
+                # inbound request. Mirror of the loop_driver.py stamp;
+                # `lease.window_secs` is the ground truth from the
+                # data plane, not what we asked for.
+                turn_span.set_attribute(
+                    spans.Attrs.SNAPSHOT_WINDOW_SECS, lease.window_secs
+                )
                 log.info(
                     "turn_begin",
                     thread_id=thread_id,
@@ -704,7 +1032,25 @@ async def run_turn_codex(
                             CodexRunContextItem(text=ctx_block)
                         )
 
+                # Per-turn developer instructions = the composed
+                # system prompt (single source of truth in
+                # `prompts/system_v4.txt`, dropping rules per the
+                # switches passed in this turn) + the codex-specific
+                # tool-surface footer + the snapshot pin. The codex
+                # profile carries only a stub identity message so the
+                # session-pool fingerprint stays stable across turns
+                # while switch-driven rule drops flow per-turn the
+                # same way the pydantic-ai path handles them.
+                turn_drops = drops_from_switches(request.switches)
+                composed_system = _adapt_system_prompt_for_codex(
+                    compose_system_prompt(
+                        drop_rule_ids=turn_drops,
+                        live_window_secs=effective_window_secs,
+                    )
+                )
                 turn_dev_instructions = (
+                    f"{composed_system}\n\n"
+                    f"{_CODEX_TOOL_SURFACE_FOOTER}\n\n"
                     f"Per-turn snapshot id: snapshot_id='{snapshot_id}'. "
                     "Pass this exact value to every tool call that "
                     "accepts a snapshot_id."
@@ -720,6 +1066,57 @@ async def run_turn_codex(
                 # config + prompt cache, so a "new chat" click
                 # really starts cold and threads don't bleed
                 # prompt-cache state into one another.
+                # Resolve codex primary model + reasoning effort with
+                # the three-tier fallback the frontend's builder view
+                # expects:
+                #   1. per-turn `request.codex_override.{model_id,
+                #      reasoning_effort}` from the Models panel,
+                #   2. lifespan `handles.codex_primary_model` /
+                #      `handles.codex_reasoning_effort` resolved from
+                #      `CODEX_PRIMARY_MODEL` / `CODEX_REASONING_EFFORT`
+                #      env at startup,
+                #   3. codex-cli's own default (None on the wire).
+                # Empty strings on the wire are treated as "no
+                # override at this tier" so the panel can clear a
+                # pin without re-emitting a value.
+                override_model: str | None = None
+                override_effort: str | None = None
+                if request.HasField("codex_override"):
+                    if request.codex_override.model_id:
+                        override_model = request.codex_override.model_id
+                    if request.codex_override.reasoning_effort:
+                        override_effort = (
+                            request.codex_override.reasoning_effort
+                        )
+                effective_model = (
+                    override_model or handles.codex_primary_model
+                )
+                effective_effort = (
+                    override_effort or handles.codex_reasoning_effort
+                )
+                # Stamp the effective values on the turn span so
+                # eval probes + Langfuse can attribute model/effort
+                # to the right turn without correlating against
+                # env-snapshot files. `*_source` tells per-turn
+                # readers whether this turn came from a UI pin vs
+                # the env fallback.
+                if effective_model is not None:
+                    turn_span.set_attribute(
+                        "mcae.codex.model.id", effective_model
+                    )
+                    turn_span.set_attribute(
+                        "mcae.codex.model.source",
+                        "override" if override_model else "env",
+                    )
+                if effective_effort is not None:
+                    turn_span.set_attribute(
+                        "mcae.codex.reasoning_effort", effective_effort
+                    )
+                    turn_span.set_attribute(
+                        "mcae.codex.reasoning_effort.source",
+                        "override" if override_effort else "env",
+                    )
+
                 codex_request = CodexRunRequest(
                     prompt=request.user_question,
                     actor_id=thread_id,
@@ -728,6 +1125,8 @@ async def run_turn_codex(
                     ),
                     developer_instructions=turn_dev_instructions,
                     context_items=context_items,
+                    model=effective_model,
+                    reasoning_effort=effective_effort,
                 )
 
                 # Stamp the provider_thread_id we're handing codex
@@ -772,12 +1171,49 @@ async def run_turn_codex(
                 provider_thread_id_local: str = ""
                 tool_events: list[str] = []
                 streamed_chars = 0
+                # Counts every TOOL_COMPLETED event. Stamped as
+                # `mcae.turn.tool_calls` on the turn span at end-of-
+                # turn so eval probes (e.g. refusal-suite's
+                # `zero-tool-calls-on-injection`) work uniformly
+                # across runtimes. Pydantic-ai counts
+                # `deps.tool_call_records` for the same attr; this
+                # is the codex-side analog.
+                tool_completed_count = 0
                 codex_error: Exception | None = None
                 # Chunk 3.5 item 7: track per-tool args between
                 # TOOL_STARTED and TOOL_COMPLETED so we can record a
                 # full `TurnToolCallRecord` once the output lands.
                 # Keyed by `tool_id` (codex's per-call id).
                 pending_tool_calls: dict[str, tuple[str, dict[str, Any]]] = {}
+                # Phase-2 eval observability. `pending_tool_spans`
+                # holds the open `mcae.primitive.<tool>` span + its
+                # start monotonic for each in-flight tool call. We
+                # open on TOOL_STARTED and close on TOOL_COMPLETED
+                # so eval probes that query
+                # `mcae.primitive.wallet_profile` (today emitted
+                # only by `primitive_client.py` on the pydantic-ai
+                # path) see equivalent spans on the codex path.
+                # Any spans still in the dict when this function
+                # unwinds get closed defensively in the outer
+                # `finally` block at the end of `run_turn_codex`.
+                # Hoisted to function scope so the finally can see
+                # them.
+                pending_tool_spans.clear()
+                # Synthetic `chat codex.<model>` generation span
+                # spanning the codex worker block. Pydantic-ai's
+                # `instrument_all` creates equivalent `chat <model>`
+                # spans automatically; codex doesn't go through
+                # that instrumentation, so we open one here and
+                # stamp the GenAI semconv attrs on it (instead of
+                # on the turn span, which would turn the trace
+                # root into a generation observation in Langfuse
+                # and conflate "turn" with "LLM inference").
+                # Opened with the bare name `chat codex`; renamed
+                # to `chat codex.<model>` after the model name
+                # comes back from the sqlite read post-loop. Also
+                # hoisted to function scope so the bottom finally
+                # can close it on exception.
+                chat_span = _tracer.start_span("chat codex")
                 # Chunk 3.7 cost observability. Codex emits
                 # TOKEN_USAGE_UPDATED multiple times during a turn
                 # (after each model call). We keep the LATEST snapshot
@@ -801,11 +1237,26 @@ async def run_turn_codex(
                         provider_thread_id_local = evt.provider_thread_id
                     if evt.type == CodexRunEventType.TEXT_DELTA:
                         if evt.text:
+                            # Track the pre-suppression char count
+                            # regardless of channel state so the
+                            # cockpit telemetry (`pre_suppression_chars`
+                            # on the narrative span) is honest about
+                            # what the model produced.
                             streamed_chars += len(evt.text)
-                            yield _frame(
-                                "NarrativeDelta",
-                                narrative_pb2.NarrativeDelta(text=evt.text),
-                            )
+                            # Drop the delta frame when the narrative-
+                            # output channel is off. The model keeps
+                            # streaming on codex's side (we can't tell
+                            # codex-cli to stop mid-turn), but the
+                            # SSE consumer sees no streaming prose.
+                            # Matches pydantic-ai's behavior of
+                            # suppressing at the final-emit boundary,
+                            # extended here to the live delta channel
+                            # codex adds on top.
+                            if request.switches.channels.narrative_output_enabled:
+                                yield _frame(
+                                    "NarrativeDelta",
+                                    narrative_pb2.NarrativeDelta(text=evt.text),
+                                )
                     elif evt.type == CodexRunEventType.TOOL_STARTED:
                         tool_events.append(
                             f"start:{evt.text or evt.tool_id or 'tool'}"
@@ -816,6 +1267,54 @@ async def run_turn_codex(
                         sig = _extract_tool_call_signature(evt.raw_event)
                         if sig is not None and evt.tool_id:
                             pending_tool_calls[evt.tool_id] = sig
+                        # Phase-2 eval observability. Open the
+                        # synthetic `mcae.primitive.<tool>` span so
+                        # eval probes that scan for it see equivalent
+                        # spans on the codex path. Skips tools we
+                        # don't recognize (any future tool would
+                        # need a `_PRIMITIVE_SPAN_NAMES` entry to
+                        # show up). Both the span and its start
+                        # monotonic land in `pending_tool_spans`;
+                        # TOOL_COMPLETED closes the span and stamps
+                        # duration + output digest.
+                        if sig is not None and evt.tool_id:
+                            tname = sig[0]
+                            span_name = _PRIMITIVE_SPAN_NAMES.get(tname)
+                            if span_name is not None:
+                                ps = _tracer.start_span(span_name)
+                                ps.set_attribute(
+                                    spans.Attrs.SNAPSHOT_ID,
+                                    snapshot_id or "",
+                                )
+                                ps.set_attribute(
+                                    spans.Attrs.PRIMITIVE_INPUT,
+                                    _capped_json(sig[1]),
+                                )
+                                # Stamp typed input attrs so eval
+                                # probes that filter on `input.addr`
+                                # / `input.community_id` / `input.mint`
+                                # work without parsing JSON in CH.
+                                args = sig[1]
+                                if isinstance(args, dict):
+                                    if isinstance(args.get("addr"), str):
+                                        ps.set_attribute(
+                                            spans.Attrs.PRIMITIVE_INPUT_ADDR,
+                                            args["addr"],
+                                        )
+                                    if isinstance(args.get("community_id"), int):
+                                        ps.set_attribute(
+                                            spans.Attrs.PRIMITIVE_INPUT_COMMUNITY_ID,
+                                            args["community_id"],
+                                        )
+                                    if isinstance(args.get("mint"), str):
+                                        ps.set_attribute(
+                                            spans.Attrs.PRIMITIVE_INPUT_MINT,
+                                            args["mint"],
+                                        )
+                                pending_tool_spans[evt.tool_id] = (
+                                    ps,
+                                    time.monotonic(),
+                                )
                         yield _frame(
                             "Progress",
                             sse_pb2.Progress(
@@ -826,6 +1325,61 @@ async def run_turn_codex(
                     elif evt.type == CodexRunEventType.TOOL_COMPLETED:
                         tool_name = evt.text or evt.tool_id or ""
                         tool_events.append(f"done:{tool_name or 'tool'}")
+                        tool_completed_count += 1
+                        # Phase-2 eval observability. Close the
+                        # primitive span opened on TOOL_STARTED.
+                        # Stamps duration_ms (so latency probes
+                        # work), output payload (capped), and
+                        # output digest. If the codex tool errored,
+                        # `output` carries an error message instead
+                        # of the envelope; we stamp it as the
+                        # output, set `error=True`, and still close
+                        # the span so the probe sees the failure.
+                        ps_entry = (
+                            pending_tool_spans.pop(evt.tool_id, None)
+                            if evt.tool_id
+                            else None
+                        )
+                        if ps_entry is not None:
+                            ps, ps_t0 = ps_entry
+                            ps.set_attribute(
+                                spans.Attrs.PRIMITIVE_DURATION_MS,
+                                int((time.monotonic() - ps_t0) * 1000),
+                            )
+                            ps.set_attribute(
+                                spans.Attrs.PRIMITIVE_OUTPUT,
+                                _capped_json(evt.output or "")
+                                if not isinstance(evt.output, str)
+                                else (
+                                    evt.output[
+                                        : spans.PRIMITIVE_PAYLOAD_MAX_BYTES
+                                    ]
+                                    if len(evt.output.encode("utf-8"))
+                                    <= spans.PRIMITIVE_PAYLOAD_MAX_BYTES
+                                    else (
+                                        evt.output[
+                                            : spans.PRIMITIVE_PAYLOAD_MAX_BYTES
+                                        ]
+                                        + f" ...[truncated, total={len(evt.output.encode('utf-8'))}]"
+                                    )
+                                ),
+                            )
+                            ps.set_attribute(
+                                spans.Attrs.PRIMITIVE_OUTPUT_DIGEST,
+                                _digest12(evt.output),
+                            )
+                            # Codex marks tool errors via the output
+                            # payload shape (no `structuredContent`);
+                            # `_extract_mcp_envelope` returning None
+                            # is the canonical "tool errored"
+                            # signal, same one the binding-store
+                            # recorder uses.
+                            if (
+                                _extract_mcp_envelope(evt.output) is None
+                                and tool_name in _PRIMITIVE_SPAN_NAMES
+                            ):
+                                ps.set_attribute("error", True)
+                            ps.end()
                         # Chunk 3.5 item 6: populate the per-thread
                         # binding store from the {value, provenance}
                         # envelope. Lets the structural value-compare
@@ -967,6 +1521,92 @@ async def run_turn_codex(
                     spans.Attrs.CODEX_CACHE_HIT_RATE, cache_hit_rate
                 )
 
+                # Chunk 3.7 cost observability  GenAI semconv
+                # bridge for Langfuse. Stamp the OTel `gen_ai.*`
+                # keys that Langfuse converts into a GENERATION
+                # observation with auto-computed cost against its
+                # model-pricing table. Without these attrs, codex
+                # turns show `totalCost: 0` and an empty token
+                # column on the traces list (the pydantic-ai path
+                # has these stamped by its own `instrument_all`
+                # integration, see otel.py).
+                #
+                # Stamped on the synthetic `chat codex.<model>`
+                # CHILD span (not the turn root) so the trace
+                # topology matches pydantic-ai's: one GENERATION
+                # observation hanging off the turn root, not the
+                # turn root itself being a generation. This keeps
+                # the turn span semantically a "session" / "run"
+                # and the chat span semantically "one LLM call",
+                # which is the shape every Langfuse dashboard +
+                # eval probe already expects.
+                #
+                # We stamp from `.last` (per-turn breakdown). The
+                # `.total` (thread-cumulative) breakdown stays on
+                # the `codex.tokens.total.*` keys on the turn span
+                # for SQL aggregation.
+                #
+                # The model name comes from a tiny sqlite read on
+                # codex's per-thread state_5.sqlite (WAL-mode, so
+                # we don't block codex's own writes). Soft-fail:
+                # on any sqlite error we still stamp usage but
+                # without a model, the chat span keeps its bare
+                # `chat codex` name, and Langfuse shows tokens
+                # with no auto-cost.
+                if latest_token_usage is not None:
+                    chat_span.set_attribute(
+                        spans.Attrs.GEN_AI_SYSTEM, "openai"
+                    )
+                    chat_span.set_attribute(
+                        spans.Attrs.GEN_AI_USAGE_INPUT_TOKENS,
+                        latest_token_usage.last.input_tokens,
+                    )
+                    chat_span.set_attribute(
+                        spans.Attrs.GEN_AI_USAGE_OUTPUT_TOKENS,
+                        latest_token_usage.last.output_tokens,
+                    )
+                    chat_span.set_attribute(
+                        spans.Attrs.GEN_AI_USAGE_TOTAL_TOKENS,
+                        latest_token_usage.last.total_tokens,
+                    )
+                    if latest_token_usage.last.cached_input_tokens:
+                        chat_span.set_attribute(
+                            spans.Attrs.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+                            latest_token_usage.last.cached_input_tokens,
+                        )
+                    codex_model = _read_codex_model(
+                        codex_home_root=handles.codex_home_root,
+                        thread_id=thread_id,
+                        provider_thread_id=provider_thread_id_local,
+                    )
+                    if codex_model:
+                        chat_span.set_attribute(
+                            spans.Attrs.GEN_AI_REQUEST_MODEL, codex_model
+                        )
+                        chat_span.set_attribute(
+                            spans.Attrs.GEN_AI_RESPONSE_MODEL, codex_model
+                        )
+                        # Rename the chat span to embed the model
+                        # for human readability (`chat codex.gpt-5.5`).
+                        # The `llm_call_used_model` eval probe
+                        # matches on `gen_ai.request.model` attr
+                        # not the span name, so the rename is
+                        # decorative for probes but useful in
+                        # Langfuse / CH trace listings.
+                        chat_span.update_name(
+                            f"chat codex.{codex_model}"
+                        )
+
+                # Close the chat span now that all `gen_ai.*` and
+                # name updates have landed. The span's duration
+                # then reflects the worker-loop wall time, which
+                # is "how long codex spent on this turn"  the
+                # natural Langfuse generation duration. We set
+                # `chat_span = None` so the outer finally doesn't
+                # double-close on the happy path.
+                chat_span.end()
+                chat_span = None
+
                 log.info(
                     "codex_turn_complete",
                     thread_id=thread_id,
@@ -1023,6 +1663,7 @@ async def run_turn_codex(
                     yield _frame("Claim", claim)
                     if approved:
                         thread.record_claim(claim)
+                        thread.record_turn_claim(turn, claim)
                         approved_count += 1
                 turn_span.set_attribute(
                     spans.Attrs.TURN_CLAIMS_APPROVED, approved_count
@@ -1041,12 +1682,117 @@ async def run_turn_codex(
                 # renders it in the same struck-amber bubble as
                 # the pydantic-ai retraction.
                 approved_claim_list = [c for c, ok in results if ok]
+                # Assemble narrative-side provenance from approved
+                # claims in emission order, matching pydantic-ai's
+                # contract (`core/run.py:421-423`). `${ref:N}` in the
+                # narrative indexes ACROSS all claims' provenance, so
+                # the index space is the concatenation, not per-claim.
+                assembled_provenance: list[provenance_pb2.ProvenanceRef] = []
+                for _c in approved_claim_list:
+                    assembled_provenance.extend(_c.provenance)
                 narrative_retracted = False
+                # Narrative-level placeholder gate. Runs BEFORE the
+                # constitution gate (mirroring `core/run.py:474`) so
+                # an out-of-bounds `${ref:N}` retracts deterministically
+                # and we don't pay the constitution LLM cost on prose
+                # that's already going to be retracted. The span emits
+                # even on vacuous passes (text has no `${ref:N}`) so
+                # eval probes querying `mcae.gate.placeholder` see
+                # parity with the pydantic-ai path.
+                placeholder_narrative_reason: str | None = None
+                if final_text:
+                    with _tracer.start_as_current_span(
+                        spans.GATE_PLACEHOLDER
+                    ) as pg:
+                        pg.set_attribute(
+                            spans.Attrs.GATE_VERSION, _PLACEHOLDER_VERSION
+                        )
+                        ref_err = validate_refs(
+                            final_text, len(assembled_provenance)
+                        )
+                        if ref_err is not None:
+                            pg.set_attribute(
+                                spans.Attrs.GATE_VERDICT,
+                                spans.VERDICT_RETRACTED,
+                            )
+                            placeholder_narrative_reason = (
+                                ref_err.to_human_string()
+                            )
+                            pg.set_attribute(
+                                spans.Attrs.GATE_REASON,
+                                placeholder_narrative_reason,
+                            )
+                        else:
+                            pg.set_attribute(
+                                spans.Attrs.GATE_VERDICT,
+                                spans.VERDICT_APPROVED,
+                            )
+                if placeholder_narrative_reason is not None:
+                    # Placeholder retract: route through the retracted
+                    # emit branch with the placeholder reason so the
+                    # constitution gate is skipped (same short-circuit
+                    # pydantic-ai's `narrative_snapshot` path uses).
+                    ret = narrative_pb2.NarrativeRetracted(
+                        text=final_text,
+                        reason=placeholder_narrative_reason,
+                    )
+                    if handles.debug_public:
+                        ret.debug_reason = (
+                            f"placeholder_validate: {placeholder_narrative_reason}"
+                        )
+                    with _tracer.start_as_current_span(
+                        spans.NARRATIVE_EMITTED
+                    ) as nar_span:
+                        nar_span.set_attribute(
+                            spans.Attrs.NARRATIVE_VERDICT,
+                            spans.VERDICT_RETRACTED,
+                        )
+                        sse_text = resolve_narrative_text(
+                            final_text,
+                            narrative_output_enabled=(
+                                request.switches.channels.narrative_output_enabled
+                            ),
+                            nar_span=nar_span,
+                        )
+                        if sse_text:
+                            nar_span.set_attribute(
+                                spans.Attrs.NARRATIVE_TEXT, sse_text
+                            )
+                        nar_span.set_attribute(
+                            spans.Attrs.NARRATIVE_ASSEMBLED_PROVENANCE_COUNT,
+                            len(assembled_provenance),
+                        )
+                        ret.text = sse_text
+                        thread.record_turn_narrative(
+                            turn,
+                            NarrativeSnapshot(
+                                text=sse_text,
+                                retracted_reason=placeholder_narrative_reason,
+                            ),
+                        )
+                        yield _frame("NarrativeRetracted", ret)
+                    narrative_retracted = True
                 if (
-                    request.switches.stay_in_role.defend_constitution_judge
+                    not narrative_retracted
+                    and request.switches.stay_in_role.defend_constitution_judge
                     and final_text
                 ):
                     role_t_const = time.monotonic()
+                    # When the turn opts into a non-default live
+                    # window, rebuild the constitution agent for this
+                    # turn so its policy prompt's `${LIVE_WINDOW_HUMAN}`
+                    # placeholder matches what the primary agent saw.
+                    # Without this, the gate's "60-second live window"
+                    # framing would retract a correct 15-minute
+                    # narrative as window-mismatched. Sub-ms build
+                    # cost, dwarfed by the LLM call that follows.
+                    constitution_agent_for_turn = (
+                        build_constitution_agent(
+                            live_window_secs=effective_window_secs,
+                        )
+                        if effective_window_secs != 60
+                        else handles.constitution_agent
+                    )
                     with _tracer.start_as_current_span(
                         spans.GATE_NARRATIVE_CONSTITUTION
                     ) as g:
@@ -1056,7 +1802,7 @@ async def run_turn_codex(
                         )
                         verdict = await with_provider_retry(
                             lambda: judge_narrative(
-                                handles.constitution_agent,
+                                constitution_agent_for_turn,
                                 text=final_text,
                                 same_turn_claims=(
                                     _claims_to_judgement_payload(
@@ -1088,41 +1834,130 @@ async def run_turn_codex(
                                 ret.debug_reason = (
                                     f"constitution: {verdict.reason}"
                                 )
-                            # Chunk 4 history record: retracted snapshot
-                            # carries the retraction reason so the
-                            # replay path can render the same muted /
-                            # amber bubble the live UI renders.
-                            thread.record_turn_narrative(
-                                turn,
-                                NarrativeSnapshot(
-                                    text=final_text,
-                                    retracted_reason=retraction_reason,
-                                ),
-                            )
-                            yield _frame("NarrativeRetracted", ret)
+                            # Wrap retract emit in `mcae.narrative.emitted`
+                            # span so eval probes querying narrative-leg
+                            # outcomes see the same trace shape as the
+                            # pydantic-ai path. Verdict is `retracted`;
+                            # provenance count is 0 because retracted
+                            # prose can't safely carry chips.
+                            with _tracer.start_as_current_span(
+                                spans.NARRATIVE_EMITTED
+                            ) as nar_span:
+                                nar_span.set_attribute(
+                                    spans.Attrs.NARRATIVE_VERDICT,
+                                    spans.VERDICT_RETRACTED,
+                                )
+                                # Apply the narrative-output channel
+                                # switch to the retracted text. Channel
+                                # off => empty text, suppressed=true.
+                                # The retraction `reason` stays
+                                # unmodified (it's structured metadata,
+                                # not the model's prose); the user
+                                # still sees WHY the bubble was
+                                # retracted, just with no prose body.
+                                sse_text = resolve_narrative_text(
+                                    final_text,
+                                    narrative_output_enabled=(
+                                        request.switches.channels.narrative_output_enabled
+                                    ),
+                                    nar_span=nar_span,
+                                )
+                                if sse_text:
+                                    nar_span.set_attribute(
+                                        spans.Attrs.NARRATIVE_TEXT, sse_text
+                                    )
+                                nar_span.set_attribute(
+                                    spans.Attrs.NARRATIVE_ASSEMBLED_PROVENANCE_COUNT,
+                                    len(assembled_provenance),
+                                )
+                                # The retract frame carries the
+                                # suppressed text; reason flows
+                                # unchanged so the UI can still render
+                                # the retraction badge.
+                                ret.text = sse_text
+                                # Chunk 4 history record: retracted snapshot
+                                # carries the retraction reason so the
+                                # replay path can render the same muted /
+                                # amber bubble the live UI renders.
+                                thread.record_turn_narrative(
+                                    turn,
+                                    NarrativeSnapshot(
+                                        text=sse_text,
+                                        retracted_reason=retraction_reason,
+                                    ),
+                                )
+                                yield _frame("NarrativeRetracted", ret)
                             narrative_retracted = True
                     role_timings["policy"] = role_timings.get(
                         "policy", 0.0
                     ) + (time.monotonic() - role_t_const)
 
                 if not narrative_retracted:
-                    # Chunk 4 history record: approved snapshot. Provenance
-                    # stays empty in this MVP (matches what we emit on
-                    # the live frame); when assembled provenance gets
-                    # wired into the codex path, populate here too.
-                    thread.record_turn_narrative(
-                        turn,
-                        NarrativeSnapshot(text=final_text),
-                    )
-                    yield _frame(
-                        "Narrative",
-                        narrative_pb2.NarrativeWithRefs(
-                            text=final_text,
-                            provenance=[],
-                        ),
-                    )
+                    # Wrap approved narrative emit in
+                    # `mcae.narrative.emitted` span so eval probes
+                    # (`narrative-emitted-approved` etc) see the same
+                    # trace shape as pydantic-ai. Verdict is
+                    # `approved`; provenance count is the assembled
+                    # provenance length (empty in this MVP until
+                    # codex-side assembled-provenance ships).
+                    with _tracer.start_as_current_span(
+                        spans.NARRATIVE_EMITTED
+                    ) as nar_span:
+                        nar_span.set_attribute(
+                            spans.Attrs.NARRATIVE_VERDICT,
+                            spans.VERDICT_APPROVED,
+                        )
+                        # Apply the narrative-output channel switch
+                        # to the approved prose. Channel off => empty
+                        # text, suppressed=true on the span. Channel
+                        # on => unchanged text, length stamped.
+                        sse_text = resolve_narrative_text(
+                            final_text,
+                            narrative_output_enabled=(
+                                request.switches.channels.narrative_output_enabled
+                            ),
+                            nar_span=nar_span,
+                        )
+                        if sse_text:
+                            nar_span.set_attribute(
+                                spans.Attrs.NARRATIVE_TEXT, sse_text
+                            )
+                        nar_span.set_attribute(
+                            spans.Attrs.NARRATIVE_ASSEMBLED_PROVENANCE_COUNT,
+                            len(assembled_provenance),
+                        )
+                        # Chunk 4 history record: approved snapshot.
+                        # Snapshot stores the SSE-shaped (post-
+                        # suppression) text so history reopens render
+                        # what the live user actually saw; provenance
+                        # is the assembled list from this turn's
+                        # approved claims so chip-ref resolution in
+                        # history matches the live frame.
+                        thread.record_turn_narrative(
+                            turn,
+                            NarrativeSnapshot(
+                                text=sse_text,
+                                provenance=list(assembled_provenance),
+                            ),
+                        )
+                        yield _frame(
+                            "Narrative",
+                            narrative_pb2.NarrativeWithRefs(
+                                text=sse_text,
+                                provenance=assembled_provenance,
+                            ),
+                        )
                 turn_span.set_attribute(
                     spans.Attrs.TURN_NARRATIVE_CHARS, len(final_text)
+                )
+                # Mirror pydantic-ai's end-of-turn count stamp
+                # (`core/run.py:572`) so the refusal-suite's
+                # `turn_attribute_equals(mcae.turn.tool_calls, "0")`
+                # probes resolve to zero on a refusal turn that
+                # didn't dispatch any tools (and to the actual
+                # count otherwise).
+                turn_span.set_attribute(
+                    spans.Attrs.TURN_TOOL_CALLS, tool_completed_count
                 )
 
                 yield _terminal_done(turn_started_at_ms, role_timings)
@@ -1146,6 +1981,25 @@ async def run_turn_codex(
                 pass
         if snapshot_id is not None:
             await handles.primitive_client.end_turn(snapshot_id)
+        # Phase-2 eval span cleanup. Same shape as the drain-task
+        # cancel above: an exception unwound the turn before the
+        # happy-path `.end()` fired, so close defensively here so
+        # spans don't leak (unclosed spans miss the BatchSpanProcessor
+        # window and never reach the collector). Mark each
+        # remaining primitive span `error=True` so eval probes can
+        # tell "tool started, turn aborted" from a clean completion.
+        for tool_id, (ps, _t0) in pending_tool_spans.items():
+            try:
+                ps.set_attribute("error", True)
+                ps.end()
+            except Exception:  # noqa: BLE001
+                pass
+        pending_tool_spans.clear()
+        if chat_span is not None:
+            try:
+                chat_span.end()
+            except Exception:  # noqa: BLE001
+                pass
         # Persist thread state regardless of success or failure so
         # the codex_provider_thread_id assignment survives a turn
         # that errored mid-flight.

@@ -17,7 +17,12 @@ What's per-turn (driver consumer's responsibility):
 - The `CodexRunRequest` shape: prompt, developer instructions,
   per-thread `provider_thread_id`, per-actor `actor_id`. Built by
   `codex_driver.run_turn_codex` from the current request +
-  `AgentThread` state.
+  `AgentThread` state. **All policy guidance** (role, identity,
+  citation discipline, defense rules) ships in the per-turn
+  `developer_instructions` so the codex path honors per-turn
+  switches the same way pydantic-ai does, and so the single
+  source of truth is `prompts/system_v4.txt` composed via
+  `prompts/composer.compose_system_prompt`.
 
 Profile shape rationale (per the chunk 3 plan, section 6):
 
@@ -48,55 +53,17 @@ from codex_agent_driver import (
     CodexHttpMcpServer,
 )
 
-# Static developer prompt the codex profile ships with. The chunk 3
-# driver appends per-turn details (snapshot id, view context, the
-# user question) before passing it through `CodexRunRequest`.
-_DEVELOPER_INSTRUCTIONS = """
-You are the multi-chain-analysis-engine analyst agent. You analyze
-the live Solana transaction graph by calling tools on the
-`mcae_data_plane` MCP server.
-
-Tools you have:
-
-- `wallet_profile(snapshot_id, addr)`: profile a Solana wallet.
-  Returns `{value, provenance}`. `value` carries role, community_id,
-  transfer counts, top counterparties; use it as the analytical
-  payload. `provenance` is downstream metadata for the gate stack
-   you can ignore it when forming your answer.
-- `community_summary(snapshot_id, community_id)`: summarize a
-  cluster. Returns `{value, provenance}` with the same convention.
-  `value` carries size, volume split, top wallets.
-- `get_token_info(mint)`: resolve an SPL / Token-2022 mint to its
-  name, symbol, and metadata URI. No snapshot id needed; returns
-  the metadata fields directly (no envelope wrapping).
-- `emit_claims(snapshot_id, claims)`: batched. Emit ALL chips for
-  the turn in ONE call after gathering enough evidence. Each claim
-  carries:
-  * `kind`: one of `PROFILE | PATTERN | COMPARISON | SUMMARY | PULSE`
-  * `headline`: one sentence under 100 chars
-  * `body_markdown`: structured paragraph; cite provenance with
-    `${ref:N}` (1-indexed against the `provenance` array)
-  * `provenance`: non-empty list of typed entity refs. Each ref
-    has a discriminator `kind` field:
-    - `kind=wallet`: requires `addr` (base58 pubkey) + `idx`.
-    - `kind=community`: requires `id` (int) + `idx`.
-    - `kind=edge`: requires `edge_id` + `src` + `dst` + `idx`.
-    - `kind=time_range`: requires `from_s` + `to_s` + `idx`.
-    - `kind=number`: requires `metric` + `value` + `idx`.
-
-Rules:
-
-1. Always pass the `snapshot_id` you receive in the per-turn
-   developer message to every tool call that takes one. Snapshots
-   expire shortly after the turn starts.
-2. Cite. Every claim with an unresolved `${ref:N}` placeholder or
-   empty provenance gets retracted by the gate stack downstream.
-3. One emit_claims call per turn carrying all chips. Don't
-   stream chips across multiple calls.
-4. After tools return, write a single final narrative summarizing
-   what you found. Reference claims you emitted; the UI renders
-   chips alongside your prose.
-""".strip()
+# Stable profile-level stub. Just enough text for codex to know a
+# per-turn developer message is coming; the actual policy + tools +
+# snapshot pin all arrive per-turn via `CodexRunRequest.developer_instructions`
+# built by `codex_driver.run_turn_codex`. Keeping this static and
+# minimal means the session-pool fingerprint never churns and the
+# only source of truth for policy is `prompts/system_v4.txt`.
+_PROFILE_STUB_INSTRUCTIONS = (
+    "You are an analyst agent. Every turn you receive a developer "
+    "message containing the full policy prompt, tool-surface notes, "
+    "and a per-turn snapshot id. Follow that per-turn message exactly."
+)
 
 
 def build_codex_profile(
@@ -122,7 +89,7 @@ def build_codex_profile(
     return CodexAgentProfile(
         id="mcae",
         cwd=cwd,
-        developer_instructions=_DEVELOPER_INSTRUCTIONS,
+        developer_instructions=_PROFILE_STUB_INSTRUCTIONS,
         sandbox="read-only",
         approval_policy="never",
         project_root_markers=(),

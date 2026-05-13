@@ -116,6 +116,7 @@ pub mod __buffa {
         reg.register_json_any(super::__VIEW_CONTEXT_JSON_ANY);
         reg.register_json_any(super::__LLM_OVERRIDE_JSON_ANY);
         reg.register_json_any(super::__ROLE_OVERRIDE_JSON_ANY);
+        reg.register_json_any(super::__CODEX_OVERRIDE_JSON_ANY);
         reg.register_json_any(super::__AGENT_SWITCHES_JSON_ANY);
         reg.register_json_any(super::__CHANNEL_SWITCHES_JSON_ANY);
         reg.register_json_any(super::__STAY_IN_ROLE_SWITCHES_JSON_ANY);

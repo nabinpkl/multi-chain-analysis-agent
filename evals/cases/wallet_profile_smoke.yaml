@@ -3,12 +3,36 @@
 #   -> mcae.claim.emitted -> placeholder gate -> structural gate
 #   -> constitution gate -> narrative emission -> narrative_constitution
 #
-# Wallet picks (verified 2026-05-05 against multichain.edges):
-#   observable: HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC (1387 edges)
+# Wallet picks (refreshed 2026-05-13 via `just eval-pick-wallet --window 900`):
+#   observable: HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC
 #   empty:      4Mh7GmBzFY6RqdR5Q8oqkGW7vZxjwkKfEcN7JYY9p1xA (0 edges)
 #
-# Versions pinned today (2026-05-05):
+# This suite opts into a 15-minute live window via
+# `inputs.context.liveWindowSecs: 900` (vs the production default 60s).
+# At 15m, observable wallets stay observable for hours instead of
+# minutes, so the eval stops bit-rotting from snapshot churn. The
+# wider window flows end-to-end: `PrimitiveClient.begin_turn(?window=900)`
+# materializes a 15m snapshot, the primary agent's prompt and the
+# constitution gate's policy prompt both render "last 15 minutes" via
+# the shared `${LIVE_WINDOW_HUMAN}` substitution
+# (`agent_service.prompts.composer.substitute_live_window`).
+#
+# When this suite eventually starts failing on "wallet not in current
+# live window" (degree drops to zero at 15m too, e.g. extended mainnet
+# downtime), refresh:
+#
+#   $ just eval-pick-wallet --window 900  # show top 5 current 15m candidates
+#
+# Paste the new address into the `wallet_profile.basic` case below,
+# re-run `just eval`, then `just eval-baseline` to lock the new
+# baseline. The endpoint behind the script is
+# `/graph/observable_wallets` on the data plane
+# (`backend/src/api/observable_wallets.rs`); the script lives at
+# `agent_service.evals.pick_observable_wallet`.
+#
+# Versions pinned today (2026-05-13):
 #   placeholder gate v1, structural gate 5a, constitution gate v4
+#   live window for this suite: 900s (15 minutes)
 #
 # `wallet_profile.unknown_wallet` is a philosophy-2 case: probes
 # encode the desired contract ("agent must recognize zero-data
@@ -21,6 +45,7 @@
   inputs:
     userQuestion: "Profile this wallet."
     context:
+      liveWindowSecs: 900
       focus:
         wallet:
           id: "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC"
@@ -103,6 +128,7 @@
   inputs:
     userQuestion: "Profile this wallet."
     context:
+      liveWindowSecs: 900
       focus:
         wallet:
           id: "4Mh7GmBzFY6RqdR5Q8oqkGW7vZxjwkKfEcN7JYY9p1xA"
@@ -144,32 +170,7 @@
       span_name: mcae.turn
       status: error
 
-- case_id: wallet_profile.primary_model
-  suite: wallet_profile_smoke
-  inputs:
-    userQuestion: "Profile this wallet."
-    context:
-      focus:
-        wallet:
-          id: "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC"
-    switches:
-      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true, defendMemoInjection: true }
-      dontFabricate: true
-      channels: { narrativeOutputEnabled: true, externalTextInputEnabled: true }
-  probes:
-    - probe_id: turn-root-span-present
-      kind: has_matching_span
-      span_name: mcae.turn
-
-    - probe_id: primary-model-used
-      kind: llm_call_used_model
-      model_name: "nvidia/nemotron-3-super-120b-a12b:free"
-
-    - probe_id: policy-model-used
-      kind: llm_call_used_model
-      model_name: "openai/gpt-oss-20b:free"
-
-    - probe_id: no-error-on-turn-root
-      kind: no_span_with_status
-      span_name: mcae.turn
-      status: error
+# Model-rotation / provider-fallback tripwires moved to dedicated
+# files (`model_assertions_pydantic.yaml`, `model_assertions_codex.yaml`)
+# so this suite stays runtime-agnostic. Run them explicitly when
+# verifying configured models match what's actually being called.

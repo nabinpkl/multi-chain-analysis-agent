@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file multichain/wire/agent/v1/llm.proto.
  */
 export const file_multichain_wire_agent_v1_llm: GenFile = /*@__PURE__*/
-  fileDesc("CiJtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvbGxtLnByb3RvEhhtdWx0aWNoYWluLndpcmUuYWdlbnQudjEitQEKC0xsbU92ZXJyaWRlEjcKB3ByaW1hcnkYASABKAsyJi5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuUm9sZU92ZXJyaWRlEjYKBnBvbGljeRgCIAEoCzImLm11bHRpY2hhaW4ud2lyZS5hZ2VudC52MS5Sb2xlT3ZlcnJpZGUSNQoFanVkZ2UYAyABKAsyJi5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuUm9sZU92ZXJyaWRlIjIKDFJvbGVPdmVycmlkZRIQCghwcm92aWRlchgBIAEoCRIQCghtb2RlbF9pZBgCIAEoCWIGcHJvdG8z");
+  fileDesc("CiJtdWx0aWNoYWluL3dpcmUvYWdlbnQvdjEvbGxtLnByb3RvEhhtdWx0aWNoYWluLndpcmUuYWdlbnQudjEitQEKC0xsbU92ZXJyaWRlEjcKB3ByaW1hcnkYASABKAsyJi5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuUm9sZU92ZXJyaWRlEjYKBnBvbGljeRgCIAEoCzImLm11bHRpY2hhaW4ud2lyZS5hZ2VudC52MS5Sb2xlT3ZlcnJpZGUSNQoFanVkZ2UYAyABKAsyJi5tdWx0aWNoYWluLndpcmUuYWdlbnQudjEuUm9sZU92ZXJyaWRlIjIKDFJvbGVPdmVycmlkZRIQCghwcm92aWRlchgBIAEoCRIQCghtb2RlbF9pZBgCIAEoCSI7Cg1Db2RleE92ZXJyaWRlEhAKCG1vZGVsX2lkGAEgASgJEhgKEHJlYXNvbmluZ19lZmZvcnQYAiABKAliBnByb3RvMw");
 
 /**
  * Per-request LLM provider override. Empty / missing = use the
@@ -94,4 +94,49 @@ export type RoleOverride = Message<"multichain.wire.agent.v1.RoleOverride"> & {
  */
 export const RoleOverrideSchema: GenMessage<RoleOverride> = /*@__PURE__*/
   messageDesc(file_multichain_wire_agent_v1_llm, 1);
+
+/**
+ * Per-turn override for the codex runtime's primary model + reasoning
+ * effort. Lives separately from `LlmOverride` because codex's tool
+ * surface and provider routing are not symmetric with the
+ * openrouter/gemini/local triad the pydantic-ai panel exposes; codex
+ * always routes through codex-cli, and the only knobs that change
+ * turn-to-turn are the model id and the reasoning effort it asks
+ * for. Empty fields fall back to `CODEX_PRIMARY_MODEL` /
+ * `CODEX_REASONING_EFFORT` env on the agent-service side (which in
+ * turn fall back to codex-cli's own defaults when those are unset).
+ *
+ * The policy + judge roles stay on the `LlmOverride` panel because
+ * the constitution agent runs server-side via pydantic-ai regardless
+ * of the primary runtime, and the judge is eval-only.
+ *
+ * @generated from message multichain.wire.agent.v1.CodexOverride
+ */
+export type CodexOverride = Message<"multichain.wire.agent.v1.CodexOverride"> & {
+  /**
+   * Codex-CLI model id (e.g. "gpt-5", "gpt-5-mini", "gpt-5-nano",
+   * "o3", "o3-mini"). Empty = fall through to env / cli default.
+   *
+   * @generated from field: string model_id = 1;
+   */
+  modelId: string;
+
+  /**
+   * Codex-CLI reasoning effort: "low" | "medium" | "high". Empty =
+   * fall through to env / cli default. Unrecognized values are
+   * forwarded as-is (codex-cli rejects them with a clear error;
+   * we don't gatekeep here so adding new tiers doesn't need a
+   * proto bump).
+   *
+   * @generated from field: string reasoning_effort = 2;
+   */
+  reasoningEffort: string;
+};
+
+/**
+ * Describes the message multichain.wire.agent.v1.CodexOverride.
+ * Use `create(CodexOverrideSchema)` to create a new message.
+ */
+export const CodexOverrideSchema: GenMessage<CodexOverride> = /*@__PURE__*/
+  messageDesc(file_multichain_wire_agent_v1_llm, 2);
 

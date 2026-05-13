@@ -120,6 +120,29 @@ class LoopHandles:
     # `POST /agent/turn` handler 503s codex-runtime requests in
     # that case rather than silently falling back to pydantic-ai.
     codex_driver: Any = None
+    # Chunk 3.7 cost observability. Root of the per-thread codex_home
+    # tree (set to `CODEX_HOME_ROOT` env, default `./codex_homes`).
+    # After a codex turn completes we read
+    # `<root>/local/<thread_id>/sqlite/state_5.sqlite` to recover the
+    # model name codex actually used and stamp it as
+    # `gen_ai.request.model` on the trace so Langfuse can match it
+    # against its model-pricing table. None when the codex runtime
+    # isn't usable on this host; in that case tokens still ship to
+    # Langfuse but without a model name, so the generation
+    # observation has usage data but `totalCost: 0`.
+    codex_home_root: Any = None
+    # Codex primary model + reasoning effort, env-driven. Mirrors
+    # `AGENT_PRIMARY_MODEL` / `AGENT_POLICY_MODEL` on the pydantic-ai
+    # side: the operator sets `CODEX_PRIMARY_MODEL=gpt-5-mini` to swap
+    # the model codex routes against, with no code change. None
+    # falls through to codex-cli's own default
+    # (today: gpt-5.5; varies across cli versions). Pinned at
+    # lifespan startup; mid-run swaps require a service restart so
+    # in-flight thread caches (codex's sqlite per-thread thread row
+    # records the model that minted the thread) stay consistent
+    # across turns within one chat.
+    codex_primary_model: str | None = None
+    codex_reasoning_effort: str | None = None
     # Chunk 3.5. Active-turn registry keyed by thread_id. The POST
     # handler registers the per-turn asyncio.Task here on entry and
     # clears it on exit; `DELETE /agent/turn/{thread_id}` looks up
@@ -187,14 +210,40 @@ async def run_turn(
         if request.HasField("llm_override")
         else None
     )
+    # Resolve the live-window seconds for this turn. Proto default 0
+    # means "caller didn't pin a window; use the data plane default".
+    # Any non-zero value flows through to (a) the snapshot lease via
+    # `begin_turn(window_secs=...)`, (b) the per-turn primary agent
+    # build so the system prompt's `${LIVE_WINDOW_HUMAN}` placeholder
+    # matches what the snapshot will actually cover, and (c) the per-
+    # turn constitution agent build so the gate's policy framing stays
+    # in lockstep with the primary prompt (otherwise the gate would
+    # retract correct narratives on any non-default window).
+    requested_window_secs: int | None = (
+        int(request.context.live_window_secs)
+        if request.HasField("context") and request.context.live_window_secs
+        else None
+    )
+    # The value we feed the per-turn prompt is the requested window
+    # when set, the 60s default otherwise. We separately stamp the
+    # ACTUAL window the lease resolves to after begin_turn returns
+    # (defense in depth: if Rust resolved to a different window we
+    # record what was materialized, not what we asked for).
+    effective_window_secs = requested_window_secs or 60
     primary_agent_for_turn = (
-        build_agent(llm_override=primary_override)
-        if primary_override is not None
+        build_agent(
+            llm_override=primary_override,
+            live_window_secs=effective_window_secs,
+        )
+        if primary_override is not None or effective_window_secs != 60
         else handles.primary_agent
     )
     constitution_agent_for_turn = (
-        build_constitution_agent(llm_override=policy_override)
-        if policy_override is not None
+        build_constitution_agent(
+            llm_override=policy_override,
+            live_window_secs=effective_window_secs,
+        )
+        if policy_override is not None or effective_window_secs != 60
         else handles.constitution_agent
     )
     repeat_agent_for_turn = (
@@ -291,7 +340,9 @@ async def run_turn(
                                 repeat_of_turn=outcome.repeat_of_turn,
                                 reason=outcome.reason,
                             )
-                            lease = await handles.primitive_client.begin_turn()
+                            lease = await handles.primitive_client.begin_turn(
+                                window_secs=requested_window_secs,
+                            )
                             snapshot_id = lease.snapshot_id
                             async for frame in run_repeat_path(
                                 handles=handles,
@@ -306,13 +357,26 @@ async def run_turn(
                             return
 
                 # ------ Snapshot lease ------
-                lease = await handles.primitive_client.begin_turn()
+                lease = await handles.primitive_client.begin_turn(
+                    window_secs=requested_window_secs,
+                )
                 snapshot_id = lease.snapshot_id
+                # Stamp the resolved window on the turn root span so
+                # OTel queries can filter by what the lease actually
+                # materialized (which may differ from what we asked
+                # for if a future Rust release silently snaps to a
+                # neighboring enum value; we always record the
+                # ground truth from the response, not the request).
+                turn_span = trace.get_current_span()
+                turn_span.set_attribute(
+                    spans.Attrs.SNAPSHOT_WINDOW_SECS, lease.window_secs
+                )
                 log.info(
                     "turn_begin",
                     thread_id=thread_id,
                     snapshot_id=snapshot_id,
                     turn=turn,
+                    window_secs=lease.window_secs,
                 )
 
                 # ------ Build envelope + run core ------
@@ -340,6 +404,12 @@ async def run_turn(
                     if thread.message_history
                     else [],
                     primary_llm_override=primary_override,
+                    # Carry the lease-resolved window into the core so
+                    # the per-defense agent rebuild path (which fires
+                    # when `drop_rule_ids` is non-empty) uses the same
+                    # window in its prompt as we did when building
+                    # `primary_agent_for_turn` above.
+                    live_window_secs=int(lease.window_secs),
                 )
                 sink = SseSink()
 
@@ -392,6 +462,7 @@ async def run_turn(
                         )
                 for claim in outcome.approved_claims:
                     thread.record_claim(claim)
+                    thread.record_turn_claim(turn, claim)
                 # Chunk 4 history record. Core captures the final
                 # narrative snapshot (approved or retracted) and
                 # returns it on the outcome; we persist it onto

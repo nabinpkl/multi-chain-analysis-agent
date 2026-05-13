@@ -1,0 +1,17 @@
+{
+  "suite": "model_assertions_pydantic",
+  "captured_at": "2026-05-13T00:43:10.706466Z",
+  "git_sha": "1a82cad926e7",
+  "agent_version": "0.1.0",
+  "agent_primary_model": "gemini-3.1-flash-lite",
+  "agent_policy_model": "gemini-3.1-flash-lite",
+  "eval_judge_model": "gemini-3.1-flash-lite",
+  "results": {
+    "model_assertions.pydantic.primary": {
+      "no-error-on-turn-root": "pass",
+      "policy-model-used": "pass",
+      "primary-model-used": "pass",
+      "turn-root-span-present": "pass"
+    }
+  }
+}

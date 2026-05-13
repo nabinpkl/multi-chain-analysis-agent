@@ -58,6 +58,59 @@ class CompositionError(ValueError):
     """
 
 
+# Live-window placeholder substitution. Shared with
+# `policy/constitution.py` so the primary prompt and the constitution
+# prompt render the same window string for the same input  if they
+# drift, the constitution gate retracts correct narratives for "wrong
+# window" inconsistency. One enum-to-string table, one
+# `substitute_live_window` helper, two callers.
+#
+# The placeholder is `${LIVE_WINDOW_HUMAN}` (literal dollar-sign +
+# uppercase token) so it stands out in the prompt files and won't
+# collide with any of the `<rule id="...">` machinery.
+_LIVE_WINDOW_HUMAN: dict[int, str] = {
+    10: "10 seconds",
+    60: "60 seconds",
+    300: "5 minutes",
+    900: "15 minutes",
+    1800: "30 minutes",
+    3600: "1 hour",
+}
+_LIVE_WINDOW_PLACEHOLDER = "${LIVE_WINDOW_HUMAN}"
+
+# Default window when no caller specifies one. Mirrors the Rust
+# `TURN_BEGIN_DEFAULT_WINDOW_SECS` constant in
+# `backend/src/api/primitives.rs` so the prompt's "last 60 seconds"
+# matches the snapshot's 60s window for every caller that hasn't
+# opted in to widen.
+DEFAULT_LIVE_WINDOW_SECS = 60
+
+
+def format_live_window(secs: int) -> str:
+    """Render a window-seconds value as the human-readable string the
+    prompt placeholder is replaced with.
+
+    Known values come from the `WINDOWS` enum on the Rust side
+    (`[10, 60, 300, 900, 1800, 3600]`); unknown values fall back to
+    `"{N} seconds"` so a future enum extension doesn't crash the
+    composer  the substitution still happens, just with a less
+    polished string.
+    """
+    return _LIVE_WINDOW_HUMAN.get(secs, f"{secs} seconds")
+
+
+def substitute_live_window(text: str, secs: int) -> str:
+    """Replace every occurrence of `${LIVE_WINDOW_HUMAN}` in `text`
+    with the human-readable string for `secs`.
+
+    Idempotent / no-op when the placeholder isn't present in the
+    input (e.g. an older prompt that hasn't been parameterized yet).
+    Exposed for `policy/constitution.py` to reuse so both prompt
+    files run through one formatter.
+    """
+    return text.replace(_LIVE_WINDOW_PLACEHOLDER, format_live_window(secs))
+
+
 # Match `<rule id="..."> ... </rule>` blocks. Anchored to start-of-line
 # on the open tag so a literal `<rule id="...">` accidentally appearing
 # inside a rule body cannot be mistaken for a real rule boundary.
@@ -72,15 +125,20 @@ def compose_system_prompt(
     *,
     drop_rule_ids: Iterable[str] = (),
     source_text: str | None = None,
+    live_window_secs: int = DEFAULT_LIVE_WINDOW_SECS,
 ) -> str:
     """Load `system_v4.txt` (or `source_text` if provided for tests),
     parse `<rule id="...">` blocks, drop any whose id is in
-    `drop_rule_ids`, return the assembled prompt.
+    `drop_rule_ids`, substitute the `${LIVE_WINDOW_HUMAN}` placeholder
+    with the human string for `live_window_secs`, return the
+    assembled prompt.
 
-    With an empty drop set the output is the source file verbatim
-    (no transformation; we return the original string). This is the
-    regression guard: production preset stays byte-identical to the
-    file on disk.
+    With an empty drop set AND the default window, the substitution
+    fills the placeholder with "60 seconds"  the same string the
+    original prompt file carried before parameterization. So the
+    production preset still matches the historical prompt content
+    byte-for-byte at run time, even though the source file on disk
+    now has a placeholder instead of the literal "60 seconds".
 
     Args:
         drop_rule_ids: rule ids to remove from the assembled prompt.
@@ -89,6 +147,14 @@ def compose_system_prompt(
         source_text: optional, override the file lookup with this
             string. Used by unit tests so they can pin behavior on
             small fixtures without depending on the live prompt.
+        live_window_secs: the live window the snapshot will be
+            materialized against; substituted into the
+            `${LIVE_WINDOW_HUMAN}` placeholder in the prompt. Default
+            60 mirrors the data-plane default and produces "last 60
+            seconds" prose. Eval cases that widen the window (e.g.
+            900) pass through the value here to keep the agent's
+            framing internally consistent with the snapshot it'll
+            actually analyze.
 
     Returns:
         The composed prompt string.
@@ -125,11 +191,14 @@ def compose_system_prompt(
             f"{sorted(unknown_drops)!r}; known ids are {sorted(seen_ids)!r}"
         )
 
-    # Empty drop set: return the source verbatim. No assembly, no
-    # whitespace normalization. This is the byte-identity guarantee
-    # for the production preset.
+    # Empty drop set: the source goes through verbatim except for
+    # the live-window placeholder substitution. With the default
+    # window (60s), `${LIVE_WINDOW_HUMAN}` renders as "60 seconds"
+    # which IS the literal text the prompt carried before this
+    # parameterization, so the production preset stays observably
+    # equivalent to the pre-refactor flat file.
     if not drops:
-        return text
+        return substitute_live_window(text, live_window_secs)
 
     # Drop set non-empty: walk the source and elide each dropped
     # rule's full span, including the single trailing blank line that
@@ -150,7 +219,12 @@ def compose_system_prompt(
             out_parts.append(text[cursor : m.start()])
             cursor = tail_end
     out_parts.append(text[cursor:])
-    return "".join(out_parts)
+    # Substitute the live-window placeholder on the assembled output,
+    # AFTER rule-drop so a dropped rule that mentioned the placeholder
+    # contributes nothing to the substitution scan (and so the
+    # substitution operates on whatever text actually ships, not on
+    # an intermediate including elided rules).
+    return substitute_live_window("".join(out_parts), live_window_secs)
 
 
 def drops_from_switches(switches: "AgentSwitches") -> frozenset[str]:

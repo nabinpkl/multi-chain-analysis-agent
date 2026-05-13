@@ -73,6 +73,16 @@ eval-baseline suite *flags:
         --baselines-root "{{ justfile_directory() }}/evals/baselines" \
         {{ flags }}
 
+# Print wallets currently observable in the live window. The
+# rolling 60s window means any pinned wallet in a `wallet_profile`-
+# shaped eval suite eventually ages out. When a suite starts
+# failing with "wallet not in current live window", run this to
+# pick a fresh address, paste it into the case yaml, then
+# `just eval` + `just eval-baseline` to re-mint. Args mirror the
+# script's: `--window 60 --limit 5 --addr-only`.
+eval-pick-wallet *flags:
+    uv --directory agent-service run python -m agent_service.evals.pick_observable_wallet {{ flags }}
+
 # Tear the whole compose stack down (including volumes!) and rebuild
 # from a clean slate. Use when env-driven config has shifted (model
 # ids, provider defaults, ClickHouse schema) and you want zero

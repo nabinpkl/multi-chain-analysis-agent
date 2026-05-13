@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\"multichain/wire/agent/v1/llm.proto\x12\x18multichain.wire.agent.v1\"\xcd\x01\n\x0bLlmOverride\x12@\n\x07primary\x18\x01 \x01(\x0b\x32&.multichain.wire.agent.v1.RoleOverrideR\x07primary\x12>\n\x06policy\x18\x02 \x01(\x0b\x32&.multichain.wire.agent.v1.RoleOverrideR\x06policy\x12<\n\x05judge\x18\x03 \x01(\x0b\x32&.multichain.wire.agent.v1.RoleOverrideR\x05judge\"E\n\x0cRoleOverride\x12\x1a\n\x08provider\x18\x01 \x01(\tR\x08provider\x12\x19\n\x08model_id\x18\x02 \x01(\tR\x07modelIdb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\"multichain/wire/agent/v1/llm.proto\x12\x18multichain.wire.agent.v1\"\xcd\x01\n\x0bLlmOverride\x12@\n\x07primary\x18\x01 \x01(\x0b\x32&.multichain.wire.agent.v1.RoleOverrideR\x07primary\x12>\n\x06policy\x18\x02 \x01(\x0b\x32&.multichain.wire.agent.v1.RoleOverrideR\x06policy\x12<\n\x05judge\x18\x03 \x01(\x0b\x32&.multichain.wire.agent.v1.RoleOverrideR\x05judge\"E\n\x0cRoleOverride\x12\x1a\n\x08provider\x18\x01 \x01(\tR\x08provider\x12\x19\n\x08model_id\x18\x02 \x01(\tR\x07modelId\"U\n\rCodexOverride\x12\x19\n\x08model_id\x18\x01 \x01(\tR\x07modelId\x12)\n\x10reasoning_effort\x18\x02 \x01(\tR\x0freasoningEffortb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -35,4 +35,6 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_LLMOVERRIDE']._serialized_end=270
   _globals['_ROLEOVERRIDE']._serialized_start=272
   _globals['_ROLEOVERRIDE']._serialized_end=341
+  _globals['_CODEXOVERRIDE']._serialized_start=343
+  _globals['_CODEXOVERRIDE']._serialized_end=428
 # @@protoc_insertion_point(module_scope)

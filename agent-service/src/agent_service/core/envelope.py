@@ -82,3 +82,14 @@ class TurnEnvelope:
     # before calling `run_one_turn` since the core never rebuilds
     # those agents itself.
     primary_llm_override: Any | None = None
+
+    # Resolved live window the snapshot was materialized against, in
+    # seconds. Set by the driver from
+    # `request.context.live_window_secs` (after resolving 0/missing
+    # to the 60s default) so the core can rebuild the primary agent
+    # with the matching prompt when either drops OR a non-default
+    # window is in effect for this turn. Mirrors the data plane's
+    # `SnapshotBeginResponse.window_secs`. Default 60 keeps the
+    # constructor backward compatible with callers that pre-date
+    # window parameterization.
+    live_window_secs: int = 60

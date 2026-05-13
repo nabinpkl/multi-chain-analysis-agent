@@ -13,6 +13,9 @@ import {
   type ProviderId,
   type Role,
 } from "@/stores/use-llm-override";
+import { useCodexOverride } from "@/stores/use-codex-override";
+import { useRuntimeSelector } from "@/stores/use-runtime-selector";
+import { AgentRuntime } from "@/lib/wire/multichain/wire/agent/v1/session_pb";
 import { useRoleTimings } from "@/stores/use-role-timings";
 
 /**
@@ -72,7 +75,27 @@ interface GeminiModelsResponse {
   models: GeminiModel[];
 }
 
-type RoleDefaults = Record<Role, string>;
+interface CodexModel {
+  id: string;
+  name?: string;
+}
+
+interface CodexModelsResponse {
+  reachable: boolean;
+  models: CodexModel[];
+  reasoningEfforts: string[];
+}
+
+// Role defaults extends the pydantic-ai roles with codex-runtime
+// fallbacks so the panel can label the env-default option with the
+// actual configured value for both runtime branches.
+interface RoleDefaults {
+  primary: string;
+  policy: string;
+  judge: string;
+  codexPrimary: string;
+  codexReasoningEffort: string;
+}
 
 const ROLES: { id: Role; label: string; hint: string }[] = [
   {
@@ -101,6 +124,18 @@ export function ModelsPanel() {
   const policy = useLlmOverride((s) => s.policy);
   const judge = useLlmOverride((s) => s.judge);
   const setOverride = useLlmOverride((s) => s.setOverride);
+  const codexModelId = useCodexOverride((s) => s.modelId);
+  const codexReasoningEffort = useCodexOverride((s) => s.reasoningEffort);
+  const setCodexModel = useCodexOverride((s) => s.setModelId);
+  const setCodexEffort = useCodexOverride((s) => s.setReasoningEffort);
+  const runtime = useRuntimeSelector((s) => s.runtime);
+  // `runtime === CODEX` toggles which "primary" surface the panel
+  // shows: the codex model+effort row replaces the pydantic-ai
+  // openrouter/gemini/local row. Policy + judge always render
+  // through pydantic-ai (the constitution agent runs server-side
+  // via pydantic-ai regardless of primary runtime, and the judge
+  // is eval-only).
+  const isCodex = runtime === AgentRuntime.CODEX;
 
   const overrides: Record<Role, typeof primary> = { primary, policy, judge };
   const latestTimings = useRoleTimings((s) => s.latest);
@@ -112,10 +147,15 @@ export function ModelsPanel() {
   const [orModels, setOrModels] = useState<OpenRouterModel[]>([]);
   const [gmReachable, setGmReachable] = useState<boolean | null>(null);
   const [gmModels, setGmModels] = useState<GeminiModel[]>([]);
+  const [cxReachable, setCxReachable] = useState<boolean | null>(null);
+  const [cxModels, setCxModels] = useState<CodexModel[]>([]);
+  const [cxEfforts, setCxEfforts] = useState<string[]>([]);
   const [defaults, setDefaults] = useState<RoleDefaults>({
     primary: "",
     policy: "",
     judge: "",
+    codexPrimary: "",
+    codexReasoningEffort: "",
   });
   const [refreshing, setRefreshing] = useState(false);
 
@@ -190,6 +230,8 @@ export function ModelsPanel() {
           primary: body.primary ?? "",
           policy: body.policy ?? "",
           judge: body.judge ?? "",
+          codexPrimary: body.codexPrimary ?? "",
+          codexReasoningEffort: body.codexReasoningEffort ?? "",
         });
       } catch {
         // Defaults stay as their zero-value placeholders; the
@@ -197,8 +239,40 @@ export function ModelsPanel() {
         // when the per-role string is empty.
       }
     })();
+    const cxPromise = (async () => {
+      // The codex catalog is in-process on the agent service (codex-cli
+      // doesn't ship a list-models endpoint), so this fetch is fast and
+      // can't fail in the "unreachable" sense unless agent-service
+      // itself is down. We still treat a non-2xx the same way the
+      // other panels do.
+      try {
+        const res = await fetch(`${agentUrl()}/agent/codex/models`, {
+          cache: "no-store",
+        });
+        if (!res.ok) {
+          setCxReachable(false);
+          setCxModels([]);
+          setCxEfforts([]);
+          return;
+        }
+        const body: CodexModelsResponse = await res.json();
+        setCxReachable(body.reachable);
+        setCxModels(body.models ?? []);
+        setCxEfforts(body.reasoningEfforts ?? []);
+      } catch {
+        setCxReachable(false);
+        setCxModels([]);
+        setCxEfforts([]);
+      }
+    })();
     try {
-      await Promise.all([localPromise, orPromise, gmPromise, defaultsPromise]);
+      await Promise.all([
+        localPromise,
+        orPromise,
+        gmPromise,
+        cxPromise,
+        defaultsPromise,
+      ]);
     } finally {
       setRefreshing(false);
     }
@@ -211,11 +285,14 @@ export function ModelsPanel() {
   useEffect(() => {
     if (
       open &&
-      (reachable === null || orReachable === null || gmReachable === null)
+      (reachable === null ||
+        orReachable === null ||
+        gmReachable === null ||
+        cxReachable === null)
     ) {
       void fetchModels();
     }
-  }, [open, reachable, orReachable, gmReachable, fetchModels]);
+  }, [open, reachable, orReachable, gmReachable, cxReachable, fetchModels]);
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -252,41 +329,66 @@ export function ModelsPanel() {
         </CollapsibleTrigger>
         <CollapsibleContent>
           <div className="px-4 py-3 space-y-3">
-            {ROLES.map(({ id, label, hint }) => (
-              <RoleRow
-                key={id}
-                role={id}
-                label={label}
-                hint={hint}
-                override={overrides[id]}
-                models={models}
-                reachable={reachable}
-                orModels={orModels}
-                orReachable={orReachable}
-                gmModels={gmModels}
-                gmReachable={gmReachable}
-                envDefaultModelId={defaults[id]}
-                lastTurnMs={
-                  latestTimings === null
-                    ? null
-                    : id === "primary"
-                      ? latestTimings.primaryMs
-                      : id === "policy"
-                        ? latestTimings.policyMs
-                        : latestTimings.judgeMs
-                }
-                onChange={(o) => setOverride(id, o)}
-              />
-            ))}
+            {ROLES.map(({ id, label, hint }) => {
+              // The "primary" role row is runtime-conditional: codex
+              // turns are driven by codex-cli (not OpenRouter / LM
+              // Studio / Gemini), so the panel swaps in a codex-shaped
+              // row with model + reasoning-effort selectors. Policy +
+              // judge always render the pydantic-ai shape because the
+              // constitution agent + judge run via pydantic-ai
+              // regardless of primary runtime.
+              if (id === "primary" && isCodex) {
+                return (
+                  <CodexPrimaryRow
+                    key={id}
+                    modelId={codexModelId}
+                    reasoningEffort={codexReasoningEffort}
+                    models={cxModels}
+                    reachable={cxReachable}
+                    reasoningEfforts={cxEfforts}
+                    envDefaultModel={defaults.codexPrimary}
+                    envDefaultEffort={defaults.codexReasoningEffort}
+                    lastTurnMs={
+                      latestTimings === null
+                        ? null
+                        : latestTimings.primaryMs
+                    }
+                    onModelChange={setCodexModel}
+                    onEffortChange={setCodexEffort}
+                  />
+                );
+              }
+              return (
+                <RoleRow
+                  key={id}
+                  role={id}
+                  label={label}
+                  hint={hint}
+                  override={overrides[id]}
+                  models={models}
+                  reachable={reachable}
+                  orModels={orModels}
+                  orReachable={orReachable}
+                  gmModels={gmModels}
+                  gmReachable={gmReachable}
+                  envDefaultModelId={defaults[id]}
+                  lastTurnMs={
+                    latestTimings === null
+                      ? null
+                      : id === "primary"
+                        ? latestTimings.primaryMs
+                        : id === "policy"
+                          ? latestTimings.policyMs
+                          : latestTimings.judgeMs
+                  }
+                  onChange={(o) => setOverride(id, o)}
+                />
+              );
+            })}
             <p className="text-[0.6rem] text-mca-muted leading-relaxed pt-1">
-              gemini lists every model exposed by Google&apos;s OpenAI-compat
-              endpoint (Gemma open-weights + Gemini proprietary).
-              openrouter lists `:free` ids only. local hits LM Studio
-              at LOCAL_LLM_BASE_URL. Local + Gemma open-weights must
-              support OpenAI-style tool calls AND JSON-schema
-              structured output for the agent loop to function;
-              models that ignore tool_choice will produce empty
-              primary turns.
+              {isCodex
+                ? "codex primary uses codex-cli's bundled model catalog and reasoning-effort tiers. policy + judge still route via pydantic-ai (the constitution agent and eval judge are runtime-agnostic). empty model / effort = fall through to CODEX_PRIMARY_MODEL / CODEX_REASONING_EFFORT env, then codex-cli's own defaults."
+                : "gemini lists every model exposed by Google's OpenAI-compat endpoint (Gemma open-weights + Gemini proprietary). openrouter lists `:free` ids only. local hits LM Studio at LOCAL_LLM_BASE_URL. Local + Gemma open-weights must support OpenAI-style tool calls AND JSON-schema structured output for the agent loop to function; models that ignore tool_choice will produce empty primary turns."}
             </p>
           </div>
         </CollapsibleContent>
@@ -540,6 +642,114 @@ function RoleRow({
           ))}
         </select>
       )}
+    </div>
+  );
+}
+
+/**
+ * Codex-runtime primary-role row. Two compact selects (model +
+ * reasoning effort) sit where the pydantic-ai panel's provider
+ * segments + model dropdown live. Empty value in either select
+ * means "fall through to the env default", which the label echoes
+ * back from `/agent/config/role-defaults`. Stale-pin red-border
+ * treatment matches the pydantic-ai rows: if the user pinned a
+ * model id that's no longer in the catalog (codex-cli pin bumped
+ * and dropped that id), the select renders red so they re-pick.
+ */
+function CodexPrimaryRow({
+  modelId,
+  reasoningEffort,
+  models,
+  reachable,
+  reasoningEfforts,
+  envDefaultModel,
+  envDefaultEffort,
+  lastTurnMs,
+  onModelChange,
+  onEffortChange,
+}: {
+  modelId: string;
+  reasoningEffort: string;
+  models: CodexModel[];
+  reachable: boolean | null;
+  reasoningEfforts: string[];
+  envDefaultModel: string;
+  envDefaultEffort: string;
+  lastTurnMs: number | null;
+  onModelChange: (id: string) => void;
+  onEffortChange: (effort: string) => void;
+}) {
+  const modelKnown =
+    modelId === "" || models.some((m) => m.id === modelId);
+  const effortKnown =
+    reasoningEffort === "" || reasoningEfforts.includes(reasoningEffort);
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="flex items-center gap-2 text-[0.7rem] text-mca-text">
+          primary (codex)
+          <LastTurnTag ms={lastTurnMs} />
+        </span>
+      </div>
+      <p className="text-[0.6rem] text-mca-muted leading-snug">
+        the codex-cli agent that picks tools and writes the
+        narrative. policy + judge below run via pydantic-ai.
+      </p>
+      <div className="flex gap-2">
+        <select
+          className={`flex-1 text-[0.7rem] bg-mca-bg border rounded px-2 py-1 focus:outline-none focus-visible:ring-1 focus-visible:ring-mca-accent ${
+            modelKnown ? "border-mca-border" : "border-rose-500"
+          }`}
+          value={modelId}
+          onChange={(e) => onModelChange(e.target.value)}
+          disabled={reachable === false && models.length === 0}
+          aria-label="codex primary model id"
+        >
+          <option value="">
+            {reachable === false
+              ? "codex catalog unreachable"
+              : envDefaultModel
+                ? `${envDefaultModel} (env default)`
+                : "(cli default)"}
+          </option>
+          {!modelKnown && modelId ? (
+            <option value={modelId}>
+              {modelId} (no longer listed)
+            </option>
+          ) : null}
+          {models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name || m.id}
+            </option>
+          ))}
+        </select>
+        <select
+          className={`text-[0.7rem] bg-mca-bg border rounded px-2 py-1 focus:outline-none focus-visible:ring-1 focus-visible:ring-mca-accent ${
+            effortKnown ? "border-mca-border" : "border-rose-500"
+          }`}
+          value={reasoningEffort}
+          onChange={(e) => onEffortChange(e.target.value)}
+          disabled={reachable === false && reasoningEfforts.length === 0}
+          aria-label="codex reasoning effort"
+        >
+          <option value="">
+            {envDefaultEffort
+              ? `effort: ${envDefaultEffort} (env)`
+              : "effort (cli default)"}
+          </option>
+          {!effortKnown && reasoningEffort ? (
+            <option value={reasoningEffort}>
+              effort: {reasoningEffort} (unknown)
+            </option>
+          ) : null}
+          {reasoningEfforts.map((e) => (
+            <option key={e} value={e}>
+              effort: {e}
+            </option>
+          ))}
+        </select>
+      </div>
     </div>
   );
 }

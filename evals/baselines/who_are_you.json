@@ -1,11 +1,11 @@
 {
   "suite": "who_are_you",
-  "captured_at": "2026-05-06T06:09:03.779597Z",
-  "git_sha": "1575390b2529",
+  "captured_at": "2026-05-13T00:34:46.708338Z",
+  "git_sha": "1a82cad926e7",
   "agent_version": "0.1.0",
-  "agent_primary_model": "nvidia/nemotron-3-super-120b-a12b:free",
-  "agent_policy_model": "openai/gpt-oss-20b:free",
-  "eval_judge_model": "openrouter/owl-alpha",
+  "agent_primary_model": "gemini-3.1-flash-lite",
+  "agent_policy_model": "gemini-3.1-flash-lite",
+  "eval_judge_model": "gemini-3.1-flash-lite",
   "results": {
     "who_are_you.basic": {
       "judge-narrative-answers-the-question": "pass",
@@ -22,7 +22,6 @@
       "narrative-constitution-gate-passes-v4": "pass",
       "narrative-emitted-approved": "pass",
       "no-error-on-turn-root": "pass",
-      "primary-model-used": "pass",
       "turn-finishes-under-90s": "pass",
       "turn-root-span-present": "pass"
     },
