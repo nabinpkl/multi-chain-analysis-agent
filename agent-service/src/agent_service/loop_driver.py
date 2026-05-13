@@ -54,7 +54,7 @@ from agent_service.core import (
 from agent_service.diff_replay import _frame as _shared_frame, run_repeat_path
 from agent_service.llm_retry import begin_role_timing_capture
 from agent_service.primitive_client import PrimitiveClient
-from agent_service.repeat_detector import build_repeat_agent, detect_repeat
+from agent_service.repeat_detector import detect_repeat
 from agent_service.thread_state import (
     AgentThread,
     ThreadRegistry,
@@ -101,14 +101,13 @@ class LoopHandles:
 
     The core uses `primary_agent` and `primitive_client` directly
     (no handles bundle) so future drivers don't inherit chat-specific
-    fields they don't need. The chat-only fields here (`threads`,
-    `repeat_agent`) stay on this bundle. The constitution gate is
-    stateless function calls now (`policy.constitution.judge_*`); no
-    cached agent instance needed.
+    fields they don't need. The chat-only fields here (`threads`)
+    stay on this bundle. The constitution gate and repeat detector
+    both run as stateless function calls through `runtime_call`; no
+    cached agent instances needed.
     """
 
     primary_agent: Agent
-    repeat_agent: Agent
     primitive_client: PrimitiveClient
     threads: ThreadRegistry
     debug_public: bool
@@ -238,11 +237,6 @@ async def run_turn(
         if primary_override is not None or effective_window_secs != 60
         else handles.primary_agent
     )
-    repeat_agent_for_turn = (
-        build_repeat_agent(llm_override=policy_override)
-        if policy_override is not None
-        else handles.repeat_agent
-    )
     try:
         thread, lock = await handles.threads.get_or_create(
             thread_id, runtime=session_pb2.AGENT_RUNTIME_PYDANTIC_AI
@@ -304,7 +298,7 @@ async def run_turn(
                             outcome = await detect_repeat(
                                 prior_qs,
                                 request.user_question,
-                                repeat_agent_for_turn,
+                                llm_override=policy_override,
                             )
                             is_repeat = outcome.repeat_of_turn is not None
                             rd_span.set_attribute(

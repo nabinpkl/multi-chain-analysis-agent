@@ -935,7 +935,6 @@ async def run_turn_codex(
                             outcome = await detect_repeat(
                                 prior_qs,
                                 request.user_question,
-                                handles.repeat_agent,
                             )
                             is_repeat = outcome.repeat_of_turn is not None
                             rd_span.set_attribute(

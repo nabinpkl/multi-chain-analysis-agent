@@ -1,8 +1,8 @@
-"""Ship 4 repeat detector. Pre-loop small LLM gate that judges whether
-the new user message is a FULL REPEAT of any prior turn in the same
-thread. Drives the loop's branch into the incremental-answer path
-(replay turn N's primitives, diff against captured outputs, narrate
-only what changed) vs the normal main loop.
+"""Repeat detector. Pre-loop classifier that judges whether the new
+user message is a FULL REPEAT of any prior turn in the same thread.
+Drives the loop's branch into the incremental-answer path (replay
+turn N's primitives, diff against captured outputs, narrate only what
+changed) vs the normal main loop.
 
 Direct port of `backend/src/agent/repeat_detector.rs`. Same system
 prompt, same JSON schema, same fall-through behavior on parse failure.
@@ -12,22 +12,27 @@ modes (timeout, parse failure, empty history) all return
 `RepeatDetectorOutcome.no_repeat(...)` so detection is opportunistic
 and never breaks the turn.
 
-Uses the cheap policy model via Pydantic AI's structured-output path.
-~100-150ms extra per turn when the switch is on; zero when off.
+Stateless function call through `agent_service.llm_runtime.runtime_call`,
+which dispatches between codex (subscription auth) and pydantic-ai
+(free-tier Gemini) based on `AGENT_DEFAULT_RUNTIME`. Shares the policy
+role with the constitution gate so the dev Models panel's per-turn
+policy-role pick reaches this detector via the same `llm_override`
+path on the pydantic-ai branch.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any
 
 import structlog
-from pydantic import BaseModel, ConfigDict, Field
-from pydantic_ai import Agent
+from pydantic import BaseModel, ConfigDict
 
-from agent_service import llm
-from agent_service.llm_retry import with_provider_retry
+from agent_service.llm_runtime import (
+    RuntimeCallParseError,
+    runtime_call,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -52,7 +57,8 @@ Reply with ONLY valid JSON, no prose, no code fences. Schema:
 
 
 class _RepeatJudgement(BaseModel):
-    """Pydantic shape Pydantic AI extracts from the LLM's JSON output."""
+    """Structured shape the LLM emits. Codex's strict outputSchema and
+    the pydantic-ai text-parse path both produce instances of this."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -77,30 +83,13 @@ class RepeatDetectorOutcome:
         return cls(repeat_of_turn=None, reason=reason, user_explicitly_wants_refresh=False)
 
 
-def build_repeat_agent(*, llm_override=None) -> Agent[None, _RepeatJudgement]:
-    """Construct the repeat detector agent. Cheap policy model, no
-    tools, structured output.
-
-    `llm_override` (a `RoleOverride`-shaped object) pins the agent to
-    a specific provider + model id for this turn; populated by the
-    loop driver from `request.llm_override.policy` (the repeat
-    detector shares the policy role with the constitution gate).
-    None = production preset.
-    """
-    return Agent(
-        model=llm.make_model("policy", override=llm_override),
-        output_type=_RepeatJudgement,
-        system_prompt=_REPEAT_SYSTEM,
-    )
-
-
 def _format_user_prompt(prior: dict[int, str], new: str) -> str:
     """Stable ordering by turn id so the model sees chronological
     order even though the dict is unordered."""
     sorted_items = sorted(prior.items(), key=lambda kv: kv[0])
     history = "\n".join(f"{t}: {q}" for t, q in sorted_items)
-    # Use json.dumps to escape the new message so embedded quotes don't
-    # break the prompt grammar. Mirror of Rust's `{:?}` debug formatting.
+    # json.dumps escapes embedded quotes in the new message so they
+    # don't break the prompt grammar. Mirror of Rust's `{:?}` debug.
     new_json = json.dumps(new)
     return (
         f"Prior turns (turn_id: question):\n{history}\n\n"
@@ -111,31 +100,47 @@ def _format_user_prompt(prior: dict[int, str], new: str) -> str:
 async def detect_repeat(
     prior_questions: dict[int, str],
     new_user_msg: str,
-    agent: Agent[None, _RepeatJudgement],
+    *,
+    llm_override: Any = None,
 ) -> RepeatDetectorOutcome:
     """Run the detector. Returns `no_repeat(...)` on any failure (LLM
     error, parse failure, empty history). The downstream loop uses
     `repeat_of_turn is not None` as the only branch signal; missed
     repeats fall through to the normal main loop with no behavioral
-    cost."""
+    cost.
+
+    `llm_override` is forwarded to `runtime_call`'s pydantic-ai branch
+    where the dev Models panel's policy-role pick threads through
+    `llm.make_model`. On codex it's ignored (codex picks its model
+    centrally via `CODEX_HELPER_MODEL`).
+    """
     if not prior_questions:
         return RepeatDetectorOutcome.no_repeat("no prior turns in thread")
 
     user_prompt = _format_user_prompt(prior_questions, new_user_msg)
 
     try:
-        result = await with_provider_retry(
-            lambda: agent.run(user_prompt),
-            label="repeat_detector",
+        raw, _raw_text = await runtime_call(
+            role="policy",
+            system_prompt=_REPEAT_SYSTEM,
+            user_prompt=user_prompt,
+            output_model=_RepeatJudgement,
+            llm_override=llm_override,
             per_attempt_timeout_s=20.0,
         )
+    except RuntimeCallParseError as e:
+        log.warning(
+            "repeat_detector_parse_failed",
+            error=str(e)[:200],
+            raw_first_200=e.raw_text[:200],
+        )
+        return RepeatDetectorOutcome.no_repeat("detector parse failed")
     except Exception as e:  # noqa: BLE001
         log.warning("repeat_detector_call_failed", error=str(e))
         return RepeatDetectorOutcome.no_repeat("detector call failed")
 
-    raw = result.output
-    # Validate: the model may return a turn id that doesn't exist
-    # (hallucinated). Only trust it if it indexes a real prior turn.
+    # The model may return a turn id that doesn't exist (hallucinated).
+    # Only trust it if it indexes a real prior turn.
     validated = (
         raw.repeat_of_turn
         if raw.repeat_of_turn is not None and raw.repeat_of_turn in prior_questions
