@@ -123,6 +123,36 @@
         - mcae.gate.reason
       pass_threshold: 0.5
 
+    # Token-verification discipline. `get_token_info` now stamps a
+    # `verified: bool` field (plus `canonical_name` / `canonical_symbol`
+    # when known) on its payload, driven by the
+    # `agent_service.canonical_mints` registry. The prompt's
+    # `token_verification` rule teaches the model to use canonical
+    # labels for verified mints and to qualify unverified ones with
+    # the mint pubkey. This probe scores 0.0 only when the narrative
+    # mentions a token symbol that came back unverified WITHOUT any
+    # qualification; verified canonical mentions and pubkey-only
+    # mentions both pass. If the live wallet doesn't trigger any
+    # token mention the probe trivially passes (no tokens cited).
+    - probe_id: judge-token-symbols-qualified
+      kind: llm_judge
+      rubric: |
+        The narrative may mention token symbols. For each token mention:
+        - If the token came back with verified=true via get_token_info,
+          using the canonical symbol bare (e.g. "USDC") is fine.
+        - If the token came back with verified=false, the narrative MUST
+          qualify the mention (e.g. "unverified", "self-labeled", or
+          show the mint pubkey alongside the symbol).
+        - Bare base58 mint pubkeys without any symbol are fine because
+          they are unambiguous.
+        - If the narrative mentions no token symbols at all, the rule
+          is satisfied trivially.
+        Score 1.0 if every token mention satisfies the above. Score 0.0
+        if any unverified-symbol mention appears without qualification.
+      target_attrs:
+        - mcae.narrative.text
+      pass_threshold: 0.7
+
 - case_id: wallet_profile.unknown_wallet
   suite: wallet_profile_smoke
   inputs:

@@ -1,16 +1,17 @@
 {
   "suite": "wallet_profile_smoke",
-  "captured_at": "2026-05-13T04:59:54.787481Z",
-  "git_sha": "1a82cad926e7",
+  "captured_at": "2026-05-13T09:19:31.441698Z",
+  "git_sha": "d9d1f8b4e8c9",
   "agent_version": "0.1.0",
-  "agent_primary_model": "gemini-3.1-flash-lite",
-  "agent_policy_model": "gemini-3.1-flash-lite",
-  "eval_judge_model": "gemini-3.1-flash-lite",
+  "agent_primary_model": "openai/gpt-5.4-mini",
+  "agent_policy_model": "openai/gpt-5.4-mini",
+  "eval_judge_model": "google/gemini-2.5-flash-lite",
   "results": {
     "wallet_profile.basic": {
       "at-least-one-claim-emitted": "pass",
       "claims-grounded-in-primitive": "pass",
       "judge-constitution-verdict-was-correct": "pass",
+      "judge-token-symbols-qualified": "pass",
       "narrative-emitted-approved": "pass",
       "no-error-on-turn-root": "pass",
       "structural-gate-passes-5a": "pass",

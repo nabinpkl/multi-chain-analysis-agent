@@ -311,14 +311,19 @@ Each = real tool, but adding now = anti-portfolio: signals over-engineered small
 
 # Known Limitations
 
-## Token metadata not resolved
+## Token metadata: resolved on-chain, attacker-controlled in display
 
 Edges (`backend/src/ingest/parser.rs::parse_edges`) capture every wallet-to-wallet fungible movement by diffing pre/post balances across SOL and every SPL / Token-2022 mint, regardless of which program initiated the transfer. The `mint` column is empty for SOL and the mint pubkey for every other token. Mint-issuance and burn residuals are emitted as `kind="mint"` and `kind="burn"` edges using the mint pubkey as the synthetic peer.
 
-What is NOT yet resolved is the mapping from those mint pubkeys to human-readable token data:
+On-chain metadata IS resolved via `backend/src/metadata/fetch.rs::fetch_token_metadata`, served through the `get_token_info` primitive: Metaplex Token Metadata PDA first, Token-2022 inline metadata extension as fallback. Cached in `multichain.token_metadata` (TTL ~1h). The agent has a `get_token_info(mint)` tool exposed via MCP.
 
-- On-chain Metaplex Token Metadata account (name, symbol, uri) per mint.
-- Token-2022 metadata extension (same fields, stored inline on the mint account for newer tokens).
-- Off-chain JSON at the URI (description, image, external_url, social links).
+The actual remaining gap is at the display layer. The `name` / `symbol` / `uri` fields are whatever string the mint authority embedded at creation time. Anyone can mint a Token-2022 with `name="USD Coin"` and `symbol="USDC"` at a non-canonical pubkey; the agent reads "USDC" from RPC and may narrate the wallet as transacting in USDC even though the actual mint pubkey is an impostor's. The mint pubkey itself is forge-proof (every SPL transfer references the mint pubkey directly, never a symbol), so data-layer queries are unambiguous; only the human-facing narrative is at risk.
 
-Until this lands, the agent narrates token activity in base58 mint addresses and cannot answer "what kind of token is this" or "what is this project." Memo text (`backend/src/ingest/parser.rs::parse_memos` + `multichain.memos` table) is the only human-readable text currently in the pipeline, and per the empirical study most memos are machine-generated routing tags rather than substantive prose.
+Current defense: `agent_service.canonical_mints` holds a small allow-list of canonical pubkeys (USDC, USDT, wSOL). `stamp_verification` adds `verified: bool` plus `canonical_name` / `canonical_symbol` to the `get_token_info` payload; the prompt's `token_verification` rule instructs the model to use canonical labels when verified and qualify the symbol as unverified otherwise. The on-chain strings still pass through to the model as forensic surface; the verified flag is a tag, not a filter.
+
+Out of scope today:
+- URI decoding or off-chain JSON fetching. We pass `uri` through as a string only.
+- LSTs (JitoSOL, mSOL, bSOL) and non-stablecoin majors (JUP, BONK, PYTH, WIF) in the canonical registry. Add when an eval shows a concrete narrative-quality miss.
+- Adversarial-eval coverage of impostor-mint scenarios (synthetic Token-2022 with attacker-chosen `name` / `symbol` injected via test fixtures). The `judge-token-symbols-qualified` probe in `evals/cases/wallet_profile_smoke.yaml` is the placeholder rubric; the full suite (injection fixtures, cross-runtime parity) is the natural follow-on.
+
+Memo text (`backend/src/ingest/parser.rs::parse_memos` + `multichain.memos` table) remains the other attacker-controlled outer-text channel; per the empirical study most memos are machine-generated routing tags rather than substantive prose, but the same `<external_data>` instruction-rejection rule applies.

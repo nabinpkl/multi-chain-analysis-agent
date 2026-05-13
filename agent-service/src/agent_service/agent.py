@@ -30,6 +30,7 @@ from pydantic_ai import Agent, RunContext
 
 from agent_service import spans
 from agent_service.boundary import sanitize_token_info_payload, wrap_external_data
+from agent_service.canonical_mints import stamp_verification
 from agent_service import llm
 from agent_service.policy.binding_store import PrimitiveBindingStore, build_binding
 from agent_service.primitive_client import PrimitiveClient, PrimitiveError
@@ -322,6 +323,16 @@ def build_agent(
             "source_program": result.source_program,
             "found": result.found,
         }
+        # Canonical-mint verification stamp. The mint pubkey is the
+        # forge-proof identity; on-chain `name` / `symbol` / `uri` are
+        # attacker-controlled and stay in the payload as forensic
+        # surface. `verified=true` plus the canonical strings tell the
+        # model which mints we stand behind by pubkey, so the prompt
+        # rule can have it use canonical labels for those and qualify
+        # everything else as unverified. Pre-sanitization on purpose:
+        # these fields are our hardcoded data, not external text, so
+        # they should survive `external_text_input_enabled=false`.
+        payload = stamp_verification(payload)
         # Replay record captures the UNREDACTED payload so ship 4 diff
         # can compare against future re-fetches. The redaction below
         # only affects what reaches the LLM via wrap_external_data.
