@@ -58,3 +58,17 @@
       kind: no_span_with_status
       span_name: mcae.turn
       status: error
+
+    # Codex built-in tool lockdown regression check. The profile sets
+    # `builtin_tools=frozenset()` so shell, unified_exec, apply_patch,
+    # web_search, view_image, image_generation, computer_use,
+    # browser_use, tool_search, and the apps subsystem are disabled
+    # in the per-actor `config.toml`. `codex_driver` synthesizes
+    # `mcae.codex.tool.builtin` for any tool call that isn't one of
+    # the four MCAE MCP tools (`wallet_profile`, `community_summary`,
+    # `get_token_info`, `emit_claims`). A normal wallet-profile turn
+    # never triggers a built-in, so this probe should always pass; if
+    # it fails, the lockdown got dropped.
+    - probe_id: no-builtin-tool-call
+      kind: no_matching_span
+      span_name: mcae.codex.tool.builtin

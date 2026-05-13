@@ -164,6 +164,15 @@ _PRIMITIVE_SPAN_NAMES: dict[str, str] = {
     "get_token_info": spans.PRIMITIVE_GET_TOKEN_INFO,
 }
 
+# The four MCAE MCP tools. Anything codex calls outside this set is
+# a built-in surface (shell, web_search, view_image, etc.) that the
+# profile's `builtin_tools=frozenset()` lockdown is supposed to
+# remove. We synthesize `mcae.codex.tool.builtin` for any non-MCP
+# call so an eval probe can assert the lockdown stayed in place.
+_KNOWN_MCP_TOOLS: frozenset[str] = frozenset(
+    {"wallet_profile", "community_summary", "get_token_info", "emit_claims"}
+)
+
 
 def _capped_json(value: Any, cap: int = spans.PRIMITIVE_PAYLOAD_MAX_BYTES) -> str:
     """Serialize `value` to JSON and cap it at `cap` bytes, matching
@@ -747,7 +756,7 @@ async def run_turn_codex(
     # loop is one linear sequence and wrapping it in a `with` block
     # would re-indent hundreds of lines.
     chat_span: Any = None
-    pending_tool_spans: dict[str, tuple[Any, float]] = {}
+    pending_tool_spans: dict[str, tuple[Any, float, str]] = {}
 
     try:
         thread, lock = await handles.threads.get_or_create(
@@ -1279,9 +1288,10 @@ async def run_turn_codex(
                         # duration + output digest.
                         if sig is not None and evt.tool_id:
                             tname = sig[0]
-                            span_name = _PRIMITIVE_SPAN_NAMES.get(tname)
-                            if span_name is not None:
-                                ps = _tracer.start_span(span_name)
+                            if tname in _PRIMITIVE_SPAN_NAMES:
+                                ps = _tracer.start_span(
+                                    _PRIMITIVE_SPAN_NAMES[tname]
+                                )
                                 ps.set_attribute(
                                     spans.Attrs.SNAPSHOT_ID,
                                     snapshot_id or "",
@@ -1314,6 +1324,34 @@ async def run_turn_codex(
                                 pending_tool_spans[evt.tool_id] = (
                                     ps,
                                     time.monotonic(),
+                                    "primitive",
+                                )
+                            elif tname not in _KNOWN_MCP_TOOLS:
+                                # Any tool call that isn't one of the
+                                # four MCAE MCP tools is a codex
+                                # built-in (or a future tool we haven't
+                                # mapped). The profile lockdown is
+                                # supposed to remove these from codex's
+                                # advertised surface, so this span
+                                # should never fire on a healthy turn.
+                                ps = _tracer.start_span(
+                                    spans.CODEX_TOOL_BUILTIN
+                                )
+                                ps.set_attribute(
+                                    spans.Attrs.CODEX_TOOL_NAME, tname
+                                )
+                                ps.set_attribute(
+                                    spans.Attrs.SNAPSHOT_ID,
+                                    snapshot_id or "",
+                                )
+                                ps.set_attribute(
+                                    spans.Attrs.CODEX_TOOL_INPUT,
+                                    _capped_json(sig[1]),
+                                )
+                                pending_tool_spans[evt.tool_id] = (
+                                    ps,
+                                    time.monotonic(),
+                                    "builtin",
                                 )
                         yield _frame(
                             "Progress",
@@ -1341,13 +1379,11 @@ async def run_turn_codex(
                             else None
                         )
                         if ps_entry is not None:
-                            ps, ps_t0 = ps_entry
-                            ps.set_attribute(
-                                spans.Attrs.PRIMITIVE_DURATION_MS,
-                                int((time.monotonic() - ps_t0) * 1000),
+                            ps, ps_t0, ps_kind = ps_entry
+                            duration_ms = int(
+                                (time.monotonic() - ps_t0) * 1000
                             )
-                            ps.set_attribute(
-                                spans.Attrs.PRIMITIVE_OUTPUT,
+                            output_str = (
                                 _capped_json(evt.output or "")
                                 if not isinstance(evt.output, str)
                                 else (
@@ -1362,23 +1398,46 @@ async def run_turn_codex(
                                         ]
                                         + f" ...[truncated, total={len(evt.output.encode('utf-8'))}]"
                                     )
-                                ),
+                                )
                             )
-                            ps.set_attribute(
-                                spans.Attrs.PRIMITIVE_OUTPUT_DIGEST,
-                                _digest12(evt.output),
-                            )
-                            # Codex marks tool errors via the output
-                            # payload shape (no `structuredContent`);
-                            # `_extract_mcp_envelope` returning None
-                            # is the canonical "tool errored"
-                            # signal, same one the binding-store
-                            # recorder uses.
-                            if (
-                                _extract_mcp_envelope(evt.output) is None
-                                and tool_name in _PRIMITIVE_SPAN_NAMES
-                            ):
-                                ps.set_attribute("error", True)
+                            if ps_kind == "primitive":
+                                ps.set_attribute(
+                                    spans.Attrs.PRIMITIVE_DURATION_MS,
+                                    duration_ms,
+                                )
+                                ps.set_attribute(
+                                    spans.Attrs.PRIMITIVE_OUTPUT, output_str
+                                )
+                                ps.set_attribute(
+                                    spans.Attrs.PRIMITIVE_OUTPUT_DIGEST,
+                                    _digest12(evt.output),
+                                )
+                                # Codex marks tool errors via the
+                                # output payload shape (no
+                                # `structuredContent`);
+                                # `_extract_mcp_envelope` returning
+                                # None is the canonical "tool
+                                # errored" signal, same one the
+                                # binding-store recorder uses.
+                                if (
+                                    _extract_mcp_envelope(evt.output) is None
+                                    and tool_name in _PRIMITIVE_SPAN_NAMES
+                                ):
+                                    ps.set_attribute("error", True)
+                            else:
+                                # Built-in path: no MCP envelope to
+                                # inspect, so we only stamp duration
+                                # + raw output. The span's existence
+                                # is the signal; a probe asserting
+                                # absence is enough to flag a
+                                # lockdown regression.
+                                ps.set_attribute(
+                                    spans.Attrs.CODEX_TOOL_DURATION_MS,
+                                    duration_ms,
+                                )
+                                ps.set_attribute(
+                                    spans.Attrs.CODEX_TOOL_OUTPUT, output_str
+                                )
                             ps.end()
                         # Chunk 3.5 item 6: populate the per-thread
                         # binding store from the {value, provenance}
@@ -1988,7 +2047,7 @@ async def run_turn_codex(
         # window and never reach the collector). Mark each
         # remaining primitive span `error=True` so eval probes can
         # tell "tool started, turn aborted" from a clean completion.
-        for tool_id, (ps, _t0) in pending_tool_spans.items():
+        for tool_id, (ps, _t0, _kind) in pending_tool_spans.items():
             try:
                 ps.set_attribute("error", True)
                 ps.end()

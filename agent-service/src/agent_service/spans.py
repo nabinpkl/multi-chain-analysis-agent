@@ -53,6 +53,17 @@ PRIMITIVE_WALLET_PROFILE: Final = "mcae.primitive.wallet_profile"
 PRIMITIVE_COMMUNITY_SUMMARY: Final = "mcae.primitive.community_summary"
 PRIMITIVE_GET_TOKEN_INFO: Final = "mcae.primitive.get_token_info"
 
+# Synthesized for any codex tool call that is NOT one of the four
+# MCAE MCP tools (`wallet_profile`, `community_summary`,
+# `get_token_info`, `emit_claims`). Built-in tool surfaces (shell,
+# unified_exec, apply_patch, web_search, view_image, image_generation,
+# computer_use, browser_use, tool_search, apps) are disabled in the
+# per-actor config.toml via `CodexAgentProfile.builtin_tools=frozenset()`;
+# this span exists so an eval probe can assert the lockdown stayed
+# in place. A passing turn never emits this span; a regression that
+# unlocks builtins makes it visible.
+CODEX_TOOL_BUILTIN: Final = "mcae.codex.tool.builtin"
+
 # Repeat-path machinery.
 REPEAT_DETECTION: Final = "mcae.repeat.detection"
 TURN_DIFF: Final = "mcae.turn.diff"
@@ -177,6 +188,17 @@ class Attrs:
     # ends with the literal " ...[truncated, total=N]".
     PRIMITIVE_INPUT: Final = "mcae.primitive.input"
     PRIMITIVE_OUTPUT: Final = "mcae.primitive.output"
+
+    # Built-in tool spans (`mcae.codex.tool.builtin`). Namespaced
+    # separately from `mcae.primitive.*` so probes that filter by
+    # span name keep clean semantics. `name` is the tool identifier
+    # the model invoked (e.g. "shell", "web_search"); the other
+    # attrs mirror the primitive span shape so debuggers see the
+    # same fields.
+    CODEX_TOOL_NAME: Final = "mcae.codex.tool.name"
+    CODEX_TOOL_INPUT: Final = "mcae.codex.tool.input"
+    CODEX_TOOL_OUTPUT: Final = "mcae.codex.tool.output"
+    CODEX_TOOL_DURATION_MS: Final = "mcae.codex.tool.duration_ms"
 
     # Repeat detector + diff.
     REPEAT_IS_REPEAT: Final = "mcae.repeat.is_repeat"
