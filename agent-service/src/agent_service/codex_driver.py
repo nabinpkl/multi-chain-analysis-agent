@@ -79,14 +79,11 @@ from agent_service.core.run import (
 from agent_service.diff_replay import run_repeat_path
 from agent_service.repeat_detector import detect_repeat
 from agent_service.thread_state import TurnToolCallRecord
-from agent_service.llm_retry import begin_role_timing_capture, with_provider_retry
+from agent_service.llm_retry import begin_role_timing_capture
 from agent_service.policy import constitution as constitution_module
 from agent_service.policy import structural as structural_module
 from agent_service.policy.binding_store import build_binding
-from agent_service.policy.constitution import (
-    build_constitution_agent,
-    judge_narrative,
-)
+from agent_service.policy.constitution import judge_narrative
 from agent_service.policy.placeholder import validate_refs
 from agent_service.policy.structural import verify_chip_values
 from agent_service.prompts.composer import (
@@ -1837,21 +1834,14 @@ async def run_turn_codex(
                     and final_text
                 ):
                     role_t_const = time.monotonic()
-                    # When the turn opts into a non-default live
-                    # window, rebuild the constitution agent for this
-                    # turn so its policy prompt's `${LIVE_WINDOW_HUMAN}`
-                    # placeholder matches what the primary agent saw.
-                    # Without this, the gate's "60-second live window"
-                    # framing would retract a correct 15-minute
-                    # narrative as window-mismatched. Sub-ms build
-                    # cost, dwarfed by the LLM call that follows.
-                    constitution_agent_for_turn = (
-                        build_constitution_agent(
-                            live_window_secs=effective_window_secs,
-                        )
-                        if effective_window_secs != 60
-                        else handles.constitution_agent
-                    )
+                    # Constitution gate is stateless: `judge_narrative`
+                    # reads `live_window_secs` on every call so the
+                    # `${LIVE_WINDOW_HUMAN}` placeholder matches what
+                    # the primary agent saw. Routes through
+                    # `runtime_call`, which dispatches between codex
+                    # (subscription auth) and pydantic-ai based on
+                    # `AGENT_DEFAULT_RUNTIME`; the pydantic-ai branch
+                    # has its own retry, codex relies on its internals.
                     with _tracer.start_as_current_span(
                         spans.GATE_NARRATIVE_CONSTITUTION
                     ) as g:
@@ -1859,20 +1849,17 @@ async def run_turn_codex(
                             spans.Attrs.GATE_VERSION,
                             constitution_module.VERSION,
                         )
-                        verdict = await with_provider_retry(
-                            lambda: judge_narrative(
-                                constitution_agent_for_turn,
-                                text=final_text,
-                                same_turn_claims=(
-                                    _claims_to_judgement_payload(
-                                        approved_claim_list
-                                    )
-                                    + _claims_to_judgement_payload(
-                                        list(thread.claims)
-                                    )
-                                ),
+                        verdict = await judge_narrative(
+                            text=final_text,
+                            same_turn_claims=(
+                                _claims_to_judgement_payload(
+                                    approved_claim_list
+                                )
+                                + _claims_to_judgement_payload(
+                                    list(thread.claims)
+                                )
                             ),
-                            label="constitution_narrative",
+                            live_window_secs=effective_window_secs,
                         )
                         normalized = _normalize_verdict(verdict.verdict)
                         g.set_attribute(spans.Attrs.GATE_VERDICT, normalized)

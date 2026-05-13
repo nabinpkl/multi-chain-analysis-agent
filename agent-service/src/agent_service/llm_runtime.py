@@ -195,6 +195,7 @@ async def runtime_call(
     output_model: type[T],
     runtime: Runtime | None = None,
     model_id: str | None = None,
+    llm_override: Any = None,
     per_attempt_timeout_s: float = 45.0,
 ) -> tuple[T, str]:
     """Run one LLM helper call and return `(instance, raw_text)`.
@@ -206,14 +207,20 @@ async def runtime_call(
     Codex path: spawns / reuses the cached `mcae-helper` codex
     subprocess, passes `to_strict_json_schema(output_model.model_json_schema())`
     as `outputSchema`, parses the final assistant message. Auth via
-    `~/.codex/auth.json` (subscription, no per-call billing).
+    `~/.codex/auth.json` (subscription, no per-call billing). The
+    `llm_override` and `model_id` args are honored as a fallback model
+    pick; codex's central `CODEX_HELPER_MODEL` env wins when neither
+    is set.
 
     Pydantic-ai path: builds a pydantic-ai `Agent` with `output_type=str`,
     runs it through `with_provider_retry` for transient-failure
     handling, then parses the first JSON object out of the response.
+    `llm_override` is forwarded to `llm.make_model` so the dev Models
+    panel's per-turn provider + model id selection works the same as
+    before; an explicit `model_id` arg wins if both are set.
 
-    Raises `ValueError` on parse / validation failure with the raw
-    text in the message. Caller surfaces it as a probe / gate error.
+    Raises `RuntimeCallParseError` (carrying `.raw_text`) on parse /
+    validation failure. Caller surfaces it as a probe / gate error.
     """
     chosen = runtime or resolve_helper_runtime()
     if chosen == "codex":
@@ -229,6 +236,7 @@ async def runtime_call(
         user_prompt=user_prompt,
         output_model=output_model,
         model_id=model_id,
+        llm_override=llm_override,
         per_attempt_timeout_s=per_attempt_timeout_s,
     )
 
@@ -277,10 +285,11 @@ async def _pydantic_ai_runtime_call(
     user_prompt: str,
     output_model: type[T],
     model_id: str | None,
+    llm_override: Any,
     per_attempt_timeout_s: float,
 ) -> tuple[T, str]:
     agent: Agent[None, str] = Agent(
-        model=llm.make_model(role, model_id=model_id),
+        model=llm.make_model(role, override=llm_override, model_id=model_id),
         output_type=str,
         system_prompt=system_prompt,
     )

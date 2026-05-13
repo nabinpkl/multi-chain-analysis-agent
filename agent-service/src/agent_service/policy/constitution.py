@@ -1,36 +1,45 @@
-"""Constitution gate. Second Pydantic AI agent that judges the
-agent's prose output against the policy constitution and emits a
-structured `ConstitutionVerdict`.
+"""Constitution gate. Policy LLM call that judges the agent's prose
+output against the constitution and emits a structured
+`ConstitutionVerdict` ("approve" | "retract" | "reject" plus reason
+and a numbers-extracted sidecar).
 
 The constitution prompt lives in `prompts/policy_v4.txt` (verbatim
-copy of the Rust prompt). The model returns one of three verdict
-strings ("approve" | "retract" | "reject") plus a reason and a
-structured extraction sidecar of numbers seen in the prose.
+copy of the Rust prompt). The loop driver reads the verdict + reason
+inline; the `gate.constitution` and `gate.narrative_constitution`
+OTel spans carry the verdict as attributes (per ADR 13).
 
-The Pydantic output type is a plain pydantic model (not a proto) so
-Pydantic AI can derive a JSON schema for the LLM. The loop driver
-reads the verdict + reason inline; the gate.constitution and
-gate.narrative_constitution OTel spans carry the verdict as
-attributes (per ADR 13).
+The gate is **stateless function calls** through
+`agent_service.llm_runtime.runtime_call`, which dispatches between
+codex (subscription auth) and pydantic-ai (free-tier Gemini) based on
+`AGENT_DEFAULT_RUNTIME`. Same model family for primary + policy
+under codex; same Gemini stack under pydantic-ai. No per-process
+agent instance kept around: building a stateless judge call is sub-
+millisecond and avoids the lifespan-build / per-turn-rebuild
+gymnastics the previous shape needed for window + override
+plumbing.
 
-Lenient parsing: the LLM occasionally adds extra fields or tweaks the
-extraction shape. We accept what we can, log the rest, and never let
-a malformed sidecar fail the gate.
+Lenient parsing: the strict-schema walker in `llm_runtime` ensures
+codex's `outputSchema` accepts the pydantic shape; on pydantic-ai we
+parse the first JSON object out of plain text. Either path,
+`RuntimeCallParseError` surfaces as a soft-approve so a flaky LLM
+call doesn't nuke the agent's user-facing output (the structural
+gate has already run by this point and provides the load-bearing
+factuality check).
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
-from pydantic_ai import Agent
 
-from agent_service import llm
-from agent_service.llm_retry import with_provider_retry
+from agent_service.llm_runtime import (
+    RuntimeCallParseError,
+    runtime_call,
+)
 from agent_service.prompts.composer import (
     DEFAULT_LIVE_WINDOW_SECS,
     substitute_live_window,
@@ -77,12 +86,6 @@ class ConstitutionVerdict(BaseModel):
     extraction: _ExtractionLLM | None = None
 
 
-@dataclass
-class _Deps:
-    """Empty deps slot; the constitution agent has no tools or runtime
-    context beyond the prompt content itself."""
-
-
 def _system_prompt(live_window_secs: int = DEFAULT_LIVE_WINDOW_SECS) -> str:
     """Load `policy_v4.txt` and substitute the `${LIVE_WINDOW_HUMAN}`
     placeholder with the human string for `live_window_secs`.
@@ -92,64 +95,38 @@ def _system_prompt(live_window_secs: int = DEFAULT_LIVE_WINDOW_SECS) -> str:
     ${window} live window" stays in lockstep with the primary agent's
     "user is viewing the last ${window} of transfers." If the two
     drift, the gate retracts correct narratives on any non-default
-    window. Default 60s reproduces the historical prompt content
-    byte-for-byte at run time.
+    window.
     """
     return substitute_live_window(
         _PROMPT_PATH.read_text(encoding="utf-8"), live_window_secs
     )
 
 
-def build_constitution_agent(
-    *,
-    llm_override=None,
-    live_window_secs: int = DEFAULT_LIVE_WINDOW_SECS,
-) -> Agent[_Deps, ConstitutionVerdict]:
-    """Construct the policy gate agent. One model call per invocation;
-    no tools; structured output via Pydantic AI's native output_type.
-
-    The cheap policy model is hardcoded here (gpt-oss-20b free tier).
-    Free-tier rate limits force sequential calls; the loop driver
-    pipelines this after the primary agent completes, never in parallel.
-
-    `llm_override` (a `RoleOverride`-shaped object) pins the agent to
-    a specific provider + model id for this turn; populated by the
-    loop driver from `request.llm_override.policy`. None = production
-    preset.
-
-    `live_window_secs` is threaded into the policy prompt's
-    `${LIVE_WINDOW_HUMAN}` placeholder so the gate's framing matches
-    whatever window the snapshot was materialized against. Lifespan
-    startup builds with the 60s default; the loop driver rebuilds
-    per-turn when a request widens the window. Agent setup is sub-
-    millisecond (no I/O), so per-turn rebuild is cheap compared to
-    the LLM call that follows.
-    """
-    return Agent(
-        model=llm.make_model("policy", override=llm_override),
-        deps_type=_Deps,
-        output_type=ConstitutionVerdict,
-        system_prompt=_system_prompt(live_window_secs),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Public surface: helpers the loop driver calls per channel.
-# ---------------------------------------------------------------------------
+def _soft_approve(reason: str) -> ConstitutionVerdict:
+    """Soft-approve fallback when the LLM call or parse fails. The
+    structural gate has already run; constitution is the prose-judgment
+    layer, so a flaky LLM call should not nuke user-facing output."""
+    return ConstitutionVerdict(verdict="approve", reason=reason)
 
 
 async def judge_claim(
-    agent: Agent[_Deps, ConstitutionVerdict],
     *,
     headline: str,
     body_markdown: str,
     provenance_summary: list[dict],
+    live_window_secs: int = DEFAULT_LIVE_WINDOW_SECS,
+    llm_override: Any = None,
 ) -> ConstitutionVerdict:
     """Judge a single Claim against the constitution. The user-side
     payload mirrors the Rust shape: `channel="claim"`, the Claim's
     headline + body, and a summary of provenance entries (kind + key
     values) so Rule 1 (provenance presence) and Rule 5 (citation
-    discipline) have what they need."""
+    discipline) have what they need.
+
+    `llm_override` is forwarded to the pydantic-ai runtime path's
+    `make_model` call; on codex it is ignored (codex picks its model
+    centrally via `CODEX_HELPER_MODEL`).
+    """
     payload = {
         "channel": "claim",
         "claim": {
@@ -160,26 +137,33 @@ async def judge_claim(
     }
     user_prompt = json.dumps(payload, separators=(",", ":"))
     try:
-        result = await with_provider_retry(
-            lambda: agent.run(user_prompt, deps=_Deps()),
-            label="constitution_claim",
+        verdict, _raw = await runtime_call(
+            role="policy",
+            system_prompt=_system_prompt(live_window_secs),
+            user_prompt=user_prompt,
+            output_model=ConstitutionVerdict,
+            llm_override=llm_override,
             per_attempt_timeout_s=30.0,
         )
-        return result.output
+        return verdict
+    except RuntimeCallParseError as e:
+        log.warning(
+            "constitution_claim_parse_failed",
+            error=str(e)[:200],
+            raw_first_200=e.raw_text[:200],
+        )
+        return _soft_approve("constitution parse failed; soft-approve")
     except Exception as e:  # noqa: BLE001
         log.warning("constitution_claim_call_failed", error=str(e))
-        # Soft-approve on detector failure so a flaky LLM call doesn't
-        # nuke the agent's user-facing output. The structural gate has
-        # already run by this point and provides the load-bearing
-        # factuality check; constitution is the prose-judgment layer.
-        return ConstitutionVerdict(verdict="approve", reason="constitution call failed; soft-approve")
+        return _soft_approve("constitution call failed; soft-approve")
 
 
 async def judge_narrative(
-    agent: Agent[_Deps, ConstitutionVerdict],
     *,
     text: str,
     same_turn_claims: list[dict],
+    live_window_secs: int = DEFAULT_LIVE_WINDOW_SECS,
+    llm_override: Any = None,
 ) -> ConstitutionVerdict:
     """Judge a Narrative against the constitution. Same call shape as
     `judge_claim` but `channel="narrative"` and the payload includes
@@ -192,12 +176,22 @@ async def judge_narrative(
     }
     user_prompt = json.dumps(payload, separators=(",", ":"))
     try:
-        result = await with_provider_retry(
-            lambda: agent.run(user_prompt, deps=_Deps()),
-            label="constitution_narrative",
+        verdict, _raw = await runtime_call(
+            role="policy",
+            system_prompt=_system_prompt(live_window_secs),
+            user_prompt=user_prompt,
+            output_model=ConstitutionVerdict,
+            llm_override=llm_override,
             per_attempt_timeout_s=30.0,
         )
-        return result.output
+        return verdict
+    except RuntimeCallParseError as e:
+        log.warning(
+            "constitution_narrative_parse_failed",
+            error=str(e)[:200],
+            raw_first_200=e.raw_text[:200],
+        )
+        return _soft_approve("constitution parse failed; soft-approve")
     except Exception as e:  # noqa: BLE001
         log.warning("constitution_narrative_call_failed", error=str(e))
-        return ConstitutionVerdict(verdict="approve", reason="constitution call failed; soft-approve")
+        return _soft_approve("constitution call failed; soft-approve")

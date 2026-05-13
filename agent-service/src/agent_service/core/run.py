@@ -150,7 +150,6 @@ def resolve_run_type(raw: str) -> str:
 async def run_one_turn(
     *,
     primary_agent: Agent,
-    constitution_agent: Agent,
     primitive_client: PrimitiveClient,
     envelope: TurnEnvelope,
     bindings: PrimitiveBindingStore,
@@ -164,9 +163,9 @@ async def run_one_turn(
 
     The active OTel span (opened by the driver) carries the role-
     specific attrs already; this function adds the role-agnostic
-    ones. The driver passes the cached `primary_agent` /
-    `constitution_agent` and the `primitive_client` directly (no
-    handles bundle) so future drivers don't need a `LoopHandles`
+    ones. The driver passes the cached `primary_agent` and the
+    `primitive_client` directly (no handles bundle) so future drivers
+    don't need a `LoopHandles`
     shape they only half-fill.
 
     `prior_claims` is the chat thread's history of approved claims
@@ -391,10 +390,11 @@ async def run_one_turn(
                         spans.Attrs.GATE_VERSION, constitution_module.VERSION
                     )
                     verdict = await judge_claim(
-                        constitution_agent,
                         headline=claim.headline,
                         body_markdown=claim.body_markdown,
                         provenance_summary=_summarize_provenance(claim.provenance),
+                        live_window_secs=envelope.live_window_secs,
+                        llm_override=envelope.policy_llm_override,
                     )
                     g.set_attribute(
                         spans.Attrs.GATE_VERDICT, _normalize_verdict(verdict.verdict)
@@ -512,10 +512,11 @@ async def run_one_turn(
                 # constitution judge see same-turn coherence and prior-
                 # turn context without conflating them.
                 verdict = await judge_narrative(
-                    constitution_agent,
                     text=narrative_text,
                     same_turn_claims=_claims_to_judgement_payload(approved_claims)
                     + _claims_to_judgement_payload(list(prior_claims)),
+                    live_window_secs=envelope.live_window_secs,
+                    llm_override=envelope.policy_llm_override,
                 )
                 g.set_attribute(
                     spans.Attrs.GATE_VERDICT, _normalize_verdict(verdict.verdict)

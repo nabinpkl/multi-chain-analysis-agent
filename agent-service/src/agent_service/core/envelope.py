@@ -73,15 +73,15 @@ class TurnEnvelope:
     # at agent.run() time.
     history: list[Any] = field(default_factory=list)
 
-    # Optional per-role LLM override for this turn (a `RoleOverride`
-    # for the primary agent only). Empty / None = production preset
-    # (env-driven OpenRouter). When the core rebuilds the primary
-    # agent on the per-defense drop path, this is threaded into the
-    # rebuild so the swap takes effect on that turn. Constitution and
-    # repeat overrides do NOT live here; the chat driver applies them
-    # before calling `run_one_turn` since the core never rebuilds
-    # those agents itself.
+    # Optional per-role LLM override for this turn (a `RoleOverride`).
+    # Empty / None = production preset (env-driven provider stack).
+    # `primary_llm_override` is threaded into the per-turn rebuild of
+    # the primary agent on the per-defense drop path. `policy_llm_override`
+    # is forwarded per-call to `judge_claim` (which routes through
+    # `runtime_call`) so the dev Models panel's policy-role pick still
+    # takes effect even though the gate itself is now stateless.
     primary_llm_override: Any | None = None
+    policy_llm_override: Any | None = None
 
     # Resolved live window the snapshot was materialized against, in
     # seconds. Set by the driver from

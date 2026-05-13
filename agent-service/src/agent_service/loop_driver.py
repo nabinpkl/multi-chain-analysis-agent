@@ -53,7 +53,6 @@ from agent_service.core import (
 )
 from agent_service.diff_replay import _frame as _shared_frame, run_repeat_path
 from agent_service.llm_retry import begin_role_timing_capture
-from agent_service.policy.constitution import build_constitution_agent
 from agent_service.primitive_client import PrimitiveClient
 from agent_service.repeat_detector import build_repeat_agent, detect_repeat
 from agent_service.thread_state import (
@@ -100,14 +99,15 @@ class LoopHandles:
     each turn. Built once in `main.py`'s lifespan handler and passed
     into `run_turn` via app state.
 
-    The core uses `primary_agent`, `constitution_agent`, and
-    `primitive_client` directly (no handles bundle) so future drivers
-    don't inherit chat-specific fields they don't need. The chat-only
-    fields here (`threads`, `repeat_agent`) stay on this bundle.
+    The core uses `primary_agent` and `primitive_client` directly
+    (no handles bundle) so future drivers don't inherit chat-specific
+    fields they don't need. The chat-only fields here (`threads`,
+    `repeat_agent`) stay on this bundle. The constitution gate is
+    stateless function calls now (`policy.constitution.judge_*`); no
+    cached agent instance needed.
     """
 
     primary_agent: Agent
-    constitution_agent: Agent
     repeat_agent: Agent
     primitive_client: PrimitiveClient
     threads: ThreadRegistry
@@ -237,14 +237,6 @@ async def run_turn(
         )
         if primary_override is not None or effective_window_secs != 60
         else handles.primary_agent
-    )
-    constitution_agent_for_turn = (
-        build_constitution_agent(
-            llm_override=policy_override,
-            live_window_secs=effective_window_secs,
-        )
-        if policy_override is not None or effective_window_secs != 60
-        else handles.constitution_agent
     )
     repeat_agent_for_turn = (
         build_repeat_agent(llm_override=policy_override)
@@ -404,11 +396,14 @@ async def run_turn(
                     if thread.message_history
                     else [],
                     primary_llm_override=primary_override,
+                    policy_llm_override=policy_override,
                     # Carry the lease-resolved window into the core so
                     # the per-defense agent rebuild path (which fires
                     # when `drop_rule_ids` is non-empty) uses the same
                     # window in its prompt as we did when building
-                    # `primary_agent_for_turn` above.
+                    # `primary_agent_for_turn` above. The constitution
+                    # gate (now stateless) reads it directly off the
+                    # envelope on each call.
                     live_window_secs=int(lease.window_secs),
                 )
                 sink = SseSink()
@@ -417,7 +412,6 @@ async def run_turn(
                     try:
                         return await run_one_turn(
                             primary_agent=primary_agent_for_turn,
-                            constitution_agent=constitution_agent_for_turn,
                             primitive_client=handles.primitive_client,
                             envelope=envelope,
                             bindings=thread.bindings,

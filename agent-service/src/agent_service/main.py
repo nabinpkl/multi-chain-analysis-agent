@@ -52,7 +52,6 @@ from agent_service.codex_driver import run_turn_codex
 from agent_service.codex_profile import build_codex_driver, build_codex_profile
 from agent_service.loop_driver import LoopHandles, run_turn
 from agent_service.otel import init_otel, instrument_fastapi
-from agent_service.policy.constitution import build_constitution_agent
 from agent_service.primitive_client import PrimitiveClient
 from agent_service.repeat_detector import build_repeat_agent
 from agent_service.thread_state import RuntimeMismatchError, ThreadRegistry
@@ -106,8 +105,10 @@ async def lifespan(app: FastAPI):
 
     # Ship 1 of agent-observability foundation (ADR 13). Bring up OTel
     # before agents are built so Agent.instrument_all() is in place
-    # when build_agent / build_constitution_agent / build_repeat_agent
-    # construct their Pydantic AI Agent instances.
+    # when build_agent / build_repeat_agent construct their Pydantic AI
+    # Agent instances. The constitution gate runs through
+    # `agent_service.llm_runtime.runtime_call` per-turn; no cached
+    # agent instance.
     init_otel("multichain-agent")
 
     primitive_client = PrimitiveClient(base_url=base_url)
@@ -166,7 +167,6 @@ async def lifespan(app: FastAPI):
 
     handles = LoopHandles(
         primary_agent=build_agent(),
-        constitution_agent=build_constitution_agent(),
         repeat_agent=build_repeat_agent(),
         primitive_client=primitive_client,
         threads=threads,
