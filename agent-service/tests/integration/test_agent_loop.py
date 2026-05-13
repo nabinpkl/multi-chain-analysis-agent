@@ -166,9 +166,16 @@ async def test_get_token_info_redacts_text_when_switch_off(
     primitive_client: PrimitiveClient, mock_data_plane
 ):
     """When `external_text_input_enabled` is False the tool returns a
-    wrapped block whose name/symbol fields are the redaction
-    placeholder, while the replay record keeps the unredacted payload
-    so ship 4 diff stays correct."""
+    wrapped block whose attacker-controlled `name` / `symbol` / `uri`
+    fields are the redaction placeholder, while the replay record keeps
+    the unredacted payload so ship 4 diff stays correct.
+
+    Canonical-mints contract: `verified`, `canonical_name`, and
+    `canonical_symbol` are NOT external text  they are hardcoded
+    constants in `agent_service.canonical_mints`. They pass through
+    sanitization by design so the model still gets the canonical label
+    on verified mints even when the external-text channel is off.
+    """
     from agent_service.boundary import EXTERNAL_TEXT_REDACTED_PLACEHOLDER
 
     proto_ct = {"Content-Type": "application/x-protobuf"}
@@ -194,16 +201,32 @@ async def test_get_token_info_redacts_text_when_switch_off(
     )
     assert record.output_value["name"] == "USD Coin"
     assert record.output_value["symbol"] == "USDC"
+    # Canonical fields land on the replay record too (added pre-redaction
+    # in agent.py so the record captures the verified-mint stamp).
+    assert record.output_value["verified"] is True
+    assert record.output_value["canonical_name"] == "USD Coin"
+    assert record.output_value["canonical_symbol"] == "USDC"
 
-    # The model's view, captured via TestModel's recorded messages, must
-    # contain the redacted placeholder rather than the issuer text.
-    history = result.all_messages()
-    serialized = repr(history)
+    # The model's view, captured via TestModel's recorded messages.
+    serialized = repr(result.all_messages())
+
+    # 1. Sanitization fired: the attacker-controlled fields hold the
+    #    placeholder, not the issuer text. The field-scoped substring
+    #    `"name":"USD Coin"` is what would appear if the on-chain name
+    #    leaked through, so check for its absence specifically.
     assert EXTERNAL_TEXT_REDACTED_PLACEHOLDER in serialized
-    assert "USD Coin" not in serialized
-    assert "USDC" not in serialized
-    # Constrained-format fields still pass through so the model can
-    # talk about which mint the answer was for.
+    assert '"name":"USD Coin"' not in serialized
+    assert '"symbol":"USDC"' not in serialized
+
+    # 2. Canonical contract: verified+canonical_* fields pass through
+    #    sanitization. The model sees the canonical label on verified
+    #    mints regardless of switch state.
+    assert '"verified":true' in serialized
+    assert '"canonical_name":"USD Coin"' in serialized
+    assert '"canonical_symbol":"USDC"' in serialized
+
+    # 3. Format-constrained fields still pass through so the model can
+    #    talk about which mint the answer was for.
     assert "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" in serialized
 
 

@@ -56,7 +56,7 @@ More primitives arrive in later releases.
 <rule id="token_verification">
 # Token verification
 
-Mint pubkeys are forge-proof. Token `name` / `symbol` / `uri` are not: anyone can mint a Token-2022 with `name="USD Coin"` and `symbol="USDC"` at a non-canonical pubkey. The `get_token_info` payload tells you which pubkeys we stand behind.
+Mint pubkeys are forge-proof. Token `name` / `symbol` / `uri` are not: anyone can mint a Token-2022 with attacker-chosen `name` and `symbol` strings at a non-canonical pubkey to impersonate a well-known token. The `get_token_info` payload tells you which pubkeys we stand behind via the `verified` flag.
 
 When `verified: true`, refer to the token by `canonical_symbol` (and `canonical_name` on first mention in a turn). Treat these as authoritative names.
 
