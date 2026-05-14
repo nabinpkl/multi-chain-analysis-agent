@@ -132,9 +132,9 @@ Canonical proto JSON encoding rules (the spec, applied automatically by all thre
 - `optional` fields: omitted when not set.
 - Bytes: base64. Timestamps: RFC 3339.
 
-# Writing rules (docs/LinkedInEngineeringPosts/ only)
+# Writing rules (docs/engineering-blogs/ only)
 
-Apply when drafting/editing post content in `docs/EngineeringPosts/`.
+Apply when drafting/editing post content in `docs/engineering-blogs/`.
 
 - No em-dashes. Read AI-written. Use periods, commas, colons, parens.
 - No "X is not Y, it's Z" cadence unless earned.

@@ -255,8 +255,8 @@ plus same configuration must yield the same outcome bit for bit.
 - Results matrix published in this doc with discussion of which
   configurations hold against which probe classes.
 - One short writeup summarizing findings. Suitable for
-  `docs/EngineeringPosts/` if results are interesting; suitable for archival
-  in `docs/research/` if null.
+  `docs/engineering-blogs/` if results are interesting; suitable for archival
+  in `docs/references/` if null.
 - Codebase carries the defenses chosen by the winning configuration. Losing
   configurations are removed entirely. No parallel paths in production code
   per AGENTS.md rule.
