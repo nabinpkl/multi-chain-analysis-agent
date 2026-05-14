@@ -58,16 +58,28 @@ class Baseline(BaseModel):
     Stable JSON shape (sorted keys, one line per (case, probe) once
     re-serialized) makes git diffs easy to read.
 
-    Model-provenance fields (`agent_primary_model`,
-    `agent_policy_model`, `eval_judge_model`) record which models
-    produced this baseline. The diff surfaces deltas between
-    baseline and current models so the operator can attribute
-    probe flips to model swaps vs genuine agent regressions. This
-    is the industry-current pattern (verified May 2026 against
-    LLMOps observability guides); per-model baseline files were
-    considered and rejected as over-engineered for our scale.
-    Defaults are empty strings for backward-compat with baselines
-    minted before this field existed; `eval-baseline` always
+    Runtime + model-provenance fields record what produced this
+    baseline so the diff can distinguish "same runtime, different
+    model swap" (explanatory model_delta) from "different runtime
+    entirely" (hard-error: the comparison is meaningless). Under
+    codex runtime, `AGENT_PRIMARY_MODEL`/`AGENT_POLICY_MODEL`/
+    `EVAL_JUDGE_MODEL` envs are dead weight  every helper goes
+    through `runtime_call` to the codex CLI with
+    `CODEX_PRIMARY_MODEL` (primary) and `CODEX_HELPER_MODEL`
+    (gates + judge + repeat detector). The diff handles each
+    runtime's relevant fields separately:
+
+      - `runtime == "codex"`  compare `codex_primary_model` and
+        skip the pydantic-ai-shaped env fields.
+      - `runtime == "pydantic_ai"`  compare
+        `agent_primary_model` / `agent_policy_model` /
+        `eval_judge_model` and skip codex fields.
+      - baseline.runtime != current runtime  refuse to diff
+        probe outcomes; render a single "runtime mismatch, re-mint
+        baseline" message.
+
+    All fields default to empty strings for backward-compat with
+    baselines minted before they existed; `eval-baseline` always
     populates them on fresh mints.
     """
 
@@ -77,9 +89,15 @@ class Baseline(BaseModel):
     captured_at: datetime
     git_sha: str
     agent_version: str
+    # Empty string on legacy baselines (minted before runtime fields
+    # were recorded). The diff treats unknown runtime as "skip
+    # mismatch check" rather than guessing.
+    runtime: str = ""
     agent_primary_model: str = ""
     agent_policy_model: str = ""
     eval_judge_model: str = ""
+    codex_primary_model: str = ""
+    codex_reasoning_effort: str = ""
     results: dict[str, dict[str, ProbeOutcome]]
 
 
@@ -112,6 +130,11 @@ class RegressionReport(BaseModel):
     schema_deltas: list[tuple[str, str, str]] = Field(default_factory=list)
     inconclusive: list[tuple[str, str, str]] = Field(default_factory=list)
     model_deltas: list[tuple[str, str, str]] = Field(default_factory=list)
+    # When set, `(baseline_runtime, current_runtime)` and the diff
+    # refused to compare probe outcomes. Populated only when both
+    # sides are non-empty and disagree; legacy baselines with
+    # empty `runtime` field skip the check.
+    runtime_mismatch: tuple[str, str] | None = None
     # schema_deltas tuple shape:  (case_id, probe_id, "added"|"removed")
     # inconclusive tuple shape:   (case_id, probe_id, error_summary)
     # model_deltas tuple shape:   (model_role, baseline_value, current_value)
@@ -128,14 +151,21 @@ class RegressionReport(BaseModel):
     # facts and decides whether the flip is "swap-induced, expected"
     # or "real regression that happens to coincide with a swap".
     # Render output groups them so the relationship is visible.
+    #
+    # Runtime mismatch IS a hard regression event (it invalidates
+    # every probe comparison). When set, `new_failures` /
+    # `newly_passing` / `schema_deltas` are empty by construction
+    # because the diff bailed before computing them.
 
     @property
     def is_clean(self) -> bool:
         """Inconclusive entries are NOT counted toward `is_clean`.
-        A run with all-passing-or-inconclusive results is clean,
-        because no probe disagreed with its baseline. The operator
-        sees the inconclusive list separately and decides whether
-        to re-run."""
+        Runtime mismatch IS counted: it means the baseline diff
+        machinery couldn't produce a useful comparison, which the
+        operator needs to see + act on (re-mint under the current
+        runtime)."""
+        if self.runtime_mismatch is not None:
+            return False
         return not (self.new_failures or self.newly_passing or self.schema_deltas)
 
 
@@ -183,6 +213,19 @@ def _walk_run_results(
     return results, inconclusive
 
 
+def _resolve_runtime_name() -> str:
+    """Mirror of `agent_service.main._resolve_default_runtime` but
+    returning the lower-case string form the baseline JSON stores.
+    Same recognized values; default-of-default is `codex` (the
+    runtime arc that landed in May 2026 made codex the default)."""
+    import os
+
+    raw = os.environ.get("AGENT_DEFAULT_RUNTIME", "").strip().lower()
+    if raw in ("pydantic_ai", "pydantic-ai", "agent_runtime_pydantic_ai"):
+        return "pydantic_ai"
+    return "codex"
+
+
 def build_baseline_from_run(
     *,
     suite: str,
@@ -195,10 +238,14 @@ def build_baseline_from_run(
     separate because RunMetadata persists eagerly during the run
     and would force a circular-dependency on baselines.
 
-    Model-provenance fields are populated from the same env vars
-    `agent_service/llm.py` reads at run time. Empty strings if any
-    var is unset; the baseline diff will treat empty-on-baseline
-    as "no comparison" rather than firing a model-delta alarm.
+    Runtime is resolved the same way the agent-service route resolves
+    it (`AGENT_DEFAULT_RUNTIME` env, default codex). Model-provenance
+    fields snapshot every env var either runtime might key on: under
+    codex only `codex_*` are load-bearing for the diff and the
+    `agent_*` fields are dead weight, and vice versa. We store them
+    all anyway so a baseline minted under one runtime can answer
+    "what was the operator's env at mint time" if a future debugging
+    session needs it.
 
     Inconclusive entries from `_walk_run_results` are intentionally
     discarded here: a baseline records the contract, and an
@@ -215,9 +262,12 @@ def build_baseline_from_run(
         captured_at=datetime.now(timezone.utc),
         git_sha=git_sha,
         agent_version=agent_version,
+        runtime=_resolve_runtime_name(),
         agent_primary_model=os.environ.get("AGENT_PRIMARY_MODEL", ""),
         agent_policy_model=os.environ.get("AGENT_POLICY_MODEL", ""),
         eval_judge_model=os.environ.get("EVAL_JUDGE_MODEL", ""),
+        codex_primary_model=os.environ.get("CODEX_PRIMARY_MODEL", ""),
+        codex_reasoning_effort=os.environ.get("CODEX_REASONING_EFFORT", ""),
         results=results,
     )
 
@@ -237,9 +287,23 @@ def diff_against_baseline(baseline: Baseline, run_root: Path) -> RegressionRepor
     inconclusive in this run produces neither a `new_failures` nor
     a `newly_passing` entry: the diff has no signal to compare.
 
-    Model deltas are computed by comparing the baseline's recorded
-    model identities (agent_primary_model, agent_policy_model,
-    eval_judge_model) against the current process's env vars.
+    Runtime mismatch short-circuits the diff: when the baseline
+    recorded a runtime and it disagrees with the current process's
+    runtime, we refuse to compare probe outcomes. Probe values mean
+    different things across runtimes (codex emits via `emit_claims`
+    batched, pydantic-ai via `emit_claim` per-call; helpers run
+    against different model families), so a cross-runtime diff is
+    apples-to-oranges and would either falsely flag regressions or
+    silently mask them. The report's `runtime_mismatch` field
+    carries `(baseline.runtime, current_runtime)` and the operator's
+    action is to re-mint the baseline under the current runtime.
+
+    Model deltas are computed against runtime-relevant fields only:
+    `codex_primary_model` under codex; the pydantic-ai `agent_*` +
+    `eval_judge_model` envs under pydantic_ai. Under codex the
+    `agent_*` envs are dead weight (every helper routes through the
+    codex CLI), so reporting deltas on them would mislead the
+    operator into chasing env drift that never affected the run.
     They are NOT regression events; they are explanatory signal
     for attributing probe flips. An empty string on either side
     (typically an old baseline minted before model-provenance
@@ -248,12 +312,37 @@ def diff_against_baseline(baseline: Baseline, run_root: Path) -> RegressionRepor
     import os
 
     current, inconclusive = _walk_run_results(run_root)
+
+    # Runtime mismatch is a hard short-circuit. Empty `baseline.runtime`
+    # means a legacy baseline minted before the field existed: skip
+    # the check (best-effort backward-compat) and emit model_deltas
+    # under the legacy pydantic_ai env shape.
+    current_runtime = _resolve_runtime_name()
+    if baseline.runtime and baseline.runtime != current_runtime:
+        return RegressionReport(
+            suite=baseline.suite,
+            inconclusive=inconclusive,
+            runtime_mismatch=(baseline.runtime, current_runtime),
+        )
+
+    # Model deltas: pick the set relevant to the runtime. Legacy
+    # baselines (empty runtime) fall through to the pydantic-ai
+    # shape because that's what the diff machinery did before this
+    # field existed.
+    model_delta_inputs: tuple[tuple[str, str, str], ...]
+    runtime_for_deltas = baseline.runtime or "pydantic_ai"
+    if runtime_for_deltas == "codex":
+        model_delta_inputs = (
+            ("codex_primary_model", "CODEX_PRIMARY_MODEL", baseline.codex_primary_model),
+        )
+    else:
+        model_delta_inputs = (
+            ("agent_primary_model", "AGENT_PRIMARY_MODEL", baseline.agent_primary_model),
+            ("agent_policy_model", "AGENT_POLICY_MODEL", baseline.agent_policy_model),
+            ("eval_judge_model", "EVAL_JUDGE_MODEL", baseline.eval_judge_model),
+        )
     model_deltas: list[tuple[str, str, str]] = []
-    for role, env_var, baseline_value in (
-        ("agent_primary_model", "AGENT_PRIMARY_MODEL", baseline.agent_primary_model),
-        ("agent_policy_model", "AGENT_POLICY_MODEL", baseline.agent_policy_model),
-        ("eval_judge_model", "EVAL_JUDGE_MODEL", baseline.eval_judge_model),
-    ):
+    for role, env_var, baseline_value in model_delta_inputs:
         current_value = os.environ.get(env_var, "")
         if (
             baseline_value
@@ -323,9 +412,25 @@ def render_report(report: RegressionReport) -> str:
     string only when the diff is clean AND there are no
     inconclusive probes AND no model deltas (any of the three
     means there's something the operator should see)."""
-    if report.is_clean and not report.inconclusive and not report.model_deltas:
+    if (
+        report.is_clean
+        and not report.inconclusive
+        and not report.model_deltas
+        and report.runtime_mismatch is None
+    ):
         return ""
     lines: list[str] = [f"regression report for suite '{report.suite}':"]
+    if report.runtime_mismatch is not None:
+        baseline_runtime, current_runtime = report.runtime_mismatch
+        lines.append(
+            f"  runtime mismatch (baseline minted under "
+            f"{baseline_runtime!r}, this run is {current_runtime!r}; "
+            f"probe comparison skipped):"
+        )
+        lines.append(
+            f"    re-mint with `AGENT_DEFAULT_RUNTIME={current_runtime} "
+            f"just eval-baseline <suite>` to get a comparable contract."
+        )
     if report.model_deltas:
         # Surface model deltas first because they explain probe
         # flips below: if you swap the eval judge, expect llm_judge

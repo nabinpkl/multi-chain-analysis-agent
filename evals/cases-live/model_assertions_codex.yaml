@@ -1,7 +1,7 @@
 # Model-rotation tripwire for the codex runtime. Opt-in; not part
 # of the day-to-day smoke run. Run via:
 #
-#     just eval evals/cases/model_assertions_codex.yaml
+#     just eval-live evals/cases-live/model_assertions_codex.yaml
 #
 # What this catches: `CODEX_PRIMARY_MODEL` env-configured codex model
 # rotates (operator swaps it) without baseline refresh. The probe

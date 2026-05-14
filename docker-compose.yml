@@ -90,13 +90,6 @@ services:
       # agent-service container talks to it via the docker compose
       # network as http://api:8004. See backend/src/api/mod.rs.
       - INTERNAL_PORT=8004
-      # Enable the /eval/fixtures surface so adversarial-mint eval
-      # cases (e.g. evals/cases/wallet_profile_impostor_mint.yaml) can
-      # inject a canned get_token_info response. Default off in
-      # production deploys; dev/eval profile flips it on. See
-      # backend/src/eval_fixtures.rs for the contract and the
-      # single-eval-at-a-time concurrency caveat.
-      - BACKEND_ENABLE_EVAL_FIXTURES=${BACKEND_ENABLE_EVAL_FIXTURES:-1}
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -195,6 +188,71 @@ services:
       - ${CODEX_HOMES_HOST_PATH:-./codex_homes}:/var/codex_homes
     depends_on:
       api:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------
+  # Hermetic-eval substrate. Profile-gated: `docker compose
+  # --profile eval up -d` brings these up alongside the production
+  # stack. `docker compose up` (no profile) leaves them stopped. See
+  # evals/cases-hermetic/mock-service/ for the substrate source.
+  # ---------------------------------------------------------------------
+
+  # Mock data plane. Serves the same wire surface as Rust `api`
+  # (/turn/*, /primitive/*, /mcp) backed by a fixture store the
+  # eval runner controls via POST/DELETE /eval/setup. Listens on
+  # 8005 inside the compose network and on the host (so the
+  # runner can curl /eval/setup directly from the host shell).
+  eval-mock:
+    container_name: multichain-eval-mock
+    build:
+      context: .
+      dockerfile: ./evals/cases-hermetic/mock-service/Dockerfile
+      # agent-service's path dep on codex-agent-driver lives in the
+      # sibling `second-brain/` repo, outside the compose build
+      # context. Same named-context shape `agent-service` uses.
+      additional_contexts:
+        codex-agent-driver: ../second-brain/packages/codex-agent-driver
+    profiles: ["eval"]
+    ports:
+      - "8005:8005"
+    environment:
+      - EVAL_MOCK_PORT=8005
+    restart: unless-stopped
+
+  # Sibling agent-service pointed at the mock data plane instead
+  # of the real Rust `api`. Same image as `agent-service` (shared
+  # build context); only DATA_PLANE_URL and the host port differ.
+  # Lets a developer keep the production stack on 8003 while
+  # running hermetic evals against 8013.
+  agent-service-eval:
+    container_name: multichain-agent-service-eval
+    build:
+      context: ./agent-service
+      dockerfile: Dockerfile
+      additional_contexts:
+        codex-agent-driver: ../second-brain/packages/codex-agent-driver
+    profiles: ["eval"]
+    ports:
+      - "8013:8003"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - ./.env
+    environment:
+      - DATA_PLANE_URL=http://eval-mock:8005
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3008}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+      - THREAD_ROOT=/var/threads
+      - CODEX_HOME_ROOT=/var/codex_homes
+    volumes:
+      - ./data/agent-service-eval/threads:/var/threads
+      - ${HOME}/.codex:/root/.codex:ro
+      - ${CODEX_HOMES_HOST_PATH:-./codex_homes}:/var/codex_homes
+    depends_on:
+      eval-mock:
         condition: service_started
       otel-collector:
         condition: service_started

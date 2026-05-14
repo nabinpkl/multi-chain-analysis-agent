@@ -316,10 +316,7 @@ def build_agent(
         # `verified` / `canonical_*` are stamped server-side by Rust's
         # `canonical_mints::stamp_verification` (the registry lives in
         # `backend/src/canonical_mints.rs`). The Python side just
-        # passes the proto-decoded fields through; the eval-driven
-        # fixture seam also lives in Rust (`crate::eval_fixtures`), so
-        # an impostor case routes through the same compute path and
-        # arrives here pre-stamped with `verified=false`.
+        # passes the proto-decoded fields through.
         payload = {
             "mint": result.mint,
             "name": result.name,

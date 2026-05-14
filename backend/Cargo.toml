@@ -7,6 +7,12 @@ edition = "2024"
 name = "server"
 path = "src/main.rs"
 
+# Dumps the McaeMcp `tools/list` schema snapshot consumed by the
+# hermetic-eval mock substrate. Run via `just dump-mcp-schemas`.
+[[bin]]
+name = "dump-mcp-schemas"
+path = "src/bin/dump_mcp_schemas.rs"
+
 [dependencies]
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }

@@ -113,6 +113,7 @@ async def run_suite(
     base_url: str,
     framework_adapter: FrameworkAdapter,
     agent_version: str,
+    mock_setup_url: str | None = None,
 ) -> RunMetadata:
     """Run every case in the suite, persist results, return a
     RunMetadata summary. The summary is also persisted as
@@ -125,6 +126,11 @@ async def run_suite(
     it. This way `evals/runs/<run_id>/` is never silently
     incomplete; a regression diff against a partial run shows
     "got through 3 of 5" rather than "no run.json, mystery."
+
+    `mock_setup_url` triggers hermetic mode: before each case the
+    runner POSTs `case.fixtures` to `{mock_setup_url}/eval/setup`,
+    after each case it DELETEs. When None (default), the runner is
+    in live mode and the fixtures field is unused.
     """
     cases = load_suite(suite_path)
     run_id = _make_run_id()
@@ -139,12 +145,42 @@ async def run_suite(
     try:
         async with httpx.AsyncClient(timeout=120) as http:
             for case in cases:
-                agent_run: AgentRun = await invoke_agent_get_trace_id(
-                    case.inputs,
-                    base_url=base_url,
-                    http=http,
-                    fixtures=case.fixtures,
-                )
+                if mock_setup_url is not None:
+                    fixtures_body = (
+                        case.fixtures.model_dump_json()
+                        if case.fixtures is not None
+                        else "{}"
+                    )
+                    setup_resp = await http.post(
+                        f"{mock_setup_url}/eval/setup",
+                        content=fixtures_body,
+                        headers={"Content-Type": "application/json"},
+                    )
+                    if setup_resp.status_code >= 400:
+                        raise RuntimeError(
+                            f"mock /eval/setup rejected fixtures for "
+                            f"case {case.case_id}: HTTP "
+                            f"{setup_resp.status_code} {setup_resp.text}"
+                        )
+                try:
+                    agent_run: AgentRun = await invoke_agent_get_trace_id(
+                        case.inputs,
+                        base_url=base_url,
+                        http=http,
+                    )
+                finally:
+                    if mock_setup_url is not None:
+                        try:
+                            await http.delete(f"{mock_setup_url}/eval/setup")
+                        except Exception as e:  # noqa: BLE001
+                            # Don't let a teardown blip break the case
+                            # loop; next case's setup will reseed.
+                            import structlog
+                            structlog.get_logger(__name__).warning(
+                                "mock_eval_clear_failed",
+                                case_id=case.case_id,
+                                error=str(e),
+                            )
                 # Wait for the OTel pipeline to flush the turn's
                 # spans into ClickHouse before probes query them.
                 # Without this, probes that fired right after

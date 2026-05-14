@@ -227,6 +227,149 @@ def test_old_baseline_without_model_provenance_does_not_false_alarm(
     assert report.is_clean is True
 
 
+def test_runtime_mismatch_short_circuits_probe_diff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Baseline minted under codex, current process resolves to
+    pydantic_ai (via env). The diff must refuse to compare probe
+    outcomes (the comparison is meaningless across runtimes) and
+    surface `runtime_mismatch`. Probe diff lists stay empty
+    regardless of what `results` says."""
+    # Probe would fail if compared; the diff should never get there.
+    _write_probe(tmp_path, case_id="c1", probe_id="p1", passed=False)
+    baseline = Baseline(
+        suite="s",
+        captured_at=datetime.now(timezone.utc),
+        git_sha="sha",
+        agent_version="0.1.0",
+        runtime="codex",
+        codex_primary_model="gpt-5.4",
+        results={"c1": {"p1": "pass"}},
+    )
+    monkeypatch.setenv("AGENT_DEFAULT_RUNTIME", "pydantic_ai")
+
+    report = diff_against_baseline(baseline, tmp_path)
+
+    assert report.runtime_mismatch == ("codex", "pydantic_ai")
+    assert report.new_failures == []
+    assert report.newly_passing == []
+    assert report.schema_deltas == []
+    assert report.is_clean is False  # mismatch is severe
+    rendered = render_report(report)
+    assert "runtime mismatch" in rendered.lower()
+    assert "re-mint" in rendered.lower()
+
+
+def test_runtime_match_runs_full_probe_diff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sanity inverse: when baseline runtime matches current runtime,
+    the diff runs normally and produces ordinary probe deltas."""
+    _write_probe(tmp_path, case_id="c1", probe_id="p1", passed=False)
+    baseline = Baseline(
+        suite="s",
+        captured_at=datetime.now(timezone.utc),
+        git_sha="sha",
+        agent_version="0.1.0",
+        runtime="codex",
+        codex_primary_model="gpt-5.4",
+        results={"c1": {"p1": "pass"}},
+    )
+    monkeypatch.setenv("AGENT_DEFAULT_RUNTIME", "codex")
+
+    report = diff_against_baseline(baseline, tmp_path)
+
+    assert report.runtime_mismatch is None
+    assert report.new_failures == [("c1", "p1")]
+    assert report.is_clean is False  # real regression
+
+
+def test_codex_baseline_skips_agent_env_model_deltas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The original misleading-baseline-diff bug: a codex-runtime
+    baseline emitted `model_deltas` for `AGENT_PRIMARY_MODEL` env
+    changes even though codex ignores that env. Under codex, those
+    env vars are dead weight and must NOT surface as deltas. Only
+    `CODEX_PRIMARY_MODEL` is load-bearing."""
+    _write_probe(tmp_path, case_id="c1", probe_id="p1", passed=True)
+    baseline = Baseline(
+        suite="s",
+        captured_at=datetime.now(timezone.utc),
+        git_sha="sha",
+        agent_version="0.1.0",
+        runtime="codex",
+        agent_primary_model="openai/gpt-5.4-mini",
+        codex_primary_model="gpt-5.4",
+        results={"c1": {"p1": "pass"}},
+    )
+    monkeypatch.setenv("AGENT_DEFAULT_RUNTIME", "codex")
+    # Operator rotates the pydantic-ai env (dead weight under codex)
+    # AND keeps CODEX_PRIMARY_MODEL the same. No delta should fire.
+    monkeypatch.setenv("AGENT_PRIMARY_MODEL", "gemini-3.1-flash-lite")
+    monkeypatch.setenv("CODEX_PRIMARY_MODEL", "gpt-5.4")
+
+    report = diff_against_baseline(baseline, tmp_path)
+
+    assert report.model_deltas == []
+    assert report.is_clean is True
+
+
+def test_codex_baseline_surfaces_codex_primary_model_delta(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The positive case: under codex, a `CODEX_PRIMARY_MODEL`
+    swap is the load-bearing delta and DOES surface."""
+    _write_probe(tmp_path, case_id="c1", probe_id="p1", passed=True)
+    baseline = Baseline(
+        suite="s",
+        captured_at=datetime.now(timezone.utc),
+        git_sha="sha",
+        agent_version="0.1.0",
+        runtime="codex",
+        codex_primary_model="gpt-5.4",
+        results={"c1": {"p1": "pass"}},
+    )
+    monkeypatch.setenv("AGENT_DEFAULT_RUNTIME", "codex")
+    monkeypatch.setenv("CODEX_PRIMARY_MODEL", "gpt-5-mini")
+
+    report = diff_against_baseline(baseline, tmp_path)
+
+    assert report.model_deltas == [
+        ("codex_primary_model", "gpt-5.4", "gpt-5-mini")
+    ]
+
+
+def test_legacy_baseline_without_runtime_falls_back_to_pydantic_ai_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Backward-compat: baselines minted before the runtime field
+    existed have `runtime=""`. The diff must skip the mismatch check
+    AND fall through to the legacy pydantic-ai env model-delta
+    shape (the only shape supported pre-this-patch). Otherwise every
+    existing committed baseline would either spurious-fail or stop
+    surfacing useful model deltas."""
+    _write_probe(tmp_path, case_id="c1", probe_id="p1", passed=True)
+    baseline = Baseline(
+        suite="s",
+        captured_at=datetime.now(timezone.utc),
+        git_sha="sha",
+        agent_version="0.1.0",
+        # runtime defaults to "" (legacy)
+        agent_primary_model="openrouter/old-model",
+        results={"c1": {"p1": "pass"}},
+    )
+    monkeypatch.setenv("AGENT_DEFAULT_RUNTIME", "codex")  # current runtime
+    monkeypatch.setenv("AGENT_PRIMARY_MODEL", "openrouter/new-model")
+
+    report = diff_against_baseline(baseline, tmp_path)
+
+    assert report.runtime_mismatch is None  # legacy: skip check
+    assert report.model_deltas == [
+        ("agent_primary_model", "openrouter/old-model", "openrouter/new-model")
+    ]
+
+
 def test_persist_baseline_round_trip(tmp_path: Path) -> None:
     """persist_baseline + load via Baseline.model_validate_json
     should round-trip cleanly. Catches regressions where the JSON

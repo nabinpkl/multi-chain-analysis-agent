@@ -11,7 +11,6 @@ pub mod api;
 pub mod canonical_mints;
 pub mod config;
 pub mod domain;
-pub mod eval_fixtures;
 pub mod graph;
 pub mod ingest;
 pub mod mcp;

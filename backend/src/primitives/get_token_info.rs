@@ -16,7 +16,6 @@ use solana_pubkey::Pubkey;
 use thiserror::Error;
 
 use crate::canonical_mints;
-use crate::eval_fixtures;
 use crate::metadata;
 use crate::state::AppState;
 
@@ -64,38 +63,13 @@ pub enum GetTokenInfoError {
 }
 
 /// Compute `get_token_info` for one mint. Trims and validates the
-/// pubkey, consults the eval-fixture store (single-eval-at-a-time
-/// override surface; empty in production deploys), and if no fixture
-/// matches falls through to the cache-aware metadata fetcher. The
-/// canonical-mint verification stamp is applied to whichever path
-/// produced the payload, so the wire-level `verified` flag is always
-/// populated.
+/// pubkey, then resolves via the cache-aware metadata fetcher. The
+/// canonical-mint verification stamp is applied to the payload, so the
+/// wire-level `verified` flag is always populated.
 pub async fn compute(state: &AppState, mint_b58: &str) -> Result<GetTokenInfoOutput, GetTokenInfoError> {
     let mint_b58 = mint_b58.trim().to_string();
     if mint_b58.is_empty() {
         return Err(GetTokenInfoError::InvalidMint("mint pubkey is empty".into()));
-    }
-
-    // Eval-only fixture short-circuit. Single-eval-at-a-time keying
-    // means the store is keyed by mint pubkey alone; the eval runner
-    // registers fixtures before each case and clears them after, and
-    // the eval CLI runs cases sequentially. Production deploys leave
-    // the store empty (the `/eval/fixtures` endpoints exist on the
-    // internal router but are never called by production traffic).
-    if let Some(fixture) = eval_fixtures::lookup(state, &mint_b58) {
-        let mut out = GetTokenInfoOutput {
-            mint: fixture.mint.clone(),
-            name: fixture.name.clone(),
-            symbol: fixture.symbol.clone(),
-            uri: fixture.uri.clone(),
-            update_authority: fixture.update_authority.clone(),
-            source_program: fixture.source_program.clone(),
-            verified: false,
-            canonical_name: None,
-            canonical_symbol: None,
-        };
-        canonical_mints::stamp_verification(&mut out);
-        return Ok(out);
     }
 
     let mint_pk = parse_pubkey(&mint_b58).map_err(GetTokenInfoError::InvalidMint)?;

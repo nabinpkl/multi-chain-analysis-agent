@@ -41,14 +41,6 @@ pub struct Config {
     /// without a port match any port; entries with a port (e.g.
     /// `example.com:8080`) match only that port.
     pub mcp_allowed_hosts: Vec<String>,
-    /// Enables the `/eval/fixtures` HTTP surface (POST + DELETE) used
-    /// by the agent service to inject canned `get_token_info` responses
-    /// for adversarial-mint eval cases. Default `false` so production
-    /// deploys never expose the surface even though the internal
-    /// router is sibling-container-only today. Flip on per environment
-    /// via `BACKEND_ENABLE_EVAL_FIXTURES=1` (the docker compose dev
-    /// profile sets it).
-    pub eval_fixtures_enabled: bool,
     pub kafka_brokers: String,
     pub kafka_topic_raw_edges: String,
     pub kafka_group_ch_sink: String,
@@ -105,14 +97,6 @@ impl Config {
                         "api".into(),
                     ]
                 }),
-            eval_fixtures_enabled: matches!(
-                env::var("BACKEND_ENABLE_EVAL_FIXTURES")
-                    .unwrap_or_default()
-                    .trim()
-                    .to_ascii_lowercase()
-                    .as_str(),
-                "1" | "true" | "yes" | "on"
-            ),
             kafka_brokers: env::var("KAFKA_BROKERS")
                 .unwrap_or_else(|_| "redpanda:9092".into()),
             kafka_topic_raw_edges: env::var("KAFKA_TOPIC_RAW_EDGES")

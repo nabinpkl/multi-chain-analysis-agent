@@ -38,6 +38,7 @@ from agent_service.evals.schema import FrameworkAdapter
 _DEFAULT_BASE_URL = "http://localhost:8003"
 _DEFAULT_RUNS_ROOT = Path("evals/runs")
 _DEFAULT_BASELINES_ROOT = Path("evals/baselines")
+_DEFAULT_MOCK_SETUP_URL = "http://localhost:8005"
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -103,6 +104,31 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
             "future adapter; see ADR 14 2026-05-05 addendum."
         ),
     )
+    parser.add_argument(
+        "--mode",
+        choices=("live", "hermetic"),
+        default="live",
+        help=(
+            "Eval substrate mode. `live` (default) runs against the "
+            "production agent-service + Rust data plane, hitting real "
+            "Solana mainnet / ClickHouse / Gemini APIs. `hermetic` "
+            "runs against the `agent-service-eval` sibling container "
+            "(port 8013) which routes its data-plane calls to the "
+            "mock substrate at `--mock-setup-url`. Hermetic cases "
+            "live under `evals/cases-hermetic/` and use `fixtures:` "
+            "to make tool responses deterministic."
+        ),
+    )
+    parser.add_argument(
+        "--mock-setup-url",
+        default=_DEFAULT_MOCK_SETUP_URL,
+        help=(
+            "Hermetic mode: URL of the mock substrate's eval-runner "
+            "control surface (POST/DELETE `/eval/setup`). The runner "
+            "POSTs each case's `fixtures:` field before invoking the "
+            "agent and DELETEs after. Ignored in live mode."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -124,6 +150,7 @@ async def _run(args: argparse.Namespace) -> int:
         base_url=args.base_url,
         framework_adapter=args.adapter,
         agent_version=agent_version,
+        mock_setup_url=args.mock_setup_url if args.mode == "hermetic" else None,
     )
 
     inconclusive_suffix = (

@@ -1,0 +1,263 @@
+[
+  {
+    "name": "community_summary",
+    "description": "Summarize a community (cluster) in the live snapshot. Returns size, internal/external volume split, edge count, and top wallets. Requires snapshot_id and a stable community_id from a prior wallet_profile call.",
+    "inputSchema": {
+      "$defs": {
+        "CommunitySummaryArgsSchema": {
+          "description": "Schema-source for `community_summary`. See\n`WalletProfileArgsSchema` for the split rationale.",
+          "properties": {
+            "community_id": {
+              "description": "Stable community label (`u32`). Source it from a prior\n`wallet_profile` response (the `community_id` field) or from\nthe user's selection on the live graph.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "snapshot_id": {
+              "description": "Snapshot id from the most recent `POST /turn/begin` call.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "snapshot_id",
+            "community_id"
+          ],
+          "type": "object"
+        }
+      },
+      "$ref": "#/$defs/CommunitySummaryArgsSchema",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "CommunitySummaryArgs"
+    }
+  },
+  {
+    "name": "emit_claims",
+    "description": "Emit one or more analytical claims to the user. Call after gathering enough evidence via the read-only tools. Batched: emit ALL chips for the turn in ONE call; do not call this tool twice per turn. Each claim is an OBJECT (not a JSON-encoded string) with four required fields plus optional support_numbers. Uncited claims are auto-retracted by the harness's gate stack. \n\nExample of a valid call:\n{\n  \"snapshot_id\": \"01HXYZ...\",\n  \"claims\": [{\n    \"kind\": \"PROFILE\",\n    \"headline\": \"Whale wallet in community 42\",\n    \"body_markdown\": \"Wallet ${ref:0} sits in ${ref:1} with degree `39`.\",\n    \"provenance\": [\n      {\"kind\": \"wallet\", \"addr\": \"fueL3...\"},\n      {\"kind\": \"community\", \"id\": 42},\n      {\"kind\": \"number\", \"metric\": \"degree\", \"value\": 39}\n    ]\n  }]\n}\n\nRequired per claim: kind (one of PROFILE | PATTERN | COMPARISON | SUMMARY | PULSE), headline (<=100 chars), body_markdown (with ${ref:N} placeholders resolving against `provenance`), provenance (non-empty list of typed refs).",
+    "inputSchema": {
+      "$defs": {
+        "ClaimInput": {
+          "description": "Wire shape for one claim. Field-for-field mirror of the Python\n`agent_service.agent.EmitClaimInput` Pydantic model. Documented\ninline so the JSON-Schema codex sees on `tools/list` carries the\nsame per-field guidance the Python tool's docstring carries.",
+          "properties": {
+            "body_markdown": {
+              "description": "Structured paragraph; use `${ref:N}` placeholders for chip\nreferences resolved against the `provenance` array.",
+              "type": "string"
+            },
+            "headline": {
+              "description": "One sentence under 100 chars summarizing the claim.",
+              "type": "string"
+            },
+            "kind": {
+              "description": "Claim kind: \"PROFILE\" | \"PATTERN\" | \"COMPARISON\" | \"SUMMARY\" | \"PULSE\".",
+              "type": "string"
+            },
+            "provenance": {
+              "description": "Non-empty list of typed entity references; `${ref:N}`\nresolves against this. The Python placeholder gate retracts\nany claim with empty provenance or unresolved `${ref:N}`.",
+              "items": {
+                "$ref": "#/$defs/ProvenanceRefIn"
+              },
+              "type": "array"
+            },
+            "support_numbers": {
+              "default": [],
+              "description": "Audit-class numbers backing the claim. Optional; the\nstructural value-compare gate matches each entry against\nthe per-thread binding store populated from prior data-tool\noutputs.",
+              "items": {
+                "$ref": "#/$defs/NumberRefIn"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "headline",
+            "body_markdown",
+            "provenance"
+          ],
+          "type": "object"
+        },
+        "NumberRefIn": {
+          "properties": {
+            "metric": {
+              "type": "string"
+            },
+            "support": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "value": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "metric",
+            "value"
+          ],
+          "type": "object"
+        },
+        "ProvenanceRefIn": {
+          "description": "Tagged-union provenance ref. Field set varies by `kind`; we\nkeep all fields optional in one struct rather than splitting\ninto multiple types because (a) the Python side uses the same\nshape (single struct with optional fields, parsed by `kind`\nswitch on the loop-driver side) and (b) JSON-Schema's `oneOf`\nsupport across MCP clients is uneven.",
+          "properties": {
+            "addr": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "dst": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "edge_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "from_s": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "id": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "idx": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "kind": {
+              "description": "Discriminator: \"wallet\" | \"community\" | \"edge\" | \"time_range\" | \"number\".",
+              "type": "string"
+            },
+            "metric": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "src": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "support": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "to_s": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "value": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Args for `emit_claims`. The `claims` array is the batched chip\npayload  codex emits all chips for a turn in one tool call,\nrather than the per-chip pattern the Pydantic AI side uses on\n`agent_service/agent.py::emit_claim`. The schema mirrors the\nPython `EmitClaimInput` Pydantic model field-for-field; the\nPython loop driver `model_validate`s each element back into\nthat model after draining, so a divergence here would surface\nas a validation error on the gate side rather than silent loss.\n\nWhy `claims: Vec<serde_json::Value>` paired with\n`#[schemars(with = \"Vec<ClaimInput>\")]`: the JSON-Schema codex\nsees on `tools/list` still advertises the typed `ClaimInput`\nshape (with `kind` / `headline` / `body_markdown` / `provenance`\nmarked required), so the model gets the same per-field guidance\nit always had. But at runtime we accept arbitrary `Value` so the\nhandler can do its own multi-error aggregation. Without this\nsplit, serde bails on the first violation per element\n(`missing field 'kind'`, then on retry `missing field 'headline'`,\nthen on retry  ...). One rollout we audited burned ~170s\nacross three back-to-back retries that one comprehensive error\nwould have collapsed into one. See `validate_claim` for the\naggregator.",
+      "properties": {
+        "claims": {
+          "description": "One or more claims to emit. Empty list is a noop (the gate\ndrains nothing). The Python gate stack enforces \"at least\none provenance ref per claim\" plus value-compare against\nthe binding store; we don't pre-validate here to avoid\nduplicating rules across the Rust + Python boundary.",
+          "items": {
+            "$ref": "#/$defs/ClaimInput"
+          },
+          "type": "array"
+        },
+        "snapshot_id": {
+          "description": "Snapshot id from the most recent `POST /turn/begin` call.\nRoutes the chip payloads to the per-turn channel created at\n`turn_begin`. Snapshot must still be open; closed / unknown\nreturns an mcp `invalid_params` error.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "snapshot_id",
+        "claims"
+      ],
+      "title": "EmitClaimsArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_token_info",
+    "description": "Resolve a SPL or Token-2022 mint pubkey to its name, symbol, and metadata URI. Reads the lazy ClickHouse-backed metadata cache; cache miss triggers a getAccountInfo RPC fetch + cache write. Does NOT require snapshot_id (RPC + cache, not snapshot-bound).",
+    "inputSchema": {
+      "$defs": {
+        "GetTokenInfoArgsSchema": {
+          "description": "Schema-source for `get_token_info`. See `WalletProfileArgsSchema`\nfor the split rationale.",
+          "properties": {
+            "mint": {
+              "description": "SPL or Token-2022 mint pubkey (base58). Returns name + symbol\n+ URI from the lazy ClickHouse-backed metadata cache, falling\nback to a `getAccountInfo` RPC fetch + cache write on miss.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mint"
+          ],
+          "type": "object"
+        }
+      },
+      "$ref": "#/$defs/GetTokenInfoArgsSchema",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "GetTokenInfoArgs"
+    }
+  },
+  {
+    "name": "wallet_profile",
+    "description": "Profile a Solana wallet observed in the live snapshot. Returns role, community membership, transfer counts, and top counterparties. Requires snapshot_id from a prior /turn/begin call.",
+    "inputSchema": {
+      "$defs": {
+        "WalletProfileArgsSchema": {
+          "description": "Schema-source for `wallet_profile`. The runtime-side\n`WalletProfileArgs` below wraps a permissive `Value` to keep the\nrmcp extractor from bailing on the first malformed field, but\nthe JSON Schema codex sees on `tools/list` still advertises this\nstrict typed shape. See `validate_wallet_profile_args` for the\nruntime aggregator.",
+          "properties": {
+            "addr": {
+              "description": "Solana wallet address (base58 pubkey).",
+              "type": "string"
+            },
+            "snapshot_id": {
+              "description": "Snapshot id from the most recent `POST /turn/begin` call.\nThe harness opens the turn, then passes this id through to\nevery MCP tool call within the turn so reads see a consistent\ngraph view. Snapshots expire ~5 minutes after `/turn/begin`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "snapshot_id",
+            "addr"
+          ],
+          "type": "object"
+        }
+      },
+      "$ref": "#/$defs/WalletProfileArgsSchema",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Runtime args wrapper for `wallet_profile`. Same split as\n`EmitClaimsArgs` (see its module doc): schemars sees the strict\n`WalletProfileArgsSchema`, runtime accepts any `Value` so the\nhandler can aggregate validation errors and unwrap a\nJSON-stringified payload before reporting.",
+      "title": "WalletProfileArgs"
+    }
+  }
+]

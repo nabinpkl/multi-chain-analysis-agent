@@ -1,7 +1,7 @@
 # Provider-fallback tripwire for the pydantic-ai runtime. Opt-in;
 # not part of the day-to-day smoke run. Run via:
 #
-#     just eval evals/cases/model_assertions_pydantic.yaml
+#     just eval-live evals/cases-live/model_assertions_pydantic.yaml
 #
 # What this catches: silent provider-side fallback on the pydantic-ai
 # path. OpenRouter occasionally re-routes a throttled model to a

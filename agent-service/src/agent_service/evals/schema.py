@@ -612,24 +612,21 @@ _assert_kind_union_exhaustive()
 
 
 class EvalGetTokenInfoFixture(BaseModel):
-    """One canned `get_token_info(mint=...)` response. The runner
-    serializes the case's fixtures to the agent service via the
-    `x-mca-eval-fixtures` request header; the agent service's
-    `/agent/turn` route POSTs the parsed envelope to the Rust data
-    plane's `/eval/fixtures` endpoint (gated by
-    `BACKEND_ENABLE_EVAL_FIXTURES`). Rust's
-    `primitives::get_token_info::compute` then consults the fixture
-    store before falling through to the live metadata fetcher, and
-    `canonical_mints::stamp_verification` tags the resulting payload
-    with `verified` based on the mint pubkey. Both runtimes (codex via
-    the MCP tool, pydantic-ai via the HTTP route) share the same Rust
-    compute path, so a single fixture registration covers them both.
+    """One canned `get_token_info(mint=...)` response. Consumed by the
+    hermetic-eval mock substrate at `evals/cases-hermetic/mock-service/`:
+    the eval runner POSTs the parsed envelope to the mock's
+    `POST /eval/setup` endpoint before each case, and both seams (the
+    FastMCP `/mcp` proxy that codex hits, the FastAPI HTTP shim that
+    pydantic-ai's `PrimitiveClient` hits) read from the shared
+    `FixtureStore` when serving primitive calls. Rust's production
+    `canonical_mints::stamp_verification` is mirrored by the mock so
+    `verified` is derived from the mint pubkey just like production.
 
     Field shape mirrors the proto `GetTokenInfoOutput` minus the
     server-stamped verification fields. The `verified` flag is NOT a
-    fixture field: Rust derives it from the mint pubkey. An impostor
-    fixture supplies a non-canonical pubkey, and `stamp_verification`
-    correctly tags it `verified=false`.
+    fixture field: the mock derives it from the mint pubkey. An impostor
+    fixture supplies a non-canonical pubkey, and the stamp correctly
+    tags it `verified=false`.
 
     The natural adversarial shape is a Token-2022 impostor: a
     non-canonical mint pubkey with `symbol` / `name` chosen to
@@ -734,11 +731,12 @@ class EvalCase(BaseModel):
     fixtures: EvalFixtures | None = Field(
         default=None,
         description=(
-            "Optional per-case canned-response store. The runner "
-            "serializes this to the agent service via the "
-            "`x-mca-eval-fixtures` header; the agent honors it only "
-            "when `inputs.runType == 'eval'` (defense in depth against "
-            "a leaked header on production traffic)."
+            "Optional per-case canned-response store. Consumed by the "
+            "hermetic-eval runner: when set, the runner POSTs this to "
+            "the mock substrate's `/eval/setup` endpoint before invoking "
+            "the agent and DELETEs it after. Cases under `cases-live/` "
+            "leave this unset; cases under `cases-hermetic/` use it to "
+            "make their tool responses deterministic."
         ),
     )
     metadata: dict[str, Any] = Field(default_factory=dict)

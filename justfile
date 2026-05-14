@@ -47,16 +47,36 @@ regen-wire-types:
     buf generate
     @echo ">> wire types regenerated"
 
-# Run an eval suite against the running agent service. Each case
+# Run a LIVE eval suite against the running agent service. Live
+# suite hits real Solana mainnet, real ClickHouse, real Gemini /
+# OpenRouter APIs; cases live under `evals/cases-live/`. Each case
 # POSTs to /agent/ask with runType=eval (so the resulting traces
 # carry mcae.run.type=eval and stay filterable in CH/Langfuse),
 # captures the trace id from the AgentDone SSE frame, then runs
 # every probe in the case against otel.otel_traces by trace id.
 # Per-probe ProbeResult JSON + a RunMetadata summary land under
 # evals/runs/<run_id>/. Exits non-zero if any probe failed.
-eval suite="evals/cases/wallet_profile_smoke.yaml":
+eval-live suite="evals/cases-live/wallet_profile_smoke.yaml":
     uv --directory agent-service run python -m agent_service.evals \
         "{{ absolute_path(suite) }}" \
+        --runs-root "{{ justfile_directory() }}/evals/runs" \
+        --baselines-root "{{ justfile_directory() }}/evals/baselines"
+
+# Run a HERMETIC eval suite against the mock-substrate-backed
+# agent service (the `agent-service-eval` profile-eval container
+# at host port 8013, which routes data-plane calls to the
+# `eval-mock` FastMCP-proxy + HTTP-shim at 8005). Cases live under
+# `evals/cases-hermetic/`. Deterministic tool responses keyed by
+# the case's `fixtures:` field; LLM-judge probes still hit real
+# providers because hermeticness applies to the environment not
+# the model under test. Requires `docker compose --profile eval
+# up -d` first.
+eval-hermetic suite:
+    uv --directory agent-service run python -m agent_service.evals \
+        "{{ absolute_path(suite) }}" \
+        --mode hermetic \
+        --base-url http://localhost:8013 \
+        --mock-setup-url http://localhost:8005 \
         --runs-root "{{ justfile_directory() }}/evals/runs" \
         --baselines-root "{{ justfile_directory() }}/evals/baselines"
 
@@ -78,8 +98,20 @@ eval-baseline suite *flags:
 # shaped eval suite eventually ages out. When a suite starts
 # failing with "wallet not in current live window", run this to
 # pick a fresh address, paste it into the case yaml, then
-# `just eval` + `just eval-baseline` to re-mint. Args mirror the
-# script's: `--window 60 --limit 5 --addr-only`.
+# `just eval-live` + `just eval-baseline` to re-mint. Args mirror
+# the script's: `--window 60 --limit 5 --addr-only`.
+# Regenerate the MCP `tools/list` schema snapshot consumed by the
+# hermetic-eval mock substrate. Runs the `dump-mcp-schemas` cargo
+# bin against the live Rust MCP tool router and writes the result
+# to `evals/cases-hermetic/mock-service/schemas.json`. After bumping
+# the snapshot, commit the diff. The Rust unit test
+# `mcp::tests::schemas_snapshot_matches_live_tool_router` fails any
+# build where the snapshot drifts from the live router, so you'll
+# get pushed back here if a tool schema changes without a rerun.
+dump-mcp-schemas:
+    cargo run --manifest-path "{{ justfile_directory() }}/backend/Cargo.toml" --quiet --bin dump-mcp-schemas > "{{ justfile_directory() }}/evals/cases-hermetic/mock-service/schemas.json"
+    @echo ">> wrote evals/cases-hermetic/mock-service/schemas.json"
+
 eval-pick-wallet *flags:
     uv --directory agent-service run python -m agent_service.evals.pick_observable_wallet {{ flags }}
 
