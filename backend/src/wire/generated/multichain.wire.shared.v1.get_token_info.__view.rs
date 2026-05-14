@@ -199,6 +199,33 @@ pub struct GetTokenInfoOutputView<'a> {
     ///
     /// Field 6: `source_program`
     pub source_program: &'a str,
+    /// Canonical-mint verification. Stamped server-side by
+    /// `canonical_mints::stamp_verification(mint)`. The mint pubkey is
+    /// the forge-proof identity; the on-chain `name` / `symbol` / `uri`
+    /// are attacker-controlled strings. This flag tells the agent which
+    /// pubkeys we stand behind by name. The corresponding registry
+    /// lives in `backend/src/canonical_mints.rs`. Both the HTTP
+    /// `/primitive/get_token_info` route and the MCP server tool emit
+    /// these stamped fields; the agent's `token_verification` prompt
+    /// rule uses them to decide whether the symbol can be narrated bare
+    /// or must be qualified as unverified.
+    ///
+    /// Field 8: `verified`
+    pub verified: bool,
+    /// Canonical display name (e.g. "USD Coin"). Present only when
+    /// `verified=true`. Authoritative for the agent's narrative; the
+    /// attacker-controlled `name` field passes through unredacted as
+    /// forensic surface, but the agent is taught to prefer this label
+    /// for verified mints.
+    ///
+    /// Field 9: `canonical_name`
+    pub canonical_name: ::core::option::Option<&'a str>,
+    /// Canonical display symbol (e.g. "USDC"). Present only when
+    /// `verified=true`. Same authoritative-label semantics as
+    /// `canonical_name`.
+    ///
+    /// Field 10: `canonical_symbol`
+    pub canonical_symbol: ::core::option::Option<&'a str>,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> GetTokenInfoOutputView<'a> {
@@ -299,6 +326,36 @@ impl<'a> GetTokenInfoOutputView<'a> {
                     }
                     view.source_program = ::buffa::types::borrow_str(&mut cur)?;
                 }
+                8u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::Varint {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 8u32,
+                            expected: 0u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    view.verified = ::buffa::types::decode_bool(&mut cur)?;
+                }
+                9u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 9u32,
+                            expected: 2u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    view.canonical_name = Some(::buffa::types::borrow_str(&mut cur)?);
+                }
+                10u32 => {
+                    if tag.wire_type() != ::buffa::encoding::WireType::LengthDelimited {
+                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
+                            field_number: 10u32,
+                            expected: 2u8,
+                            actual: tag.wire_type() as u8,
+                        });
+                    }
+                    view.canonical_symbol = Some(::buffa::types::borrow_str(&mut cur)?);
+                }
                 _ => {
                     ::buffa::encoding::skip_field_depth(tag, &mut cur, depth)?;
                     let span_len = before_tag.len() - cur.len();
@@ -333,6 +390,9 @@ impl<'a> ::buffa::MessageView<'a> for GetTokenInfoOutputView<'a> {
             uri: self.uri.map(|s| s.to_string()),
             update_authority: self.update_authority.map(|s| s.to_string()),
             source_program: self.source_program.to_string(),
+            verified: self.verified,
+            canonical_name: self.canonical_name.map(|s| s.to_string()),
+            canonical_symbol: self.canonical_symbol.map(|s| s.to_string()),
             __buffa_unknown_fields: self
                 .__buffa_unknown_fields
                 .to_owned()
@@ -367,6 +427,15 @@ impl<'a> ::buffa::ViewEncode<'a> for GetTokenInfoOutputView<'a> {
             size
                 += 1u32
                     + ::buffa::types::string_encoded_len(&self.source_program) as u32;
+        }
+        if self.verified {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        if let Some(ref v) = self.canonical_name {
+            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
+        }
+        if let Some(ref v) = self.canonical_symbol {
+            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
@@ -426,6 +495,27 @@ impl<'a> ::buffa::ViewEncode<'a> for GetTokenInfoOutputView<'a> {
                 )
                 .encode(buf);
             ::buffa::types::encode_string(&self.source_program, buf);
+        }
+        if self.verified {
+            ::buffa::encoding::Tag::new(8u32, ::buffa::encoding::WireType::Varint)
+                .encode(buf);
+            ::buffa::types::encode_bool(self.verified, buf);
+        }
+        if let Some(ref v) = self.canonical_name {
+            ::buffa::encoding::Tag::new(
+                    9u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
+                .encode(buf);
+            ::buffa::types::encode_string(v, buf);
+        }
+        if let Some(ref v) = self.canonical_symbol {
+            ::buffa::encoding::Tag::new(
+                    10u32,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )
+                .encode(buf);
+            ::buffa::types::encode_string(v, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }

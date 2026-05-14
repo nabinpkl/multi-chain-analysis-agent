@@ -30,7 +30,6 @@ from pydantic_ai import Agent, RunContext
 
 from agent_service import spans
 from agent_service.boundary import sanitize_token_info_payload, wrap_external_data
-from agent_service.canonical_mints import stamp_verification
 from agent_service import llm
 from agent_service.policy.binding_store import PrimitiveBindingStore, build_binding
 from agent_service.primitive_client import PrimitiveClient, PrimitiveError
@@ -314,6 +313,13 @@ def build_agent(
         # the substance of a claim's structural backbone, so binding
         # would be noise.
         call_id = f"get_token_info:{uuid.uuid4().hex[:12]}"
+        # `verified` / `canonical_*` are stamped server-side by Rust's
+        # `canonical_mints::stamp_verification` (the registry lives in
+        # `backend/src/canonical_mints.rs`). The Python side just
+        # passes the proto-decoded fields through; the eval-driven
+        # fixture seam also lives in Rust (`crate::eval_fixtures`), so
+        # an impostor case routes through the same compute path and
+        # arrives here pre-stamped with `verified=false`.
         payload = {
             "mint": result.mint,
             "name": result.name,
@@ -322,17 +328,12 @@ def build_agent(
             "update_authority": result.update_authority,
             "source_program": result.source_program,
             "found": result.found,
+            "verified": result.verified,
         }
-        # Canonical-mint verification stamp. The mint pubkey is the
-        # forge-proof identity; on-chain `name` / `symbol` / `uri` are
-        # attacker-controlled and stay in the payload as forensic
-        # surface. `verified=true` plus the canonical strings tell the
-        # model which mints we stand behind by pubkey, so the prompt
-        # rule can have it use canonical labels for those and qualify
-        # everything else as unverified. Pre-sanitization on purpose:
-        # these fields are our hardcoded data, not external text, so
-        # they should survive `external_text_input_enabled=false`.
-        payload = stamp_verification(payload)
+        if result.canonical_name is not None:
+            payload["canonical_name"] = result.canonical_name
+        if result.canonical_symbol is not None:
+            payload["canonical_symbol"] = result.canonical_symbol
         # Replay record captures the UNREDACTED payload so ship 4 diff
         # can compare against future re-fetches. The redaction below
         # only affects what reaches the LLM via wrap_external_data.

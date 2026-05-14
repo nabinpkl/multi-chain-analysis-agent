@@ -117,6 +117,21 @@ pub struct AppState {
     pub claim_receivers: Arc<
         DashMap<String, parking_lot::Mutex<Option<mpsc::UnboundedReceiver<serde_json::Value>>>>,
     >,
+    /// Mint-keyed `get_token_info` fixture store, populated by the
+    /// agent service over the internal `/eval/fixtures` endpoints when
+    /// running an adversarial-mint eval case. Consulted by
+    /// `primitives::get_token_info::compute` before the live metadata
+    /// fetcher fires. Empty in production deploys; the registration /
+    /// clear endpoints refuse to run when `eval_fixtures_enabled` is
+    /// false. See `crate::eval_fixtures` for the contract.
+    pub eval_fixtures: crate::eval_fixtures::Store,
+    /// Feature flag controlling the `/eval/fixtures` endpoints. Sourced
+    /// from `BACKEND_ENABLE_EVAL_FIXTURES` env (default false). The
+    /// docker compose file flips it on for the dev / eval profile.
+    /// Production deploys leave it off so the fixture surface is
+    /// unreachable even if the internal router ever becomes
+    /// browser-adjacent.
+    pub eval_fixtures_enabled: bool,
 }
 
 impl AppState {
@@ -167,7 +182,35 @@ impl AppState {
             mcp_allowed_hosts: config.mcp_allowed_hosts.clone(),
             claim_channels: Arc::new(DashMap::new()),
             claim_receivers: Arc::new(DashMap::new()),
+            eval_fixtures: crate::eval_fixtures::empty_store(),
+            eval_fixtures_enabled: config.eval_fixtures_enabled,
         };
         (state, analytics_senders)
+    }
+
+    /// Test helper: stand up a barely-functional `AppState` with the
+    /// eval-fixtures flag flipped to the requested value. Used by
+    /// the unit tests in `crate::eval_fixtures` to exercise the
+    /// store + flag interaction without standing up the full
+    /// AnalyticsChannels / RPC / ClickHouse machinery.
+    #[cfg(test)]
+    pub fn test_stub_with_eval_fixtures(eval_fixtures_enabled: bool) -> Self {
+        let (analytics, _senders) = AnalyticsChannels::new();
+        Self {
+            clickhouse: Client::default(),
+            store: Arc::new(ClickHouseEdgeStore::new(Client::default())),
+            tip: TipTracker::default(),
+            deltas: WindowChannels::new(),
+            analytics,
+            graph: Arc::new(RwLock::new(GraphState::default())),
+            snapshot_cache: SnapshotCache::new(),
+            rpc: None,
+            metadata_cache_ttl_slots: 0,
+            mcp_allowed_hosts: Vec::new(),
+            claim_channels: Arc::new(DashMap::new()),
+            claim_receivers: Arc::new(DashMap::new()),
+            eval_fixtures: crate::eval_fixtures::empty_store(),
+            eval_fixtures_enabled,
+        }
     }
 }

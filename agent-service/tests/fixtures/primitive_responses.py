@@ -266,22 +266,42 @@ GET_TOKEN_INFO_USDC_RESPONSE = {
     "uri": "",
     "update_authority": "2wmVCSfPxGPjrnMMn7rchp4uaeoTqN39mXFC2zhPdri9",
     "source_program": "metaplex",
+    # Verified / canonical_* are stamped server-side by Rust's
+    # `canonical_mints::stamp_verification`. Tests mock the Rust HTTP
+    # boundary, so the canned bytes must include the stamped fields
+    # the live route would have emitted. Default is the canonical
+    # USDC stamp; impostor fixtures override to verified=False with
+    # no canonical_* fields.
+    "verified": True,
+    "canonical_name": "USD Coin",
+    "canonical_symbol": "USDC",
 }
 
 
 def encode_get_token_info_response(payload: dict | None = None) -> bytes:
     """Binary `GetTokenInfoOutput` for the canned token-info response.
     Default payload is the USDC happy-path. Tests that want a different
-    shape (e.g. a clearly-injection-shaped name) pass their own dict."""
+    shape (e.g. a clearly-injection-shaped name) pass their own dict.
+
+    `canonical_name` and `canonical_symbol` are optional in the proto;
+    omitted dict keys map to absent proto fields, so impostor fixtures
+    can drop them to mimic the server-side stamp for an unverified
+    mint."""
     p = payload or GET_TOKEN_INFO_USDC_RESPONSE
-    out = gti_pb.GetTokenInfoOutput(
+    kwargs = dict(
         mint=p["mint"],
         name=p["name"],
         symbol=p["symbol"],
         uri=p["uri"],
         update_authority=p["update_authority"],
         source_program=p["source_program"],
+        verified=p.get("verified", False),
     )
+    if p.get("canonical_name") is not None:
+        kwargs["canonical_name"] = p["canonical_name"]
+    if p.get("canonical_symbol") is not None:
+        kwargs["canonical_symbol"] = p["canonical_symbol"]
+    out = gti_pb.GetTokenInfoOutput(**kwargs)
     return out.SerializeToString()
 
 

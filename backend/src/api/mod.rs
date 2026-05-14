@@ -1,3 +1,4 @@
+pub mod eval_fixtures;
 pub mod graph_stats;
 pub mod graph_stream;
 pub mod health;
@@ -5,7 +6,7 @@ pub mod observable_wallets;
 pub mod primitives;
 
 use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
@@ -102,6 +103,14 @@ pub fn internal_router(state: AppState) -> Router {
             "/primitive/get_token_info",
             post(primitives::get_token_info_route),
         )
+        // Eval-driven fixture surface. POST replaces the live store
+        // with the supplied fixtures; DELETE clears it. Gated by the
+        // `BACKEND_ENABLE_EVAL_FIXTURES` env flag (default off in
+        // production) so the surface is unreachable unless the
+        // operator opts in. Only the Python agent service calls these
+        // routes; the contract is documented in `crate::eval_fixtures`.
+        .route("/eval/fixtures", post(eval_fixtures::register))
+        .route("/eval/fixtures", delete(eval_fixtures::clear))
         .nest_service("/mcp", mcp_service)
         .with_state(state)
 }

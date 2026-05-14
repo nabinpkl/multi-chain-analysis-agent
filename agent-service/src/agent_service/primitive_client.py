@@ -92,6 +92,12 @@ class TokenInfo:
     typed output directly (no `PrimitiveResponseEnvelope` wrapper):
     metadata lookup has no provenance / subgraph_slice surface to
     populate, so the generic envelope would be empty noise.
+
+    `verified` / `canonical_*` are stamped server-side by Rust's
+    `canonical_mints::stamp_verification` inside
+    `primitives::get_token_info::compute`. The Python tool wrapper
+    just passes the fields through; there is no Python-side stamping
+    anymore.
     """
 
     mint: str
@@ -104,6 +110,12 @@ class TokenInfo:
     update_authority: str | None
     # "metaplex" | "token2022" | "" (no metadata)
     source_program: str
+    # Canonical-mint verification stamp from the Rust registry.
+    # `verified=True` iff the mint pubkey is in the canonical registry;
+    # `canonical_name` / `canonical_symbol` populated only in that case.
+    verified: bool
+    canonical_name: str | None
+    canonical_symbol: str | None
 
     @property
     def found(self) -> bool:
@@ -529,6 +541,13 @@ class PrimitiveClient:
                     out.update_authority if out.HasField("update_authority") else None
                 ),
                 source_program=out.source_program,
+                verified=out.verified,
+                canonical_name=(
+                    out.canonical_name if out.HasField("canonical_name") else None
+                ),
+                canonical_symbol=(
+                    out.canonical_symbol if out.HasField("canonical_symbol") else None
+                ),
             )
 
 

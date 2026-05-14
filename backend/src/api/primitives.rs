@@ -565,6 +565,9 @@ pub async fn get_token_info_route(State(state): State<AppState>, req: Request) -
             uri: out.uri,
             update_authority: out.update_authority,
             source_program: out.source_program,
+            verified: out.verified,
+            canonical_name: out.canonical_name,
+            canonical_symbol: out.canonical_symbol,
             ..Default::default()
         },
         Err(GetTokenInfoError::InvalidMint(msg)) => {

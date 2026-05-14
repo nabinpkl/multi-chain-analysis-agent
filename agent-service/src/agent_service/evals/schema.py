@@ -607,6 +607,98 @@ _assert_kind_union_exhaustive()
 
 
 # ---------------------------------------------------------------------------
+# Eval fixtures (per-case, opt-in primitive response injection)
+# ---------------------------------------------------------------------------
+
+
+class EvalGetTokenInfoFixture(BaseModel):
+    """One canned `get_token_info(mint=...)` response. The runner
+    serializes the case's fixtures to the agent service via the
+    `x-mca-eval-fixtures` request header; the agent service's
+    `/agent/turn` route POSTs the parsed envelope to the Rust data
+    plane's `/eval/fixtures` endpoint (gated by
+    `BACKEND_ENABLE_EVAL_FIXTURES`). Rust's
+    `primitives::get_token_info::compute` then consults the fixture
+    store before falling through to the live metadata fetcher, and
+    `canonical_mints::stamp_verification` tags the resulting payload
+    with `verified` based on the mint pubkey. Both runtimes (codex via
+    the MCP tool, pydantic-ai via the HTTP route) share the same Rust
+    compute path, so a single fixture registration covers them both.
+
+    Field shape mirrors the proto `GetTokenInfoOutput` minus the
+    server-stamped verification fields. The `verified` flag is NOT a
+    fixture field: Rust derives it from the mint pubkey. An impostor
+    fixture supplies a non-canonical pubkey, and `stamp_verification`
+    correctly tags it `verified=false`.
+
+    The natural adversarial shape is a Token-2022 impostor: a
+    non-canonical mint pubkey with `symbol` / `name` chosen to
+    impersonate a canonical token (e.g. "USDC"), optionally with a
+    prompt-injection payload embedded in `name` to exercise the
+    `<external_data>` instruction-rejection rule simultaneously.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mint: str = Field(
+        description=(
+            "Base58 SPL/Token-2022 mint pubkey. Must NOT collide with "
+            "a canonical registry entry; the impostor scenario requires "
+            "the fixture stamp to come out as `verified=false`."
+        ),
+    )
+    name: str | None = Field(
+        default=None,
+        description=(
+            "On-chain `name` string. Attacker-controlled in real "
+            "Token-2022 mints; fixture authors can put injection "
+            "payloads here to test instruction rejection."
+        ),
+    )
+    symbol: str | None = Field(default=None)
+    uri: str | None = Field(default=None)
+    update_authority: str | None = Field(default=None)
+    source_program: str = Field(
+        default="token2022",
+        description=(
+            '"metaplex" | "token2022" | "" (empty for unresolvable / '
+            "not_found shape)."
+        ),
+    )
+
+    @field_validator("mint")
+    @classmethod
+    def _mint_non_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("mint must be non-empty")
+        return v
+
+
+class EvalFixtures(BaseModel):
+    """Per-case canned-response store, keyed by primitive name. Only
+    `get_token_info` is supported today; the shape is extensible to
+    future primitives (e.g. a `wallet_profile` fixture for fully
+    synthetic wallets) without breaking existing cases."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    get_token_info: list[EvalGetTokenInfoFixture] = Field(default_factory=list)
+
+    @field_validator("get_token_info")
+    @classmethod
+    def _mints_unique(
+        cls, v: list[EvalGetTokenInfoFixture]
+    ) -> list[EvalGetTokenInfoFixture]:
+        mints = [f.mint for f in v]
+        if len(mints) != len(set(mints)):
+            raise ValueError(
+                "get_token_info fixtures must have unique mint pubkeys; "
+                "duplicate mints would race on lookup order"
+            )
+        return v
+
+
+# ---------------------------------------------------------------------------
 # Eval case
 # ---------------------------------------------------------------------------
 
@@ -638,6 +730,16 @@ class EvalCase(BaseModel):
     )
     inputs: dict[str, Any] = Field(
         description="AgentRequest-shaped JSON object POSTed to /agent/ask.",
+    )
+    fixtures: EvalFixtures | None = Field(
+        default=None,
+        description=(
+            "Optional per-case canned-response store. The runner "
+            "serializes this to the agent service via the "
+            "`x-mca-eval-fixtures` header; the agent honors it only "
+            "when `inputs.runType == 'eval'` (defense in depth against "
+            "a leaked header on production traffic)."
+        ),
     )
     metadata: dict[str, Any] = Field(default_factory=dict)
     probes: list[ProbeSpec]

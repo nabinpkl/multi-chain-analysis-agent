@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file multichain/wire/shared/v1/get_token_info.proto.
  */
 export const file_multichain_wire_shared_v1_get_token_info: GenFile = /*@__PURE__*/
-  fileDesc("Ci5tdWx0aWNoYWluL3dpcmUvc2hhcmVkL3YxL2dldF90b2tlbl9pbmZvLnByb3RvEhltdWx0aWNoYWluLndpcmUuc2hhcmVkLnYxIiEKEUdldFRva2VuSW5mb0lucHV0EgwKBG1pbnQYASABKAki0gEKEkdldFRva2VuSW5mb091dHB1dBIMCgRtaW50GAEgASgJEhEKBG5hbWUYAiABKAlIAIgBARITCgZzeW1ib2wYAyABKAlIAYgBARIQCgN1cmkYBCABKAlIAogBARIdChB1cGRhdGVfYXV0aG9yaXR5GAUgASgJSAOIAQESFgoOc291cmNlX3Byb2dyYW0YBiABKAlCBwoFX25hbWVCCQoHX3N5bWJvbEIGCgRfdXJpQhMKEV91cGRhdGVfYXV0aG9yaXR5SgQIBxAIUgZjYWNoZWRiBnByb3RvMw");
+  fileDesc("Ci5tdWx0aWNoYWluL3dpcmUvc2hhcmVkL3YxL2dldF90b2tlbl9pbmZvLnByb3RvEhltdWx0aWNoYWluLndpcmUuc2hhcmVkLnYxIiEKEUdldFRva2VuSW5mb0lucHV0EgwKBG1pbnQYASABKAkiyAIKEkdldFRva2VuSW5mb091dHB1dBIMCgRtaW50GAEgASgJEhEKBG5hbWUYAiABKAlIAIgBARITCgZzeW1ib2wYAyABKAlIAYgBARIQCgN1cmkYBCABKAlIAogBARIdChB1cGRhdGVfYXV0aG9yaXR5GAUgASgJSAOIAQESFgoOc291cmNlX3Byb2dyYW0YBiABKAkSEAoIdmVyaWZpZWQYCCABKAgSGwoOY2Fub25pY2FsX25hbWUYCSABKAlIBIgBARIdChBjYW5vbmljYWxfc3ltYm9sGAogASgJSAWIAQFCBwoFX25hbWVCCQoHX3N5bWJvbEIGCgRfdXJpQhMKEV91cGRhdGVfYXV0aG9yaXR5QhEKD19jYW5vbmljYWxfbmFtZUITChFfY2Fub25pY2FsX3N5bWJvbEoECAcQCFIGY2FjaGVkYgZwcm90bzM");
 
 /**
  * Input to the `get_token_info` primitive. Resolves a Solana mint
@@ -111,6 +111,42 @@ export type GetTokenInfoOutput = Message<"multichain.wire.shared.v1.GetTokenInfo
    * @generated from field: string source_program = 6;
    */
   sourceProgram: string;
+
+  /**
+   * Canonical-mint verification. Stamped server-side by
+   * `canonical_mints::stamp_verification(mint)`. The mint pubkey is
+   * the forge-proof identity; the on-chain `name` / `symbol` / `uri`
+   * are attacker-controlled strings. This flag tells the agent which
+   * pubkeys we stand behind by name. The corresponding registry
+   * lives in `backend/src/canonical_mints.rs`. Both the HTTP
+   * `/primitive/get_token_info` route and the MCP server tool emit
+   * these stamped fields; the agent's `token_verification` prompt
+   * rule uses them to decide whether the symbol can be narrated bare
+   * or must be qualified as unverified.
+   *
+   * @generated from field: bool verified = 8;
+   */
+  verified: boolean;
+
+  /**
+   * Canonical display name (e.g. "USD Coin"). Present only when
+   * `verified=true`. Authoritative for the agent's narrative; the
+   * attacker-controlled `name` field passes through unredacted as
+   * forensic surface, but the agent is taught to prefer this label
+   * for verified mints.
+   *
+   * @generated from field: optional string canonical_name = 9;
+   */
+  canonicalName?: string | undefined;
+
+  /**
+   * Canonical display symbol (e.g. "USDC"). Present only when
+   * `verified=true`. Same authoritative-label semantics as
+   * `canonical_name`.
+   *
+   * @generated from field: optional string canonical_symbol = 10;
+   */
+  canonicalSymbol?: string | undefined;
 };
 
 /**

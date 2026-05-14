@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 import httpx
 
 from agent_service.evals.ch import ClickHouseClient
+from agent_service.evals.schema import EvalFixtures
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +79,7 @@ async def invoke_agent_get_trace_id(
     base_url: str,
     http: httpx.AsyncClient,
     stream_timeout_s: float = 180.0,
+    fixtures: EvalFixtures | None = None,
 ) -> AgentRun:
     """POST `inputs` to /agent/turn, follow the streaming SSE response
     until the AgentDone frame arrives, return the trace id.
@@ -96,6 +98,14 @@ async def invoke_agent_get_trace_id(
     180s is generous for a normal turn (~25s today) and tight
     enough that a stuck turn fails loudly within minutes.
 
+    `fixtures` carries per-case canned primitive responses (the
+    `fixtures:` field on `EvalCase`). When non-None the model is
+    serialized via `model_dump_json()` and sent in the
+    `x-mca-eval-fixtures` request header. The agent service rejects
+    the header on non-eval `runType` values, so passing fixtures here
+    only works in combination with the default `runType=eval` shape
+    above. None on cases that don't opt in.
+
     Raises RuntimeError on empty traceId (the agent ran without
     OTel emission, e.g. `OTEL_SDK_DISABLED=true`); polling for a
     nonexistent trace would waste 30s on the wait_for_trace_indexed
@@ -105,7 +115,13 @@ async def invoke_agent_get_trace_id(
     inputs.setdefault("runType", "eval")
     started = datetime.now(timezone.utc)
 
-    async with http.stream("POST", f"{base_url}/agent/turn", json=inputs) as stream_resp:
+    request_headers: dict[str, str] = {}
+    if fixtures is not None:
+        request_headers["x-mca-eval-fixtures"] = fixtures.model_dump_json()
+
+    async with http.stream(
+        "POST", f"{base_url}/agent/turn", json=inputs, headers=request_headers
+    ) as stream_resp:
         stream_resp.raise_for_status()
         # The server echoes the (possibly minted) thread_id in a
         # response header so the runner can identify the turn for

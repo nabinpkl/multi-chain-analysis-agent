@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n.multichain/wire/shared/v1/get_token_info.proto\x12\x19multichain.wire.shared.v1\"\'\n\x11GetTokenInfoInput\x12\x12\n\x04mint\x18\x01 \x01(\tR\x04mint\"\x8b\x02\n\x12GetTokenInfoOutput\x12\x12\n\x04mint\x18\x01 \x01(\tR\x04mint\x12\x17\n\x04name\x18\x02 \x01(\tH\x00R\x04name\x88\x01\x01\x12\x1b\n\x06symbol\x18\x03 \x01(\tH\x01R\x06symbol\x88\x01\x01\x12\x15\n\x03uri\x18\x04 \x01(\tH\x02R\x03uri\x88\x01\x01\x12.\n\x10update_authority\x18\x05 \x01(\tH\x03R\x0fupdateAuthority\x88\x01\x01\x12%\n\x0esource_program\x18\x06 \x01(\tR\rsourceProgramB\x07\n\x05_nameB\t\n\x07_symbolB\x06\n\x04_uriB\x13\n\x11_update_authorityJ\x04\x08\x07\x10\x08R\x06\x63\x61\x63hedb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n.multichain/wire/shared/v1/get_token_info.proto\x12\x19multichain.wire.shared.v1\"\'\n\x11GetTokenInfoInput\x12\x12\n\x04mint\x18\x01 \x01(\tR\x04mint\"\xab\x03\n\x12GetTokenInfoOutput\x12\x12\n\x04mint\x18\x01 \x01(\tR\x04mint\x12\x17\n\x04name\x18\x02 \x01(\tH\x00R\x04name\x88\x01\x01\x12\x1b\n\x06symbol\x18\x03 \x01(\tH\x01R\x06symbol\x88\x01\x01\x12\x15\n\x03uri\x18\x04 \x01(\tH\x02R\x03uri\x88\x01\x01\x12.\n\x10update_authority\x18\x05 \x01(\tH\x03R\x0fupdateAuthority\x88\x01\x01\x12%\n\x0esource_program\x18\x06 \x01(\tR\rsourceProgram\x12\x1a\n\x08verified\x18\x08 \x01(\x08R\x08verified\x12*\n\x0e\x63\x61nonical_name\x18\t \x01(\tH\x04R\rcanonicalName\x88\x01\x01\x12.\n\x10\x63\x61nonical_symbol\x18\n \x01(\tH\x05R\x0f\x63\x61nonicalSymbol\x88\x01\x01\x42\x07\n\x05_nameB\t\n\x07_symbolB\x06\n\x04_uriB\x13\n\x11_update_authorityB\x11\n\x0f_canonical_nameB\x13\n\x11_canonical_symbolJ\x04\x08\x07\x10\x08R\x06\x63\x61\x63hedb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -34,5 +34,5 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_GETTOKENINFOINPUT']._serialized_start=77
   _globals['_GETTOKENINFOINPUT']._serialized_end=116
   _globals['_GETTOKENINFOOUTPUT']._serialized_start=119
-  _globals['_GETTOKENINFOOUTPUT']._serialized_end=386
+  _globals['_GETTOKENINFOOUTPUT']._serialized_end=546
 # @@protoc_insertion_point(module_scope)

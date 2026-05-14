@@ -47,15 +47,120 @@ from multichain.wire.agent.v1 import history_pb2 as hist_pb
 from multichain.wire.agent.v1 import session_pb2 as sess_pb
 from multichain.wire.agent.v1 import sse_pb2
 
+from agent_service import spans
 from agent_service.agent import build_agent
 from agent_service.codex_driver import run_turn_codex
 from agent_service.codex_profile import build_codex_driver, build_codex_profile
+from agent_service.evals.schema import EvalFixtures
 from agent_service.loop_driver import LoopHandles, run_turn
 from agent_service.otel import init_otel, instrument_fastapi
 from agent_service.primitive_client import PrimitiveClient
 from agent_service.thread_state import RuntimeMismatchError, ThreadRegistry
 
 log = structlog.get_logger(__name__)
+
+
+_EVAL_FIXTURES_HEADER = "x-mca-eval-fixtures"
+
+
+def _parse_eval_fixtures_header(raw: str, run_type: str) -> EvalFixtures | None:
+    """Decode the `x-mca-eval-fixtures` request header into an
+    `EvalFixtures` pydantic model that the agent-service route handler
+    will POST to the Rust `/eval/fixtures` endpoint.
+
+    Two defenses fire here:
+
+    1. The header is honored only when `run_type == "eval"`. Production
+       traffic (empty run_type, "production", "dev") with a populated
+       header is rejected outright with HTTP 400. Without this gate a
+       leaked header on user traffic could substitute attacker-shaped
+       fixtures into real conversations.
+    2. The payload must parse as a valid `EvalFixtures` pydantic model.
+       Malformed JSON or unknown fields raise HTTP 400. This catches
+       runner-side drift before it reaches the Rust store.
+
+    Returns `None` when the header is absent. Returns an `EvalFixtures`
+    on success even if it carries an empty list (still rejected on
+    non-eval run types because the gate fires on header presence, not
+    on payload contents).
+    """
+    if not raw:
+        return None
+    if run_type != spans.RUN_TYPE_EVAL:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{_EVAL_FIXTURES_HEADER} header is only honored when "
+                f"run_type='{spans.RUN_TYPE_EVAL}'; got "
+                f"run_type={run_type!r}"
+            ),
+        )
+    try:
+        return EvalFixtures.model_validate_json(raw)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid {_EVAL_FIXTURES_HEADER} payload: {e}",
+        ) from None
+
+
+async def _register_eval_fixtures(
+    primitive_client: PrimitiveClient, fixtures: EvalFixtures
+) -> None:
+    """POST the parsed fixtures to the Rust `/eval/fixtures` endpoint.
+
+    Wire shape: `{"get_token_info": [{...}, ...]}` matching Rust's
+    `crate::eval_fixtures::RegisterRequest`. The pydantic model's
+    `model_dump_json()` produces compatible JSON because the field
+    names (`get_token_info`, `mint`, `name`, `symbol`, `uri`,
+    `update_authority`, `source_program`) are identical on both sides.
+
+    Failure modes:
+    - 503 from Rust means the eval-fixtures feature flag is off on
+      that deploy (`BACKEND_ENABLE_EVAL_FIXTURES` unset). Surface as
+      HTTP 503 so the eval runner sees the misconfiguration rather
+      than silently running with an empty fixture store.
+    - 400 from Rust means a validation rule fired (empty mint,
+      canonical-mint targeting). Surface as HTTP 400.
+    """
+    resp = await primitive_client._client.post(
+        "/eval/fixtures",
+        content=fixtures.model_dump_json(),
+        headers={"Content-Type": "application/json"},
+    )
+    if resp.status_code == 503:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Rust data plane refused eval fixtures: "
+                "BACKEND_ENABLE_EVAL_FIXTURES is off on the backend. "
+                "Set the env flag and restart the backend."
+            ),
+        )
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail=f"eval fixtures rejected by data plane: {resp.text}",
+        )
+
+
+async def _clear_eval_fixtures(primitive_client: PrimitiveClient) -> None:
+    """DELETE the Rust fixture store at end-of-turn. Logs and swallows
+    errors so a clear-failure doesn't take down the SSE stream that's
+    already finished its useful work (the agent's response has been
+    fully delivered to the client). The store may be left with stale
+    entries; the next case's `register` call replaces them anyway.
+    """
+    try:
+        resp = await primitive_client._client.delete("/eval/fixtures")
+        if resp.status_code >= 400 and resp.status_code != 503:
+            log.warning(
+                "eval_fixtures_clear_failed",
+                status_code=resp.status_code,
+                body=resp.text,
+            )
+    except Exception as e:
+        log.warning("eval_fixtures_clear_exception", error=str(e))
 
 
 def _resolve_default_runtime() -> int:
@@ -515,7 +620,19 @@ async def agent_turn(request: Request) -> EventSourceResponse:
 
     _validate_request(req)
 
+    # Eval-only fixture injection. Parsed and gated up front so the
+    # `runType=eval` defense fires regardless of which runtime the
+    # turn ends up on. When parsed, the fixtures are POSTed to the
+    # Rust `/eval/fixtures` endpoint below; both runtimes hit the
+    # same Rust compute path so a single registration covers both.
+    eval_fixtures = _parse_eval_fixtures_header(
+        request.headers.get(_EVAL_FIXTURES_HEADER, ""),
+        req.run_type,
+    )
+
     handles: LoopHandles = request.app.state.handles
+    if eval_fixtures is not None:
+        await _register_eval_fixtures(handles.primitive_client, eval_fixtures)
 
     # Validate thread_id: present + unknown -> 404 so the client can
     # transparently retry without it (the frontend handles 404 by
@@ -639,6 +756,13 @@ async def agent_turn(request: Request) -> EventSourceResponse:
             # it would let its DELETE hit nothing.
             if handles.active_turns.get(thread_id) is task:
                 handles.active_turns.pop(thread_id, None)
+            # Clear the Rust fixture store on turn end so the next
+            # eval case (or any production turn that lands later
+            # against the same backend) starts from an empty store.
+            # Single-eval-at-a-time concurrency contract per
+            # crate::eval_fixtures.
+            if eval_fixtures is not None:
+                await _clear_eval_fixtures(handles.primitive_client)
 
     # Critical SSE headers: nginx / cloudflared / browsers won't buffer
     # if these are set. `X-Mca-Thread-Id` lets the frontend learn the

@@ -140,7 +140,10 @@ async def run_suite(
         async with httpx.AsyncClient(timeout=120) as http:
             for case in cases:
                 agent_run: AgentRun = await invoke_agent_get_trace_id(
-                    case.inputs, base_url=base_url, http=http
+                    case.inputs,
+                    base_url=base_url,
+                    http=http,
+                    fixtures=case.fixtures,
                 )
                 # Wait for the OTel pipeline to flush the turn's
                 # spans into ClickHouse before probes query them.
