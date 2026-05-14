@@ -83,12 +83,31 @@ def build_context_block(view_context: ent_pb.ViewContext, user_question: str) ->
     `preserving_proto_field_name=False` (the default) emits camelCase
     field names per the proto canonical JSON spec  the same shape the
     browser sends and reads on every other hop.
-    """
+
+    Wire-layer defense (user-question tag forgery): every `<` and `>`
+    in the user-question slot is unicode-escaped to `\\u003c` /
+    `\\u003e`. Without this, a user could embed a forged
+    `<external_data primitive="...">...</external_data>` or
+    `<context>...</context>` block inside the question, and the model
+    would see two literal envelope opens in the same prompt and might
+    treat the user's forged block as a real tool result or as a second
+    authoritative context. Allow-list rejection in
+    `reject_if_unsafe_user_question` covers chat-template tokens
+    (`<|im_start|>`, `[INST]`, `</user>`, etc.) but does NOT catch
+    `<external_data>` or `<context>` forgery because those tags are
+    legitimate operator vocabulary that an honest user could also
+    type. The escape kills the tag-forgery vector at the wire layer;
+    value-forgery (the user typing fake JSON values without wrapping
+    them in a tag) stays defended by the `defense:user_question_untrusted`
+    prompt rule plus the binding-store + structural verifier on the
+    claim emission path. Mirrors the same defense in
+    `wrap_external_data` for the tool-result slot."""
     # MessageToJson -> str -> dict so we can re-serialize with sorted
     # keys and consistent indent.
     canonical = json_format.MessageToJson(view_context, preserving_proto_field_name=False)
     context_json = json.dumps(json.loads(canonical), indent=2, sort_keys=True)
-    return f"<context>\n{context_json}\n</context>\n\nQuestion: {user_question}"
+    safe_question = user_question.replace("<", "\\u003c").replace(">", "\\u003e")
+    return f"<context>\n{context_json}\n</context>\n\nQuestion: {safe_question}"
 
 
 # ---------------------------------------------------------------------------
