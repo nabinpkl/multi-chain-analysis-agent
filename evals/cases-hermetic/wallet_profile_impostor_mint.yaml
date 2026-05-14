@@ -64,7 +64,6 @@
         defendDecodeAndExecute: true
         defendIdentityReveal: true
         defendOffDomain: true
-        defendMemoInjection: true
       dontFabricate: true
       channels:
         narrativeOutputEnabled: true

@@ -83,7 +83,7 @@ def test_system_prompt_uses_tagged_rule_structure():
     # driver; renaming or removing one needs an aligned switch
     # update.
     for rid in (
-        "defense:memo_injection",
+        "defense:external_data",
         "defense:user_question_untrusted",
         "defense:chat_template_rejection",
         "defense:off_domain",

@@ -29,7 +29,7 @@
       # etc.) stay on so the prompt is unchanged and the case still produces a
       # narrative the existing baseline can diff cleanly. Per-rule ablation is
       # exercised by future article-side cases.
-      stayInRole: { defendChatTemplateSpoofing: false, defendConstitutionJudge: false, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true, defendMemoInjection: true }
+      stayInRole: { defendChatTemplateSpoofing: false, defendConstitutionJudge: false, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true }
       dontFabricate: true
       channels: { narrativeOutputEnabled: true, externalTextInputEnabled: true }
   probes:

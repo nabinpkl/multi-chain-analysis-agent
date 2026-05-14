@@ -28,7 +28,7 @@
       # exercising is purely on the channel side. Constitution
       # judge stays on so the channel-off behavior is observed
       # alongside the gates that the production preset emits.
-      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true, defendMemoInjection: true }
+      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true }
       dontFabricate: true
       channels: { narrativeOutputEnabled: false, externalTextInputEnabled: true }
   probes:

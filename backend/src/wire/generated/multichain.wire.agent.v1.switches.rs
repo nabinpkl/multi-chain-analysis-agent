@@ -577,19 +577,6 @@ pub struct StayInRoleSwitches {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
     )]
     pub defend_off_domain: bool,
-    /// Drops `defense:memo_injection`. When off the agent loses the
-    /// explicit rule that \<external_data\> blocks are data not
-    /// instructions; `wrap_external_data` still fires but the
-    /// model-side defense-in-depth is gone.
-    ///
-    /// Field 7: `defend_memo_injection`
-    #[serde(
-        rename = "defendMemoInjection",
-        alias = "defend_memo_injection",
-        with = "::buffa::json_helpers::proto_bool",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
-    )]
-    pub defend_memo_injection: bool,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -603,7 +590,6 @@ impl ::core::fmt::Debug for StayInRoleSwitches {
             .field("defend_decode_and_execute", &self.defend_decode_and_execute)
             .field("defend_identity_reveal", &self.defend_identity_reveal)
             .field("defend_off_domain", &self.defend_off_domain)
-            .field("defend_memo_injection", &self.defend_memo_injection)
             .finish()
     }
 }
@@ -649,9 +635,6 @@ impl ::buffa::Message for StayInRoleSwitches {
         if self.defend_off_domain {
             size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
         }
-        if self.defend_memo_injection {
-            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
-        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -691,11 +674,6 @@ impl ::buffa::Message for StayInRoleSwitches {
             ::buffa::encoding::Tag::new(6u32, ::buffa::encoding::WireType::Varint)
                 .encode(buf);
             ::buffa::types::encode_bool(self.defend_off_domain, buf);
-        }
-        if self.defend_memo_injection {
-            ::buffa::encoding::Tag::new(7u32, ::buffa::encoding::WireType::Varint)
-                .encode(buf);
-            ::buffa::types::encode_bool(self.defend_memo_injection, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -770,16 +748,6 @@ impl ::buffa::Message for StayInRoleSwitches {
                 }
                 self.defend_off_domain = ::buffa::types::decode_bool(buf)?;
             }
-            7u32 => {
-                if tag.wire_type() != ::buffa::encoding::WireType::Varint {
-                    return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
-                        field_number: 7u32,
-                        expected: 0u8,
-                        actual: tag.wire_type() as u8,
-                    });
-                }
-                self.defend_memo_injection = ::buffa::types::decode_bool(buf)?;
-            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, depth)?);
@@ -794,7 +762,6 @@ impl ::buffa::Message for StayInRoleSwitches {
         self.defend_decode_and_execute = false;
         self.defend_identity_reveal = false;
         self.defend_off_domain = false;
-        self.defend_memo_injection = false;
         self.__buffa_unknown_fields.clear();
     }
 }

@@ -1,8 +1,7 @@
 //! Generic Kafka publisher parameterized over an `IngestStream`. One
 //! rdkafka `FutureProducer` per stream type; same producer settings
 //! across all streams (idempotence, acks=all, lz4, linger=20ms,
-//! retries=10) so retried slots dedupe at the broker. Replaces the
-//! previous parallel `EdgeProducer` and `MemoProducer` modules.
+//! retries=10) so retried slots dedupe at the broker.
 //!
 //! Adding a new stream type is now `StreamProducer::<MyStream>::new(
 //! brokers, topic)`; no new producer module per row type.

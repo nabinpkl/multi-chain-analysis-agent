@@ -248,7 +248,6 @@ def drops_from_switches(switches: "AgentSwitches") -> frozenset[str]:
       #36 plan.
     - `defend_identity_reveal` -> drop `defense:identity`.
     - `defend_off_domain` -> drop `defense:off_domain`.
-    - `defend_memo_injection` -> drop `defense:memo_injection`.
 
     `defend_constitution_judge` does NOT appear here: it gates the
     constitution gate spans, not the prompt content. Its handling
@@ -268,8 +267,6 @@ def drops_from_switches(switches: "AgentSwitches") -> frozenset[str]:
         drops.add("defense:identity")
     if not role.defend_off_domain:
         drops.add("defense:off_domain")
-    if not role.defend_memo_injection:
-        drops.add("defense:memo_injection")
     return frozenset(drops)
 
 

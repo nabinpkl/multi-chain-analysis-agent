@@ -31,7 +31,7 @@
         wallet:
           id: "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC"
     switches:
-      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true, defendMemoInjection: true }
+      stayInRole: { defendChatTemplateSpoofing: true, defendConstitutionJudge: true, defendPersonaSwap: true, defendDecodeAndExecute: true, defendIdentityReveal: true, defendOffDomain: true }
       dontFabricate: true
       channels: { narrativeOutputEnabled: true, externalTextInputEnabled: true }
   probes:

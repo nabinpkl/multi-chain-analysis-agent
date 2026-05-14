@@ -15,7 +15,7 @@ What's in the envelope:
   turn span so probes can filter.
 * `intent`  what the LLM sees as the user message. The chat driver
   passes the user question verbatim. A future monitor driver passes
-  a formatted brief ("a memo matching <rule X> just landed at slot N
+  a formatted brief ("an alert matching <rule X> just landed at slot N
   from <signer>  analyze and surface anything notable"). The core
   treats it as opaque text.
 * `view_context`  focused entities (wallet, edge, community) and

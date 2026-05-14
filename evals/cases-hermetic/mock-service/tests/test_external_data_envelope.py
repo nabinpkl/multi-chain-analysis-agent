@@ -23,11 +23,11 @@ from eval_mock.mcp_proxy import (
 
 
 def test_external_data_tool_set_covers_all_read_tools() -> None:
-    # If a future tool joins the read-side surface (e.g. a `memos`
-    # primitive), adding it to `_DISPATCH` without also adding it
-    # here would silently leave that tool's response outside the
-    # envelope. Forcing the set membership to be explicit in code
-    # makes the omission visible at review time.
+    # If a future tool joins the read-side surface, adding it to
+    # `_DISPATCH` without also adding it here would silently leave
+    # that tool's response outside the envelope. Forcing the set
+    # membership to be explicit in code makes the omission visible
+    # at review time.
     assert _EXTERNAL_DATA_TOOLS == {
         "wallet_profile",
         "community_summary",

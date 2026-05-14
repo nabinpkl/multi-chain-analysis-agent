@@ -19,14 +19,6 @@ pub async fn bootstrap(client: &Client) -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    // The memo capture pipeline was removed when audit found zero
-    // downstream consumers. Drop any leftover table from prior runs.
-    // No corresponding CREATE; the table is intentionally gone.
-    client
-        .query("DROP TABLE IF EXISTS multichain.memos")
-        .execute()
-        .await?;
-
     client
         .query(
             r#"

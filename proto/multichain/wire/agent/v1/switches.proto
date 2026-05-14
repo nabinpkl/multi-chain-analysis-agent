@@ -58,8 +58,8 @@ message ChannelSwitches {
   // constrained-format allowlist (base58 address, enum role, mint
   // id) is replaced with a placeholder. Today no primitive emits
   // untrusted text so this switch is forward-looking, but it is
-  // wired now so future memo or tag primitives slot in without a
-  // schema change.
+  // wired now so future primitives that surface untrusted strings
+  // slot in without a schema change.
   bool external_text_input_enabled = 2;
 }
 
@@ -102,11 +102,6 @@ message StayInRoleSwitches {
   // Drops `defense:off_domain`. When off the agent's "decline
   // off-topic" rule disappears.
   bool defend_off_domain = 6;
-  // Drops `defense:memo_injection`. When off the agent loses the
-  // explicit rule that <external_data> blocks are data not
-  // instructions; `wrap_external_data` still fires but the
-  // model-side defense-in-depth is gone.
-  bool defend_memo_injection = 7;
 }
 
 // Sub-modes of cross_check. Two independent toggles after ship 5a

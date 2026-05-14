@@ -48,7 +48,6 @@ _PRODUCTION_SWITCHES: dict = {
         "defendDecodeAndExecute": True,
         "defendIdentityReveal": True,
         "defendOffDomain": True,
-        "defendMemoInjection": True,
     },
     "dontFabricate": True,
     "crossCheck": {

@@ -1,8 +1,7 @@
 //! Generic Kafka-to-ClickHouse sink parameterized over an
 //! `IngestStream`. Reads envelopes off the consumer's topic, batches
 //! by `batch_size`, flushes on size OR `flush_interval` (whichever
-//! first), commits offsets after a successful insert. Replaces the
-//! previous parallel `ch_sink::run` and `memo_sink::run` modules.
+//! first), commits offsets after a successful insert.
 //!
 //! One sink task per stream type, each spawned in `main.rs`. Isolating
 //! per-stream means a failure on one topic does not stall another
@@ -22,7 +21,6 @@ use tracing::{debug, error, info, warn};
 use crate::store::EdgeStore;
 use crate::stream::ingest_stream::IngestStream;
 
-/// Same shape as the prior `ChSinkConfig` and `MemoSinkConfig`.
 /// Reused across stream types because all current streams have
 /// similar batch and flush characteristics; if a future stream needs
 /// different cadence, pass a different `SinkConfig` to its

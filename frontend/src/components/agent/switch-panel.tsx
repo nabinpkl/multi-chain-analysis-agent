@@ -116,14 +116,6 @@ export function SwitchPanel() {
                 on={role?.defendOffDomain ?? false}
                 onChange={(on) => setSwitch("stayInRole.defendOffDomain", on)}
               />
-              <ToggleRow
-                label="memo injection"
-                tooltip="Prompt-side rule that treats anything inside <external_data> blocks as data, never instructions. The boundary still wraps the data even with this off; this only removes the model-side defense-in-depth."
-                on={role?.defendMemoInjection ?? false}
-                onChange={(on) =>
-                  setSwitch("stayInRole.defendMemoInjection", on)
-                }
-              />
             </CollapsibleGroup>
 
             <CollapsibleGroup title="Grounding">

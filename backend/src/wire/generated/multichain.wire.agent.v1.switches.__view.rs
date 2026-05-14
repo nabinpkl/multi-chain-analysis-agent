@@ -575,13 +575,6 @@ pub struct StayInRoleSwitchesView<'a> {
     ///
     /// Field 6: `defend_off_domain`
     pub defend_off_domain: bool,
-    /// Drops `defense:memo_injection`. When off the agent loses the
-    /// explicit rule that \<external_data\> blocks are data not
-    /// instructions; `wrap_external_data` still fires but the
-    /// model-side defense-in-depth is gone.
-    ///
-    /// Field 7: `defend_memo_injection`
-    pub defend_memo_injection: bool,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> StayInRoleSwitchesView<'a> {
@@ -688,16 +681,6 @@ impl<'a> StayInRoleSwitchesView<'a> {
                     }
                     view.defend_off_domain = ::buffa::types::decode_bool(&mut cur)?;
                 }
-                7u32 => {
-                    if tag.wire_type() != ::buffa::encoding::WireType::Varint {
-                        return ::core::result::Result::Err(::buffa::DecodeError::WireTypeMismatch {
-                            field_number: 7u32,
-                            expected: 0u8,
-                            actual: tag.wire_type() as u8,
-                        });
-                    }
-                    view.defend_memo_injection = ::buffa::types::decode_bool(&mut cur)?;
-                }
                 _ => {
                     ::buffa::encoding::skip_field_depth(tag, &mut cur, depth)?;
                     let span_len = before_tag.len() - cur.len();
@@ -732,7 +715,6 @@ impl<'a> ::buffa::MessageView<'a> for StayInRoleSwitchesView<'a> {
             defend_decode_and_execute: self.defend_decode_and_execute,
             defend_identity_reveal: self.defend_identity_reveal,
             defend_off_domain: self.defend_off_domain,
-            defend_memo_injection: self.defend_memo_injection,
             __buffa_unknown_fields: self
                 .__buffa_unknown_fields
                 .to_owned()
@@ -764,9 +746,6 @@ impl<'a> ::buffa::ViewEncode<'a> for StayInRoleSwitchesView<'a> {
             size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
         }
         if self.defend_off_domain {
-            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
-        }
-        if self.defend_memo_injection {
             size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
@@ -809,11 +788,6 @@ impl<'a> ::buffa::ViewEncode<'a> for StayInRoleSwitchesView<'a> {
             ::buffa::encoding::Tag::new(6u32, ::buffa::encoding::WireType::Varint)
                 .encode(buf);
             ::buffa::types::encode_bool(self.defend_off_domain, buf);
-        }
-        if self.defend_memo_injection {
-            ::buffa::encoding::Tag::new(7u32, ::buffa::encoding::WireType::Varint)
-                .encode(buf);
-            ::buffa::types::encode_bool(self.defend_memo_injection, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }

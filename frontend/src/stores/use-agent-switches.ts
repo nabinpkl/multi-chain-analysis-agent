@@ -69,7 +69,6 @@ function makeSwitches(opts: {
       defendDecodeAndExecute: true,
       defendIdentityReveal: true,
       defendOffDomain: true,
-      defendMemoInjection: true,
     }),
     dontFabricate: opts.dontFabricate,
     crossCheck: create(CrossCheckSwitchesSchema, {
@@ -195,7 +194,6 @@ export type SwitchKey =
   | "stayInRole.defendDecodeAndExecute"
   | "stayInRole.defendIdentityReveal"
   | "stayInRole.defendOffDomain"
-  | "stayInRole.defendMemoInjection"
   | "dontFabricate"
   | "crossCheck.paraphraseAwareMatch"
   | "crossCheck.groundTruthMatch"
@@ -287,7 +285,6 @@ function applySwitchKey(
     defendDecodeAndExecute: role?.defendDecodeAndExecute ?? false,
     defendIdentityReveal: role?.defendIdentityReveal ?? false,
     defendOffDomain: role?.defendOffDomain ?? false,
-    defendMemoInjection: role?.defendMemoInjection ?? false,
   };
   const base = {
     stayInRole: create(StayInRoleSwitchesSchema, carriedRole),
@@ -352,8 +349,6 @@ function applySwitchKey(
       return withRole({ defendIdentityReveal: on });
     case "stayInRole.defendOffDomain":
       return withRole({ defendOffDomain: on });
-    case "stayInRole.defendMemoInjection":
-      return withRole({ defendMemoInjection: on });
     case "dontFabricate":
       return create(AgentSwitchesSchema, { ...base, dontFabricate: on });
     case "crossCheck.paraphraseAwareMatch":

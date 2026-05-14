@@ -310,7 +310,7 @@ def _build_mcp() -> FastMCP:
         # `get_token_info`) wrap the model-visible text payload in the
         # `<external_data primitive="…">` envelope so the system
         # prompt's instruction-rejection rule applies to attacker-
-        # controlled strings (token name/symbol/uri, memo text)  the
+        # controlled strings (token name/symbol/uri, wallet tag)  the
         # same defense `wrap_external_data` provides on the
         # pydantic-ai HTTP path. We also surface the raw value as
         # `structuredContent` so the Python codex_driver's

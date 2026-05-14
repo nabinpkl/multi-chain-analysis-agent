@@ -240,7 +240,7 @@ def test_known_rule_ids_lists_real_defense_namespace():
     Pins the rule-id namespace contract."""
     ids = known_rule_ids()
     expected_defense_ids = {
-        "defense:memo_injection",
+        "defense:external_data",
         "defense:user_question_untrusted",
         "defense:chat_template_rejection",
         "defense:off_domain",
@@ -270,7 +270,6 @@ def _all_on_switches() -> sw_pb.AgentSwitches:
             defend_decode_and_execute=True,
             defend_identity_reveal=True,
             defend_off_domain=True,
-            defend_memo_injection=True,
         ),
     )
 
@@ -325,12 +324,6 @@ def test_drops_from_switches_off_domain_off_drops_rule():
     assert drops_from_switches(s) == frozenset({"defense:off_domain"})
 
 
-def test_drops_from_switches_memo_injection_off_drops_rule():
-    s = _all_on_switches()
-    s.stay_in_role.defend_memo_injection = False
-    assert drops_from_switches(s) == frozenset({"defense:memo_injection"})
-
-
 def test_drops_from_switches_constitution_judge_does_not_drop_any_rule():
     """`defend_constitution_judge` gates the gate spans, not the
     prompt content. Pinned so a future refactor doesn't accidentally
@@ -354,7 +347,6 @@ def test_drops_from_switches_all_off_drops_every_defense_rule():
             defend_decode_and_execute=False,
             defend_identity_reveal=False,
             defend_off_domain=False,
-            defend_memo_injection=False,
         ),
     )
     assert drops_from_switches(s) == frozenset(
@@ -363,7 +355,6 @@ def test_drops_from_switches_all_off_drops_every_defense_rule():
             "defense:user_question_untrusted",
             "defense:identity",
             "defense:off_domain",
-            "defense:memo_injection",
         }
     )
 
