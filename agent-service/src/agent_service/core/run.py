@@ -201,37 +201,16 @@ async def run_one_turn(
         if envelope.switches.stay_in_role.defend_chat_template_spoofing:
             reject_if_unsafe_user_question(envelope.intent)
     except UnsafeUserInputError as e:
-        rejection_text = (
-            "Your message contained chat-template-style tokens or "
-            "other non-natural-language patterns that aren't supported "
-            "in this conversation. Please rephrase in plain English. "
-            "I'm a read-only analyst agent for the Solana transaction "
-            "graph; I can profile wallets, summarize communities, and "
-            "look at on-chain transfers."
+        sse_text = emit_unsafe_input_rejection_observability(
+            tracer=_tracer,
+            turn_span=turn_span,
+            pattern=e.pattern,
+            narrative_output_enabled=envelope.switches.channels.narrative_output_enabled,
         )
-        with _tracer.start_as_current_span(spans.NARRATIVE_EMITTED) as nar_span:
-            sse_text = resolve_narrative_text(
-                rejection_text,
-                narrative_output_enabled=envelope.switches.channels.narrative_output_enabled,
-                nar_span=nar_span,
-            )
-            nar_span.set_attribute(spans.Attrs.NARRATIVE_ASSEMBLED_PROVENANCE_COUNT, 0)
-            if sse_text:
-                nar_span.set_attribute(spans.Attrs.NARRATIVE_TEXT, sse_text)
-            nar_span.set_attribute(spans.Attrs.NARRATIVE_VERDICT, spans.VERDICT_APPROVED)
-            turn_span.set_attribute(spans.Attrs.TURN_UNSAFE_INPUT_REJECTED, "true")
-            turn_span.set_attribute(spans.Attrs.TURN_UNSAFE_INPUT_PATTERN, e.pattern)
         await sink.emit(
             "Narrative",
             narrative_pb2.NarrativeWithRefs(text=sse_text, provenance=[]),
         )
-        # Stamp end-of-turn aggregates on the rejection short-circuit
-        # so downstream eval probes see the same attribute set as the
-        # normal path (just zeroed).
-        turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_EMITTED, 0)
-        turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_APPROVED, 0)
-        turn_span.set_attribute(spans.Attrs.TURN_TOOL_CALLS, 0)
-        turn_span.set_attribute(spans.Attrs.TURN_NARRATIVE_CHARS, len(sse_text))
         log.info("user_input_rejected_at_boundary", pattern=e.pattern)
         return TurnOutcome(
             narrative_snapshot=NarrativeSnapshot(text=sse_text),
@@ -593,6 +572,70 @@ async def run_one_turn(
 # ---------------------------------------------------------------------------
 # Loop-body helpers (role-agnostic; private to the core)
 # ---------------------------------------------------------------------------
+
+
+# The narrative text used to refuse a turn whose user-question hit
+# the chat-template / role-pseudo-tag / HTML-script-tag rail in
+# `boundary.reject_if_unsafe_user_question`. Single source so the
+# pydantic-ai and codex paths emit byte-identical wording; drift in
+# this string is a frontend display drift that's annoying to bisect.
+UNSAFE_USER_INPUT_REJECTION_NARRATIVE = (
+    "Your message contained chat-template-style tokens or "
+    "other non-natural-language patterns that aren't supported "
+    "in this conversation. Please rephrase in plain English. "
+    "I'm a read-only analyst agent for the Solana transaction "
+    "graph; I can profile wallets, summarize communities, and "
+    "look at on-chain transfers."
+)
+
+
+def emit_unsafe_input_rejection_observability(
+    *,
+    tracer: trace.Tracer,
+    turn_span: trace.Span,
+    pattern: str,
+    narrative_output_enabled: bool,
+) -> str:
+    """Stamp the narrative-and-turn span attributes that mark a turn as
+    rejected at the user-input topical rail, and return the post-
+    channel-switch SSE text the caller should ship to the user.
+
+    Shared shape across pydantic-ai (`core.run.run_one_turn`) and
+    codex (`codex_driver._agent_turn_codex`). The caller still owns
+    wire-frame emission (`sink.emit` vs yielding SSE frames) and
+    thread-state persistence; those shapes differ enough between the
+    two drivers that pulling them in here would entangle this helper
+    with both. Everything that IS shared  the rejection wording, the
+    span attribute set, the narrative-channel resolution, the zeroed
+    turn aggregates  lives here so a regression in either path can
+    only happen by editing this function.
+    """
+    with tracer.start_as_current_span(spans.NARRATIVE_EMITTED) as nar_span:
+        nar_span.set_attribute(
+            spans.Attrs.NARRATIVE_VERDICT, spans.VERDICT_APPROVED
+        )
+        sse_text = resolve_narrative_text(
+            UNSAFE_USER_INPUT_REJECTION_NARRATIVE,
+            narrative_output_enabled=narrative_output_enabled,
+            nar_span=nar_span,
+        )
+        if sse_text:
+            nar_span.set_attribute(spans.Attrs.NARRATIVE_TEXT, sse_text)
+        nar_span.set_attribute(
+            spans.Attrs.NARRATIVE_ASSEMBLED_PROVENANCE_COUNT, 0
+        )
+        turn_span.set_attribute(spans.Attrs.TURN_UNSAFE_INPUT_REJECTED, "true")
+        turn_span.set_attribute(spans.Attrs.TURN_UNSAFE_INPUT_PATTERN, pattern)
+    # Turn-level zero aggregates so the boundary short-circuit produces
+    # the same attribute set as a normal-completion turn (just zeroed).
+    # Eval probes assert against these (`mcae.turn.tool_calls=0`,
+    # `mcae.turn.claims_emitted=0`) to verify the rejection didn't
+    # silently fire any tools.
+    turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_EMITTED, 0)
+    turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_APPROVED, 0)
+    turn_span.set_attribute(spans.Attrs.TURN_TOOL_CALLS, 0)
+    turn_span.set_attribute(spans.Attrs.TURN_NARRATIVE_CHARS, len(sse_text))
+    return sse_text
 
 
 def resolve_narrative_text(

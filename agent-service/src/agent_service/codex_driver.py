@@ -74,6 +74,7 @@ from agent_service.core.run import (
     _claims_to_judgement_payload,
     _normalize_verdict,
     _set_retracted,
+    emit_unsafe_input_rejection_observability,
     resolve_narrative_text,
 )
 from agent_service.diff_replay import run_repeat_path
@@ -812,7 +813,12 @@ async def run_turn_codex(
 
                 # Boundary check: same rail as pydantic-ai. Chat-template
                 # spoofing patterns get rejected before codex ever sees
-                # the user question.
+                # the user question. The rejection narrative + the
+                # boundary observability stamping are shared with
+                # `core.run.run_one_turn` via
+                # `emit_unsafe_input_rejection_observability`; only
+                # codex-specific concerns (yield frames, thread-state
+                # persistence, terminal-done) stay here.
                 try:
                     if request.switches.stay_in_role.defend_chat_template_spoofing:
                         reject_if_unsafe_user_question(request.user_question)
@@ -822,61 +828,19 @@ async def run_turn_codex(
                         pattern=e.pattern,
                         runtime="codex",
                     )
-                    rejection_text = (
-                        "Your message contained chat-template-style "
-                        "tokens or other non-natural-language patterns "
-                        "that aren't supported in this conversation. "
-                        "Please rephrase in plain English."
+                    sse_text = emit_unsafe_input_rejection_observability(
+                        tracer=_tracer,
+                        turn_span=turn_span,
+                        pattern=e.pattern,
+                        narrative_output_enabled=(
+                            request.switches.channels.narrative_output_enabled
+                        ),
                     )
-                    # Boundary-side observability parity with pydantic-ai
-                    # (`core/run.py:213-235`). Stamp the same attrs the
-                    # pydantic boundary stamps so eval probes work
-                    # uniformly: the narrative span wraps the rejection
-                    # emit, and turn-level zero counters keep the
-                    # attribute set identical to the normal-completion
-                    # shape (just zeroed). Without these, the refusal-
-                    # suite probes (`zero-tool-calls-on-injection`,
-                    # `narrative-emitted-approved`, etc) fail under
-                    # codex because the attributes don't exist.
-                    with _tracer.start_as_current_span(
-                        spans.NARRATIVE_EMITTED
-                    ) as nar_span:
-                        nar_span.set_attribute(
-                            spans.Attrs.NARRATIVE_VERDICT,
-                            spans.VERDICT_APPROVED,
-                        )
-                        # Apply the narrative-output channel switch.
-                        # Channel off => empty text, suppressed=true on
-                        # the span. Channel on => unchanged text,
-                        # length stamped. Shared helper with the
-                        # pydantic-ai path (`core/run.py`).
-                        sse_text = resolve_narrative_text(
-                            rejection_text,
-                            narrative_output_enabled=(
-                                request.switches.channels.narrative_output_enabled
-                            ),
-                            nar_span=nar_span,
-                        )
-                        if sse_text:
-                            nar_span.set_attribute(
-                                spans.Attrs.NARRATIVE_TEXT, sse_text
-                            )
-                        nar_span.set_attribute(
-                            spans.Attrs.NARRATIVE_ASSEMBLED_PROVENANCE_COUNT,
-                            0,
-                        )
-                        turn_span.set_attribute(
-                            spans.Attrs.TURN_UNSAFE_INPUT_REJECTED, "true"
-                        )
-                        turn_span.set_attribute(
-                            spans.Attrs.TURN_UNSAFE_INPUT_PATTERN, e.pattern
-                        )
-                    # Chunk 4: persist the rejection so history replay
-                    # shows the same shape the live UI saw  a bubble
-                    # explaining why we shut the turn down. The
-                    # snapshot stores the SSE-shaped text (post-
-                    # suppression) so reopens render the same thing
-                    # the live user saw.
+                    # Persist the rejection so history replay shows the
+                    # same shape the live UI saw  a bubble explaining
+                    # why we shut the turn down. The snapshot stores
+                    # the SSE-shaped text (post-suppression) so reopens
+                    # render the same thing the live user saw.
                     thread.record_turn_narrative(
                         turn,
                         NarrativeSnapshot(text=sse_text),
@@ -887,18 +851,6 @@ async def run_turn_codex(
                             text=sse_text,
                             provenance=[],
                         ),
-                    )
-                    # Stamp turn-level zero counters so the boundary-
-                    # short-circuit produces the same attribute set as
-                    # the normal-completion path. Eval probes assert
-                    # against these (`mcae.turn.tool_calls=0`,
-                    # `mcae.turn.claims_emitted=0`) to verify the
-                    # rejection didn't silently fire any tools.
-                    turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_EMITTED, 0)
-                    turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_APPROVED, 0)
-                    turn_span.set_attribute(spans.Attrs.TURN_TOOL_CALLS, 0)
-                    turn_span.set_attribute(
-                        spans.Attrs.TURN_NARRATIVE_CHARS, len(sse_text)
                     )
                     yield _terminal_done(turn_started_at_ms, role_timings)
                     return
