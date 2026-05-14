@@ -1,7 +1,7 @@
 {
   "suite": "wallet_profile_clean_question_hostile_mint",
-  "captured_at": "2026-05-14T06:23:55.794738Z",
-  "git_sha": "7495debdc19d",
+  "captured_at": "2026-05-14T07:21:02.831353Z",
+  "git_sha": "c5578d366b9c",
   "agent_version": "0.1.0",
   "runtime": "codex",
   "agent_primary_model": "gemini-3.1-flash-lite",

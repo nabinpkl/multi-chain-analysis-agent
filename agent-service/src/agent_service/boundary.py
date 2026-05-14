@@ -158,7 +158,19 @@ def wrap_external_data(primitive_name: str, output: Any) -> str:
     The `primitive_name` is not validated here; tools pass their own
     canonical name so a typo would be visibly weird in the LLM's
     context. If hardening is ever needed, validate against a known
-    set at the call site."""
+    set at the call site.
+
+    Wire-layer defense: every `<` and `>` inside the JSON body is
+    unicode-escaped to `\\u003c` / `\\u003e`. That guarantees the
+    only literal `</external_data>` substring in the emitted string
+    is the real envelope close, even when an attacker plants the
+    close tag inside an `<external_data>`-bound field (e.g. a
+    token's on-chain `name`). Same pattern web frameworks use to
+    embed JSON inside `<script>` blocks for `</script>` XSS
+    prevention. JSON parsers reconstruct the original bytes from
+    the escape, so callers reading the body programmatically
+    (codex_driver's binding-store hydration) see the unchanged
+    payload."""
     if isinstance(output, (dict, list)):
         body = json.dumps(output, separators=(",", ":"))
     elif isinstance(output, str):
@@ -170,6 +182,10 @@ def wrap_external_data(primitive_name: str, output: Any) -> str:
             body = json.dumps(output)
         except TypeError:
             body = json.dumps(str(output))
+    # Escape every angle bracket. Strings get the same treatment as
+    # JSON bodies so a primitive that happens to return a bare
+    # string can't smuggle a close tag either.
+    body = body.replace("<", "\\u003c").replace(">", "\\u003e")
     return f'<external_data primitive="{primitive_name}">\n{body}\n</external_data>'
 
 

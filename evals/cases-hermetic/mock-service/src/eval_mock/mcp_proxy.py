@@ -221,8 +221,17 @@ def wrap_external_data(primitive: str, payload: Any) -> str:
     JSON, newline-padded) and the Rust side at
     `backend/src/mcp.rs::wrap_external_data`. Exposed as a module-
     level function so tests can pin the shape without booting the
-    full MCP transport."""
+    full MCP transport.
+
+    Wire-layer defense: every `<` and `>` inside the JSON body is
+    unicode-escaped to `\\u003c` / `\\u003e`. That guarantees the
+    only literal `</external_data>` substring in the emitted string
+    is the real envelope close, even when an attacker plants the
+    close tag inside a wrapped field. Mirrors the same defense in
+    the Python boundary and Rust MCP wrappers so all three wires
+    stay byte-for-byte aligned."""
     body = json.dumps(payload, separators=(",", ":"))
+    body = body.replace("<", "\\u003c").replace(">", "\\u003e")
     return f'<external_data primitive="{primitive}">\n{body}\n</external_data>'
 
 
