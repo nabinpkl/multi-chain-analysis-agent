@@ -28,6 +28,10 @@ In our codebase: the user types a wallet-analysis question. The agent calls `wal
 
 [05: Build the ability to turn each defense off, and verify the runtimes are parallel](05-per-defense-ablation-and-runtime-parity.md). The other four chapters describe defenses with measurable behavior. If you cannot disable defense X individually and re-run your eval suite, you cannot demonstrate which defense is doing the work. If you have two runtimes executing the same agent loop, you cannot ship them unless their defenses are bit-for-bit identical on the surfaces where drift matters.
 
+[06: Resource bounds as a defense](06-resource-bounds.md). A prompt-injected agent can fail in expensive ways: tool-call loops, token-burn injections, quota-exhaustion via legitimate-looking traffic. Most of these will not show up in your correctness-focused eval suite. You need explicit caps on turns, tool calls, tokens, and time, with at least one regression case that proves the cap fires when an attacker tries to blow past it. Our caps today are scattered across two runtimes and one thread-state pruner with no unified policy; this chapter is the audit.
+
+[07: The meta-defenses are not free](07-meta-defense-trust-boundary.md). Every defense you build with an LLM is itself attackable by an LLM-shaped attack. The constitution gate is an LLM. The judge reads text the user influenced. The same prompt-injection techniques that work on the primary work on the judge, sometimes more easily because the judge runs on a cheaper model. If you treat the meta-defenses as trusted infrastructure, you have a blind spot. This chapter is the threat model for the pipeline you built in chapter 03.
+
 ## The high-level model
 
 Every prompt-injection defense answers one of three questions: did the bytes get in, what does the model think they are, what is the model allowed to say in response. A complete posture answers all three.
@@ -38,7 +42,7 @@ Every prompt-injection defense answers one of three questions: did the bytes get
 | What does the model think they are? | Prompt layer: rules that frame untrusted regions. | `<external_data>` envelope with a rule that explains what's inside. `defense:user_question_untrusted` rule for the question slot. |
 | What is the model allowed to say in response? | Output layer: deterministic checks plus an LLM judge on the emitted content. | Placeholder gate, structural verifier against a binding store, constitution gate. |
 
-The chapters roughly follow that order. 01 and 02 cover the two input slots at the wire-and-prompt layer. 03 covers the output layer. 04 spans prompt and output for domain and identity. 05 is the meta-architecture that lets you prove the others work.
+The chapters roughly follow that order. 01 and 02 cover the two input slots at the wire-and-prompt layer. 03 covers the output layer. 04 spans prompt and output for domain and identity. 05 is the meta-architecture that lets you prove the others work. 06 covers what the eval suite is unlikely to catch: the cost shape of an injected agent. 07 turns the same defenses on themselves and asks whether the verification pipeline has its own attack surface.
 
 ## What the running example is
 
