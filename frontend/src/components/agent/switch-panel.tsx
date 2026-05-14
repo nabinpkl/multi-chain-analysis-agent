@@ -37,8 +37,10 @@ import {
  * so the two builder-view sections feel like the same family.
  *
  * Tooltips are deliberately user-facing: no implementation jargon,
- * no ship references. The implementation map lives in
- * `docs/architecture/switches.md`.
+ * no ship references. The implementation map (which file realizes
+ * which contract) lives in `architecture-decisions/11-agent-switches.md`;
+ * the rationale for per-defense ablation lives in
+ * `docs/architecture/WhySwitchAblation.md`.
  */
 export function SwitchPanel() {
   const switches = useAgentSwitches((s) => s.switches);

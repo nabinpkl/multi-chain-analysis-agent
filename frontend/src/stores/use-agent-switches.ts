@@ -16,8 +16,10 @@ import { namespacedStoreName } from "@/lib/session";
  * citation-discipline gate refactor + builder-view toggle.
  *
  * Each switch is a behavior contract; flipping it off turns off
- * the corresponding guardrail or capability. See
- * `docs/architecture/switches.md`.
+ * the corresponding guardrail or capability. The rationale for
+ * per-defense ablation lives in `docs/architecture/WhySwitchAblation.md`;
+ * the implementation map (which file realizes which contract) lives
+ * in `architecture-decisions/11-agent-switches.md`.
  *
  * Ship 5a removed `text_match` (regex-on-prose factuality check;
  * brittle on paraphrase + unicode). The structural placeholder +
