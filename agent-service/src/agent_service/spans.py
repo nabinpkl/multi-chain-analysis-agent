@@ -92,6 +92,13 @@ class Attrs:
     TURN_INDEX: Final = "mcae.turn.index"
     TURN_USER_QUESTION: Final = "mcae.turn.user_question"
     TURN_TOOL_CALLS: Final = "mcae.turn.tool_calls"
+    # True when the per-turn tool-call budget interceptor fired at
+    # least once this turn (i.e. the model tried to dispatch a lookup
+    # past the cap and received a no_more_lookups_this_turn tool
+    # result instead of the primitive output). Probes assert this on
+    # the runaway_tool_call_loop case to verify the interceptor
+    # engaged and the model recovered gracefully.
+    TURN_BUDGET_EXHAUSTED: Final = "mcae.turn.budget_exhausted"
     TURN_CLAIMS_EMITTED: Final = "mcae.turn.claims_emitted"
     TURN_CLAIMS_APPROVED: Final = "mcae.turn.claims_approved"
     TURN_NARRATIVE_CHARS: Final = "mcae.turn.narrative_chars"
