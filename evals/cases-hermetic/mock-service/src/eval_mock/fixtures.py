@@ -66,6 +66,14 @@ class FixtureStore:
     # and signals end-of-stream on the matching claim queue (None
     # sentinel) so the drain loop exits.
     active_snapshots: set[str] = field(default_factory=set)
+    # Per-snapshot tool-call counters. Mirrors Rust's
+    # `AppState::tool_call_budgets` so the codex hermetic path
+    # exercises the same budget contract as production. `/turn/begin`
+    # initializes the counter to 0; the MCP `call_tool` dispatcher
+    # increments before each budgeted read tool and short-circuits
+    # with the `no_more_lookups_this_turn` envelope when the counter
+    # reaches the cap. `/turn/end` removes the entry.
+    tool_call_counts: dict[str, int] = field(default_factory=dict)
 
     def setup(
         self,
@@ -107,10 +115,12 @@ class FixtureStore:
                 pass
             self.claim_queues.pop(snap_id, None)
         self.active_snapshots.clear()
+        self.tool_call_counts.clear()
 
     def register_snapshot(self, snapshot_id: str) -> None:
         self.active_snapshots.add(snapshot_id)
         self.claim_queues.setdefault(snapshot_id, asyncio.Queue())
+        self.tool_call_counts.setdefault(snapshot_id, 0)
 
     def end_snapshot(self, snapshot_id: str) -> None:
         if snapshot_id not in self.active_snapshots:
@@ -119,6 +129,30 @@ class FixtureStore:
         q = self.claim_queues.get(snapshot_id)
         if q is not None:
             q.put_nowait(None)
+        self.tool_call_counts.pop(snapshot_id, None)
+
+    def try_consume_budget(self, snapshot_id: str, cap: int) -> bool:
+        """Increment the per-snapshot dispatch counter. Returns True
+        when the caller may proceed; False when the caller MUST
+        short-circuit with the no_more_lookups envelope because the
+        cap has been reached. Mirrors Rust's `try_consume_budget` in
+        `backend/src/mcp.rs` byte-for-byte (atomic increment, roll
+        back on exhaustion so `mcae.turn.tool_calls` reads the exact
+        dispatch count, not cap+1).
+
+        Missing snapshot_id (the caller bypassed `/turn/begin`) ->
+        skip the cap entirely. This matches Rust's behavior, where
+        a missing `tool_call_budgets` entry causes
+        `try_consume_budget` to return None and let the dispatch
+        proceed.
+        """
+        if snapshot_id not in self.tool_call_counts:
+            return True
+        used = self.tool_call_counts[snapshot_id]
+        if used >= cap:
+            return False
+        self.tool_call_counts[snapshot_id] = used + 1
+        return True
 
     def push_claim(self, snapshot_id: str, claim: dict[str, Any]) -> None:
         q = self.claim_queues.get(snapshot_id)

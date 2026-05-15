@@ -54,6 +54,46 @@ log = structlog.get_logger(__name__)
 # above this file (`src/eval_mock/mcp_proxy.py` → `src/` → root).
 SCHEMAS_PATH = Path(__file__).resolve().parent.parent.parent / "schemas.json"
 
+# ---------------------------------------------------------------------------
+# Per-turn tool-call budget. Mirrors the Python side at
+# `agent_service/policy/resource_bounds.py` and the Rust side at
+# `backend/src/mcp.rs::try_consume_budget` byte-for-byte. We duplicate
+# the constants here (rather than depending on agent-service) because
+# the mock-service is intentionally a standalone uv package; the unit
+# tests in `test_policy_resource_bounds.py` pin the Python side and
+# `backend/src/mcp.rs::tests` pins the Rust side, so drift between any
+# two of the three surfaces shows up immediately. Both runtimes use the
+# same env var so the operator tunes one knob and all three surfaces
+# move together.
+# ---------------------------------------------------------------------------
+
+TURN_TOOL_CALL_BUDGET: int = int(os.environ.get("AGENT_TURN_TOOL_CALL_BUDGET", "8"))
+
+# Sentinel error-kind. The codex driver greps the TOOL_COMPLETED
+# event's output for this exact substring to stamp
+# `mcae.turn.budget_exhausted`. Drift breaks the OTel signal
+# silently; keep in lockstep with
+# `agent_service.policy.resource_bounds.NO_MORE_LOOKUPS_ERROR_KIND`
+# and the Rust `NO_MORE_LOOKUPS_ERROR_KIND` constant.
+NO_MORE_LOOKUPS_ERROR_KIND: str = "no_more_lookups_this_turn"
+
+NO_MORE_LOOKUPS_PAYLOAD: dict[str, str] = {
+    "error": NO_MORE_LOOKUPS_ERROR_KIND,
+    "guidance": (
+        "You have used this turn's tool budget. Do not call any "
+        "more lookup tools. Finalize the answer using only the "
+        "data already returned this turn. If the data so far is "
+        "not enough, say so honestly in the narrative."
+    ),
+}
+
+# Only the three read-side primitives count against the budget.
+# `emit_claims` is reporting, not lookup. Mirrors the Python
+# `BUDGETED_PRIMITIVES` and the Rust enforcement set.
+_BUDGETED_TOOLS = frozenset(
+    {"wallet_profile", "community_summary", "get_token_info"}
+)
+
 
 def load_schemas() -> list[dict[str, Any]]:
     """Read the build-time MCP schema snapshot. Returns the list of
@@ -305,6 +345,24 @@ def _build_mcp() -> FastMCP:
         handler = _DISPATCH.get(name)
         if handler is None:
             raise ValueError(f"unknown tool: {name}")
+        # Per-turn budget gate. For the three read-side primitives,
+        # increment the per-snapshot counter and short-circuit with
+        # the no_more_lookups envelope when the cap is reached. Same
+        # contract Rust enforces in `try_consume_budget` so the
+        # codex hermetic path exercises the budget exactly as
+        # production does. `emit_claims` is exempt (reporting, not
+        # a lookup). Missing snapshot_id => skip the gate (caller
+        # bypassed /turn/begin); mirrors Rust's behavior.
+        if name in _BUDGETED_TOOLS:
+            snapshot_id = str(arguments.get("snapshot_id", "") or "").strip()
+            if snapshot_id and not STORE.try_consume_budget(
+                snapshot_id, TURN_TOOL_CALL_BUDGET
+            ):
+                envelope = wrap_external_data(name, NO_MORE_LOOKUPS_PAYLOAD)
+                return (
+                    [mcp_types.TextContent(type="text", text=envelope)],
+                    dict(NO_MORE_LOOKUPS_PAYLOAD),
+                )
         try:
             result = handler(arguments)
         except Exception as e:  # noqa: BLE001
