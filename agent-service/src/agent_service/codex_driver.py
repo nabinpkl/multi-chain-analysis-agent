@@ -86,6 +86,7 @@ from agent_service.policy import structural as structural_module
 from agent_service.policy.binding_store import build_binding
 from agent_service.policy.constitution import judge_narrative
 from agent_service.policy.placeholder import validate_refs
+from agent_service.policy.resource_bounds import NO_MORE_LOOKUPS_ERROR_KIND
 from agent_service.policy.structural import verify_chip_values
 from agent_service.prompts.composer import (
     compose_system_prompt,
@@ -1136,6 +1137,21 @@ async def run_turn_codex(
                 # `deps.tool_call_records` for the same attr; this
                 # is the codex-side analog.
                 tool_completed_count = 0
+                # Flipped true if any TOOL_COMPLETED event's payload
+                # carries the no_more_lookups_this_turn sentinel from
+                # the Rust MCP server's `try_consume_budget` short-
+                # circuit. Stamped as `mcae.turn.budget_exhausted` on
+                # the turn span alongside `mcae.turn.tool_calls`, so
+                # the runaway-tool-loop eval probe can assert the
+                # interceptor fired (paired with tool_calls clamped
+                # at the cap). Pydantic-ai sets the equivalent flag
+                # in-process on `AgentDeps.budget_exhausted_fired`;
+                # this is the codex-side analog detected by payload
+                # sniff because the Rust handler can't reach into
+                # the agent-service OTel turn span directly. See
+                # `agent_service/policy/resource_bounds.py` for the
+                # sentinel constant.
+                budget_exhausted_fired = False
                 codex_error: Exception | None = None
                 # Chunk 3.5 item 7: track per-tool args between
                 # TOOL_STARTED and TOOL_COMPLETED so we can record a
@@ -1312,6 +1328,20 @@ async def run_turn_codex(
                         tool_name = evt.text or evt.tool_id or ""
                         tool_events.append(f"done:{tool_name or 'tool'}")
                         tool_completed_count += 1
+                        # Detect the no_more_lookups_this_turn sentinel
+                        # emitted by `try_consume_budget` on the Rust
+                        # MCP side. Payload sniff because the Rust
+                        # handler can't reach into this process's OTel
+                        # turn span. The sentinel is the error-kind
+                        # string in the wrapped JSON, structural
+                        # (snake_case, never appears in legitimate
+                        # primitive output), so false positives are
+                        # vanishingly unlikely.
+                        if (
+                            isinstance(evt.output, str)
+                            and NO_MORE_LOOKUPS_ERROR_KIND in evt.output
+                        ):
+                            budget_exhausted_fired = True
                         # Phase-2 eval observability. Close the
                         # primitive span opened on TOOL_STARTED.
                         # Stamps duration_ms (so latency probes
@@ -1955,6 +1985,14 @@ async def run_turn_codex(
                 # count otherwise).
                 turn_span.set_attribute(
                     spans.Attrs.TURN_TOOL_CALLS, tool_completed_count
+                )
+                # Mirror pydantic-ai's `core/run.py` stamp. True iff
+                # the Rust MCP server short-circuited at least one
+                # dispatch with the no_more_lookups sentinel during
+                # this turn. Pairs with TURN_TOOL_CALLS clamped at
+                # the cap value for the runaway-tool-loop probe.
+                turn_span.set_attribute(
+                    spans.Attrs.TURN_BUDGET_EXHAUSTED, budget_exhausted_fired
                 )
 
                 yield _terminal_done(turn_started_at_ms, role_timings)

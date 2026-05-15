@@ -512,8 +512,11 @@ impl McaeMcp {
     #[tool(
         description = "Resolve a SPL or Token-2022 mint pubkey to its name, symbol, \
             and metadata URI. Reads the lazy ClickHouse-backed metadata cache; \
-            cache miss triggers a getAccountInfo RPC fetch + cache write. Does \
-            NOT require snapshot_id (RPC + cache, not snapshot-bound)."
+            cache miss triggers a getAccountInfo RPC fetch + cache write. The \
+            lookup itself is snapshot-independent (RPC + cache), but pass the \
+            current turn's snapshot_id when calling so the per-turn tool-call \
+            budget counts this dispatch (matches the budget contract of \
+            wallet_profile / community_summary)."
     )]
     async fn get_token_info(
         &self,
