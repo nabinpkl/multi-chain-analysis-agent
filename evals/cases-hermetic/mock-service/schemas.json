@@ -208,7 +208,7 @@
   },
   {
     "name": "get_token_info",
-    "description": "Resolve a SPL or Token-2022 mint pubkey to its name, symbol, and metadata URI. Reads the lazy ClickHouse-backed metadata cache; cache miss triggers a getAccountInfo RPC fetch + cache write. Does NOT require snapshot_id (RPC + cache, not snapshot-bound).",
+    "description": "Resolve a SPL or Token-2022 mint pubkey to its name, symbol, and metadata URI. Reads the lazy ClickHouse-backed metadata cache; cache miss triggers a getAccountInfo RPC fetch + cache write. The lookup itself is snapshot-independent (RPC + cache), but pass the current turn's snapshot_id when calling so the per-turn tool-call budget counts this dispatch (matches the budget contract of wallet_profile / community_summary).",
     "inputSchema": {
       "$defs": {
         "GetTokenInfoArgsSchema": {
@@ -219,15 +219,13 @@
               "type": "string"
             },
             "snapshot_id": {
-              "description": "Optional snapshot id from a prior `POST /turn/begin` call. If\npresent, the dispatch counts against the per-turn tool-call\nbudget tracked server-side (see `AppState::tool_call_budgets`).\nThe codex runtime passes this on every call so the cap fires\nsymmetrically with `wallet_profile` / `community_summary`. The\npydantic-ai runtime omits it (it tracks the budget in-process)\nand the omission is fine: missing snapshot_id skips the\nserver-side cap.",
-              "type": [
-                "string",
-                "null"
-              ]
+              "description": "Snapshot id from a prior `POST /turn/begin` call. The dispatch\ncounts against the per-turn tool-call budget tracked server-\nside (see `AppState::tool_call_budgets`) so this tool\nparticipates in the cap symmetrically with `wallet_profile` /\n`community_summary`. Required so the codex model reliably\npasses it; the pydantic-ai runtime never reaches this MCP\npath (it calls `PrimitiveClient` directly and counts the\nbudget in-process).",
+              "type": "string"
             }
           },
           "required": [
-            "mint"
+            "mint",
+            "snapshot_id"
           ],
           "type": "object"
         }

@@ -1327,7 +1327,6 @@ async def run_turn_codex(
                     elif evt.type == CodexRunEventType.TOOL_COMPLETED:
                         tool_name = evt.text or evt.tool_id or ""
                         tool_events.append(f"done:{tool_name or 'tool'}")
-                        tool_completed_count += 1
                         # Detect the no_more_lookups_this_turn sentinel
                         # emitted by `try_consume_budget` on the Rust
                         # MCP side. Payload sniff because the Rust
@@ -1337,11 +1336,24 @@ async def run_turn_codex(
                         # (snake_case, never appears in legitimate
                         # primitive output), so false positives are
                         # vanishingly unlikely.
-                        if (
+                        is_budget_short_circuit = (
                             isinstance(evt.output, str)
                             and NO_MORE_LOOKUPS_ERROR_KIND in evt.output
-                        ):
+                        )
+                        if is_budget_short_circuit:
                             budget_exhausted_fired = True
+                        else:
+                            # Only count real dispatches in
+                            # `mcae.turn.tool_calls`. Budget short-
+                            # circuits return a synthetic tool result
+                            # without executing the primitive, so they
+                            # are not a "real" dispatch. This matches
+                            # the pydantic-ai side where the in-process
+                            # interceptor returns before appending to
+                            # `tool_call_records`, so the count is
+                            # clamped at the cap value on both
+                            # runtimes.
+                            tool_completed_count += 1
                         # Phase-2 eval observability. Close the
                         # primitive span opened on TOOL_STARTED.
                         # Stamps duration_ms (so latency probes

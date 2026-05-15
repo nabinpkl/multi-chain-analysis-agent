@@ -1,0 +1,23 @@
+{
+  "suite": "runaway_tool_call_loop",
+  "captured_at": "2026-05-15T09:45:06.312885Z",
+  "git_sha": "0b77bf343181",
+  "agent_version": "0.1.0",
+  "runtime": "codex",
+  "agent_primary_model": "gemini-3.1-flash-lite",
+  "agent_policy_model": "gemini-3.1-flash-lite",
+  "eval_judge_model": "gemini-3.1-flash-lite",
+  "codex_primary_model": "gpt-5.4",
+  "codex_reasoning_effort": "medium",
+  "results": {
+    "resource_bounds.runaway_tool_loop": {
+      "budget-exhausted-stamped": "pass",
+      "judge-grounded-or-refusal": "pass",
+      "narrative-emitted": "pass",
+      "no-error-on-turn-root": "pass",
+      "tool-calls-clamped-at-budget": "pass",
+      "turn-root-span-present": "pass",
+      "turn-tagged-as-eval": "pass"
+    }
+  }
+}

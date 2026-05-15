@@ -266,16 +266,15 @@ pub struct GetTokenInfoArgsSchema {
     /// + URI from the lazy ClickHouse-backed metadata cache, falling
     /// back to a `getAccountInfo` RPC fetch + cache write on miss.
     pub mint: String,
-    /// Optional snapshot id from a prior `POST /turn/begin` call. If
-    /// present, the dispatch counts against the per-turn tool-call
-    /// budget tracked server-side (see `AppState::tool_call_budgets`).
-    /// The codex runtime passes this on every call so the cap fires
-    /// symmetrically with `wallet_profile` / `community_summary`. The
-    /// pydantic-ai runtime omits it (it tracks the budget in-process)
-    /// and the omission is fine: missing snapshot_id skips the
-    /// server-side cap.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub snapshot_id: Option<String>,
+    /// Snapshot id from a prior `POST /turn/begin` call. The dispatch
+    /// counts against the per-turn tool-call budget tracked server-
+    /// side (see `AppState::tool_call_budgets`) so this tool
+    /// participates in the cap symmetrically with `wallet_profile` /
+    /// `community_summary`. Required so the codex model reliably
+    /// passes it; the pydantic-ai runtime never reaches this MCP
+    /// path (it calls `PrimitiveClient` directly and counts the
+    /// budget in-process).
+    pub snapshot_id: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -533,13 +532,17 @@ impl McaeMcp {
             )
         })?;
         // Server-side budget check: only fires for codex callers who
-        // pass snapshot_id. Pydantic-ai callers omit it and run their
-        // own in-process counter (see agent.py::get_token_info), so
-        // the cap stays consistent across runtimes without
-        // double-counting on either side.
-        if let Some(sid) = snapshot_id.as_deref() {
+        // pass a non-empty snapshot_id. The MCP schema makes the
+        // field required (so codex reliably emits it), but the empty
+        // string is a sentinel that means "skip the budget gate" so
+        // any non-codex caller (or a future codex test fixture that
+        // wants to disable it) can opt out. Pydantic-ai never reaches
+        // this MCP path (it calls `PrimitiveClient` directly and
+        // counts the budget in-process), so this branch only ever
+        // executes on the codex path.
+        if !snapshot_id.is_empty() {
             if let Some(short_circuit) =
-                try_consume_budget(&self.state, sid, "get_token_info")
+                try_consume_budget(&self.state, &snapshot_id, "get_token_info")
             {
                 return Ok(short_circuit);
             }
@@ -783,44 +786,29 @@ fn validate_community_summary_args(
     ))
 }
 
-/// Pull an optional string field. Returns `None` if absent;
-/// appends an error to `errors` only when the field is present but
-/// wrong-typed.
-fn optional_string(
-    obj: &serde_json::Map<String, serde_json::Value>,
-    field: &str,
-    errors: &mut Vec<String>,
-) -> Option<String> {
-    match obj.get(field) {
-        None | Some(serde_json::Value::Null) => None,
-        Some(serde_json::Value::String(s)) => Some(s.clone()),
-        Some(other) => {
-            errors.push(format!(
-                "field '{field}' must be a string, got {}",
-                type_of_value(other)
-            ));
-            None
-        }
-    }
-}
-
 /// Validate `get_token_info` args with one comprehensive error
-/// pass. Returns `(mint, optional_snapshot_id)` on success. The
-/// `snapshot_id` is optional: codex callers pass it so the
-/// server-side per-turn budget can fire; pydantic-ai callers
-/// don't reach this path at all (they call `PrimitiveClient`
-/// directly), so its absence is fine.
+/// pass. Returns `(mint, snapshot_id)` on success. `snapshot_id`
+/// is required at the schema level so the codex model passes it
+/// reliably (an optional field gets skipped by some model
+/// rollouts). The empty string is a sentinel that means "skip the
+/// per-turn budget gate"; the Rust handler treats an empty
+/// snapshot_id the same as a missing one. Pydantic-ai never
+/// reaches this MCP path so the field's presence on the wire is
+/// codex-only.
 fn validate_get_token_info_args(
     raw: serde_json::Value,
-) -> Result<(String, Option<String>), Vec<String>> {
+) -> Result<(String, String), Vec<String>> {
     let obj = unwrap_args_object(raw, "get_token_info")?;
     let mut errors = Vec::new();
     let mint = require_string(&obj, "mint", &mut errors);
-    let snapshot_id = optional_string(&obj, "snapshot_id", &mut errors);
+    let snapshot_id = require_string(&obj, "snapshot_id", &mut errors);
     if !errors.is_empty() {
         return Err(errors);
     }
-    Ok((mint.expect("checked above"), snapshot_id))
+    Ok((
+        mint.expect("checked above"),
+        snapshot_id.expect("checked above"),
+    ))
 }
 
 /// Aggregate validation for the `emit_claims` batch.
@@ -1096,36 +1084,37 @@ mod tests {
 
     #[test]
     fn validate_get_token_info_args_happy_path() {
-        let raw = json!({"mint": "So11111..."});
-        let (mint, snapshot_id) = validate_get_token_info_args(raw).expect("should pass");
-        assert_eq!(mint, "So11111...");
-        assert_eq!(snapshot_id, None);
-    }
-
-    #[test]
-    fn validate_get_token_info_args_with_snapshot_id() {
-        // Codex callers pass snapshot_id so the server-side per-turn
-        // budget can fire. Verify the validator round-trips it.
         let raw = json!({"mint": "So11111...", "snapshot_id": "01HXYZ"});
         let (mint, snapshot_id) = validate_get_token_info_args(raw).expect("should pass");
         assert_eq!(mint, "So11111...");
-        assert_eq!(snapshot_id, Some("01HXYZ".to_string()));
+        assert_eq!(snapshot_id, "01HXYZ");
     }
 
     #[test]
-    fn validate_get_token_info_args_rejects_wrong_typed_snapshot_id() {
-        // snapshot_id is optional but if present must be a string.
-        // A number / object should surface a descriptive error.
-        let raw = json!({"mint": "So11111...", "snapshot_id": 42});
+    fn validate_get_token_info_args_accepts_empty_snapshot_id_as_skip() {
+        // Empty string is the sentinel for "skip the budget gate".
+        // Used by callers (today none in production) that want the
+        // tool dispatch without the per-turn cap.
+        let raw = json!({"mint": "So11111...", "snapshot_id": ""});
+        let (mint, snapshot_id) = validate_get_token_info_args(raw).expect("should pass");
+        assert_eq!(mint, "So11111...");
+        assert_eq!(snapshot_id, "");
+    }
+
+    #[test]
+    fn validate_get_token_info_args_rejects_missing_snapshot_id() {
+        // Required at the schema level so the codex model emits it
+        // reliably. Optional fields get skipped by some model
+        // rollouts; required ones don't.
+        let raw = json!({"mint": "So11111..."});
         let errors = validate_get_token_info_args(raw).expect_err("should fail");
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("snapshot_id"));
-        assert!(errors[0].contains("string"));
     }
 
     #[test]
     fn validate_get_token_info_args_reports_missing_mint() {
-        let raw = json!({});
+        let raw = json!({"snapshot_id": "01HXYZ"});
         let errors = validate_get_token_info_args(raw).expect_err("should fail");
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("mint"));
