@@ -32,6 +32,8 @@ In our codebase: the user types a wallet-analysis question. The agent calls `wal
 
 [07: The meta-defenses are not free](07-meta-defense-trust-boundary.md). Every defense you build with an LLM is itself attackable by an LLM-shaped attack. The constitution gate is an LLM. The judge reads text the user influenced. The same prompt-injection techniques that work on the primary work on the judge, sometimes more easily because the judge runs on a cheaper model. If you treat the meta-defenses as trusted infrastructure, you have a blind spot. This chapter is the threat model for the pipeline you built in chapter 03.
 
+[catalog.md](catalog.md) is the reference index: ~85 attack classes ranked from fundamentals (every LLM has these) to frontier (2026 emerging), each tagged with this project's status: defended, broken-by-construction, or genuine residual. Use it as a checklist when adding a feature; the "broken by construction" entries are load-bearing and need re-reading the moment the system shape changes (a write tool, a remote MCP, persistent memory, multi-tenancy).
+
 ## The high-level model
 
 Every prompt-injection defense answers one of three questions: did the bytes get in, what does the model think they are, what is the model allowed to say in response. A complete posture answers all three.
