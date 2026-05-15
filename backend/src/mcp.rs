@@ -99,6 +99,68 @@ fn tool_result_external_data(primitive: &str, value: serde_json::Value) -> CallT
     result
 }
 
+/// Sentinel error-kind both runtimes return when the per-turn
+/// tool-call budget is exhausted. Mirrors
+/// `agent_service.policy.resource_bounds.NO_MORE_LOOKUPS_ERROR_KIND`
+/// byte-for-byte. The codex driver greps for this exact substring
+/// to set `mcae.turn.budget_exhausted`; renaming it on one side
+/// without the other breaks the OTel signal silently. Keep them in
+/// lockstep.
+const NO_MORE_LOOKUPS_ERROR_KIND: &str = "no_more_lookups_this_turn";
+
+/// Single source of truth for the budget-exhausted guidance string.
+/// Same text the Python `resource_bounds.NO_MORE_LOOKUPS_GUIDANCE`
+/// returns so both runtimes' models see identical wording.
+const NO_MORE_LOOKUPS_GUIDANCE: &str = "You have used this turn's \
+    tool budget. Do not call any more lookup tools. Finalize the \
+    answer using only the data already returned this turn. If the \
+    data so far is not enough, say so honestly in the narrative.";
+
+/// Per-snapshot budget check. Increments the dispatch counter for
+/// `snapshot_id` atomically; if the count was already at the cap,
+/// rolls back the increment and returns a `Some(no_more_lookups)`
+/// envelope the caller MUST return verbatim instead of executing
+/// the primitive. Returns `None` when the caller may proceed.
+///
+/// Counter lifecycle: created at `turn_begin` (see
+/// `api::primitives::turn_begin`), removed at `turn_end`. Missing
+/// entry => the caller didn't go through `/turn/begin` (pydantic-ai
+/// path doesn't, since it tracks the budget in-process and the
+/// snapshot lease is opened differently); in that case we skip the
+/// server-side cap and rely on the in-process counter on the
+/// caller side. This is by design: the pydantic-ai side passes
+/// snapshot_id to the read tools but does NOT call this MCP server
+/// (the python tools call `PrimitiveClient` directly), so the only
+/// caller that hits this path is codex.
+fn try_consume_budget(
+    state: &AppState,
+    snapshot_id: &str,
+    primitive: &str,
+) -> Option<CallToolResult> {
+    let counter = state
+        .tool_call_budgets
+        .get(snapshot_id)?;
+    let used = counter
+        .value()
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if used >= state.turn_tool_call_budget {
+        // Roll back so `mcae.turn.tool_calls` (computed elsewhere
+        // from this counter via the `len(tool_call_records)` style
+        // aggregate, OR independently by codex_driver as it
+        // observes TOOL_COMPLETED events) reads the exact dispatch
+        // count, not budget+1.
+        counter
+            .value()
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        let payload = serde_json::json!({
+            "error": NO_MORE_LOOKUPS_ERROR_KIND,
+            "guidance": NO_MORE_LOOKUPS_GUIDANCE,
+        });
+        return Some(tool_result_external_data(primitive, payload));
+    }
+    None
+}
+
 /// MCP-side envelope wrapping a primitive's `value` plus its
 /// `provenance` array, intentionally omitting `subgraph_slice` so
 /// the per-tool-call JSON payload stays compact (the visualizer
@@ -204,6 +266,16 @@ pub struct GetTokenInfoArgsSchema {
     /// + URI from the lazy ClickHouse-backed metadata cache, falling
     /// back to a `getAccountInfo` RPC fetch + cache write on miss.
     pub mint: String,
+    /// Optional snapshot id from a prior `POST /turn/begin` call. If
+    /// present, the dispatch counts against the per-turn tool-call
+    /// budget tracked server-side (see `AppState::tool_call_budgets`).
+    /// The codex runtime passes this on every call so the cap fires
+    /// symmetrically with `wallet_profile` / `community_summary`. The
+    /// pydantic-ai runtime omits it (it tracks the budget in-process)
+    /// and the omission is fine: missing snapshot_id skips the
+    /// server-side cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -345,6 +417,12 @@ impl McaeMcp {
                 )
             })?;
 
+        if let Some(short_circuit) =
+            try_consume_budget(&self.state, &snapshot_id, "wallet_profile")
+        {
+            return Ok(short_circuit);
+        }
+
         let snapshot = self.state.snapshot_cache.get(&snapshot_id).ok_or_else(|| {
             McpError::invalid_params(
                 format!("snapshot {} expired or unknown; call /turn/begin first", snapshot_id),
@@ -401,6 +479,12 @@ impl McaeMcp {
                 )
             })?;
 
+        if let Some(short_circuit) =
+            try_consume_budget(&self.state, &snapshot_id, "community_summary")
+        {
+            return Ok(short_circuit);
+        }
+
         let snapshot = self.state.snapshot_cache.get(&snapshot_id).ok_or_else(|| {
             McpError::invalid_params(
                 format!("snapshot {} expired or unknown; call /turn/begin first", snapshot_id),
@@ -435,7 +519,7 @@ impl McaeMcp {
         &self,
         Parameters(args): Parameters<GetTokenInfoArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let mint = validate_get_token_info_args(args.0).map_err(|errors| {
+        let (mint, snapshot_id) = validate_get_token_info_args(args.0).map_err(|errors| {
             McpError::invalid_params(
                 format!(
                     "get_token_info rejected: {} error(s). {}",
@@ -445,6 +529,18 @@ impl McaeMcp {
                 None,
             )
         })?;
+        // Server-side budget check: only fires for codex callers who
+        // pass snapshot_id. Pydantic-ai callers omit it and run their
+        // own in-process counter (see agent.py::get_token_info), so
+        // the cap stays consistent across runtimes without
+        // double-counting on either side.
+        if let Some(sid) = snapshot_id.as_deref() {
+            if let Some(short_circuit) =
+                try_consume_budget(&self.state, sid, "get_token_info")
+            {
+                return Ok(short_circuit);
+            }
+        }
         let out = get_token_info::compute(&self.state, &mint)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -684,16 +780,44 @@ fn validate_community_summary_args(
     ))
 }
 
+/// Pull an optional string field. Returns `None` if absent;
+/// appends an error to `errors` only when the field is present but
+/// wrong-typed.
+fn optional_string(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    errors: &mut Vec<String>,
+) -> Option<String> {
+    match obj.get(field) {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) => Some(s.clone()),
+        Some(other) => {
+            errors.push(format!(
+                "field '{field}' must be a string, got {}",
+                type_of_value(other)
+            ));
+            None
+        }
+    }
+}
+
 /// Validate `get_token_info` args with one comprehensive error
-/// pass. Returns `mint` on success.
-fn validate_get_token_info_args(raw: serde_json::Value) -> Result<String, Vec<String>> {
+/// pass. Returns `(mint, optional_snapshot_id)` on success. The
+/// `snapshot_id` is optional: codex callers pass it so the
+/// server-side per-turn budget can fire; pydantic-ai callers
+/// don't reach this path at all (they call `PrimitiveClient`
+/// directly), so its absence is fine.
+fn validate_get_token_info_args(
+    raw: serde_json::Value,
+) -> Result<(String, Option<String>), Vec<String>> {
     let obj = unwrap_args_object(raw, "get_token_info")?;
     let mut errors = Vec::new();
     let mint = require_string(&obj, "mint", &mut errors);
+    let snapshot_id = optional_string(&obj, "snapshot_id", &mut errors);
     if !errors.is_empty() {
         return Err(errors);
     }
-    Ok(mint.expect("checked above"))
+    Ok((mint.expect("checked above"), snapshot_id))
 }
 
 /// Aggregate validation for the `emit_claims` batch.
@@ -970,8 +1094,30 @@ mod tests {
     #[test]
     fn validate_get_token_info_args_happy_path() {
         let raw = json!({"mint": "So11111..."});
-        let mint = validate_get_token_info_args(raw).expect("should pass");
+        let (mint, snapshot_id) = validate_get_token_info_args(raw).expect("should pass");
         assert_eq!(mint, "So11111...");
+        assert_eq!(snapshot_id, None);
+    }
+
+    #[test]
+    fn validate_get_token_info_args_with_snapshot_id() {
+        // Codex callers pass snapshot_id so the server-side per-turn
+        // budget can fire. Verify the validator round-trips it.
+        let raw = json!({"mint": "So11111...", "snapshot_id": "01HXYZ"});
+        let (mint, snapshot_id) = validate_get_token_info_args(raw).expect("should pass");
+        assert_eq!(mint, "So11111...");
+        assert_eq!(snapshot_id, Some("01HXYZ".to_string()));
+    }
+
+    #[test]
+    fn validate_get_token_info_args_rejects_wrong_typed_snapshot_id() {
+        // snapshot_id is optional but if present must be a string.
+        // A number / object should surface a descriptive error.
+        let raw = json!({"mint": "So11111...", "snapshot_id": 42});
+        let errors = validate_get_token_info_args(raw).expect_err("should fail");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("snapshot_id"));
+        assert!(errors[0].contains("string"));
     }
 
     #[test]

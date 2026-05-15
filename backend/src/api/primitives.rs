@@ -292,6 +292,15 @@ pub async fn turn_begin(
     state
         .claim_receivers
         .insert(snapshot_id.clone(), parking_lot::Mutex::new(Some(claim_rx)));
+    // Fresh tool-call budget counter for this turn. The MCP read
+    // tools at `/mcp` increment this on every dispatch; when it
+    // reaches `state.turn_tool_call_budget`, the next dispatch
+    // short-circuits with a no_more_lookups tool result. See
+    // `mcp::try_consume_budget`. `turn_end` removes the entry; the
+    // snapshot GC sweep reaps orphans.
+    state
+        .tool_call_budgets
+        .insert(snapshot_id.clone(), std::sync::atomic::AtomicUsize::new(0));
 
     let resp = proto::SnapshotBeginResponse {
         snapshot_id,
@@ -325,6 +334,7 @@ pub async fn turn_end(State(state): State<AppState>, req: Request) -> Response {
     // Pydantic AI primary turn that doesn't use `emit_claims`).
     state.claim_channels.remove(&req_msg.snapshot_id);
     state.claim_receivers.remove(&req_msg.snapshot_id);
+    state.tool_call_budgets.remove(&req_msg.snapshot_id);
     StatusCode::NO_CONTENT.into_response()
 }
 

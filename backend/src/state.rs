@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
 use clickhouse::Client;
 use dashmap::DashMap;
@@ -117,6 +118,27 @@ pub struct AppState {
     pub claim_receivers: Arc<
         DashMap<String, parking_lot::Mutex<Option<mpsc::UnboundedReceiver<serde_json::Value>>>>,
     >,
+    /// Per-snapshot tool-call budget counters. Incremented atomically
+    /// on every budgeted MCP read tool dispatch (wallet_profile,
+    /// community_summary, get_token_info); when the count reaches
+    /// `turn_tool_call_budget`, the next dispatch short-circuits and
+    /// returns a `no_more_lookups_this_turn` tool result instead of
+    /// executing the primitive. The Python agent service has a
+    /// symmetric in-process counter on the pydantic-ai runtime; this
+    /// map is what the codex runtime relies on (codex speaks MCP
+    /// directly to this server, so the per-turn cap has to live
+    /// server-side). `turn_begin` inserts a fresh counter; `turn_end`
+    /// removes it. The 5-minute snapshot GC sweep reaps orphans so a
+    /// client that begins a turn but never calls `turn_end` doesn't
+    /// leak entries. See `agent_service/policy/resource_bounds.py`
+    /// for the symmetric Python side.
+    pub tool_call_budgets: Arc<DashMap<String, AtomicUsize>>,
+    /// Per-turn cap value (default 8, override via
+    /// `AGENT_TURN_TOOL_CALL_BUDGET`). Read once at startup and
+    /// stored here so every MCP dispatch reads a single source of
+    /// truth without re-parsing env. Must match the Python side's
+    /// `TURN_TOOL_CALL_BUDGET` constant or the two runtimes drift.
+    pub turn_tool_call_budget: usize,
 }
 
 impl AppState {
@@ -167,6 +189,11 @@ impl AppState {
             mcp_allowed_hosts: config.mcp_allowed_hosts.clone(),
             claim_channels: Arc::new(DashMap::new()),
             claim_receivers: Arc::new(DashMap::new()),
+            tool_call_budgets: Arc::new(DashMap::new()),
+            turn_tool_call_budget: std::env::var("AGENT_TURN_TOOL_CALL_BUDGET")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(8),
         };
         (state, analytics_senders)
     }

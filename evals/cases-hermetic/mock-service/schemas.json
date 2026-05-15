@@ -217,6 +217,13 @@
             "mint": {
               "description": "SPL or Token-2022 mint pubkey (base58). Returns name + symbol\n+ URI from the lazy ClickHouse-backed metadata cache, falling\nback to a `getAccountInfo` RPC fetch + cache write on miss.",
               "type": "string"
+            },
+            "snapshot_id": {
+              "description": "Optional snapshot id from a prior `POST /turn/begin` call. If\npresent, the dispatch counts against the per-turn tool-call\nbudget tracked server-side (see `AppState::tool_call_budgets`).\nThe codex runtime passes this on every call so the cap fires\nsymmetrically with `wallet_profile` / `community_summary`. The\npydantic-ai runtime omits it (it tracks the budget in-process)\nand the omission is fine: missing snapshot_id skips the\nserver-side cap.",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [
