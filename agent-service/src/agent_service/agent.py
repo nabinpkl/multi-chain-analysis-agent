@@ -32,6 +32,10 @@ from agent_service import spans
 from agent_service.boundary import sanitize_token_info_payload, wrap_external_data
 from agent_service import llm
 from agent_service.policy.binding_store import PrimitiveBindingStore, build_binding
+from agent_service.policy.resource_bounds import (
+    NO_MORE_LOOKUPS_PAYLOAD,
+    is_budget_exhausted,
+)
 from agent_service.primitive_client import PrimitiveClient, PrimitiveError
 from agent_service.prompts.composer import compose_system_prompt
 
@@ -126,6 +130,13 @@ class AgentDeps:
     tool_call_records: list["ToolCallRecord"] = field(default_factory=list)
     # Per-turn emit_claim buffer. Loop driver reads after agent.run().
     emitted_claims: list[EmitClaimInput] = field(default_factory=list)
+    # Flipped true by any primitive tool body that short-circuited
+    # because the per-turn tool-call budget was exhausted. Loop
+    # driver reads after agent.run() and stamps
+    # mcae.turn.budget_exhausted on the turn span. See
+    # agent_service/policy/resource_bounds.py for the cap value and
+    # the no_more_lookups payload shape.
+    budget_exhausted_fired: bool = False
 
 
 @dataclass(slots=True)
@@ -198,6 +209,9 @@ def build_agent(
             addr: Solana wallet address (base58 pubkey). Use the focused
                 wallet from the system prompt if unsure.
         """
+        if is_budget_exhausted(len(ctx.deps.tool_call_records)):
+            ctx.deps.budget_exhausted_fired = True
+            return wrap_external_data("wallet_profile", NO_MORE_LOOKUPS_PAYLOAD)
         try:
             result = await ctx.deps.primitive_client.wallet_profile(
                 addr=addr,
@@ -246,6 +260,9 @@ def build_agent(
                 analytics layer (typically obtained from a prior
                 `wallet_profile.community_id`).
         """
+        if is_budget_exhausted(len(ctx.deps.tool_call_records)):
+            ctx.deps.budget_exhausted_fired = True
+            return wrap_external_data("community_summary", NO_MORE_LOOKUPS_PAYLOAD)
         try:
             result = await ctx.deps.primitive_client.community_summary(
                 community_id=community_id,
@@ -299,6 +316,9 @@ def build_agent(
         Args:
             mint: base58 SPL/Token-2022 mint pubkey.
         """
+        if is_budget_exhausted(len(ctx.deps.tool_call_records)):
+            ctx.deps.budget_exhausted_fired = True
+            return wrap_external_data("get_token_info", NO_MORE_LOOKUPS_PAYLOAD)
         try:
             result = await ctx.deps.primitive_client.get_token_info(mint=mint)
         except PrimitiveError as e:

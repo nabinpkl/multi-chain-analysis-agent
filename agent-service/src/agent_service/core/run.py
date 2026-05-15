@@ -83,12 +83,20 @@ from multichain.wire.shared.v1 import provenance_pb2
 log = structlog.get_logger(__name__)
 _tracer = trace.get_tracer(__name__)
 
-# Per-turn agent runtime cap. Free-tier OpenRouter: keep tokens tight,
-# tool calls bounded so a runaway tool-call loop can't exhaust quota.
-_USAGE_LIMITS = UsageLimits(
-    request_limit=10,
-    tool_calls_limit=8,
-)
+# Per-turn pydantic-ai usage cap. We deliberately do NOT set
+# tool_calls_limit here: tool-call budgeting is enforced at the
+# per-tool-body interceptor (see agent.py's wallet_profile /
+# community_summary / get_token_info bodies plus
+# policy/resource_bounds.py). That path returns a structured
+# no_more_lookups tool result so the model can finalize its
+# narrative gracefully, instead of pydantic-ai raising
+# UsageLimitExceeded which would die as a generic SSE Error.
+#
+# request_limit stays because it defends against a stuck-without-
+# tools model-request loop (model burns model requests without
+# making progress). For that pathological case there is no
+# graceful pivot, so exception-on-hit is the correct behavior.
+_USAGE_LIMITS = UsageLimits(request_limit=10)
 
 # Gate version pinned at module load. The placeholder gate is purely
 # deterministic ref-validation with no version notion of its own; v1
@@ -554,6 +562,13 @@ async def run_one_turn(
     turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_EMITTED, len(deps.emitted_claims))
     turn_span.set_attribute(spans.Attrs.TURN_CLAIMS_APPROVED, len(approved_claims))
     turn_span.set_attribute(spans.Attrs.TURN_TOOL_CALLS, len(deps.tool_call_records))
+    # True when the per-tool budget interceptor short-circuited at
+    # least one dispatch this turn. Pairs with TURN_TOOL_CALLS:
+    # when budget_exhausted is true, tool_calls is clamped at the
+    # cap (8 by default). See policy/resource_bounds.py.
+    turn_span.set_attribute(
+        spans.Attrs.TURN_BUDGET_EXHAUSTED, deps.budget_exhausted_fired
+    )
     # Aggregate uses the post-suppression length so the cockpit
     # instrument matches what actually left the agent. The pre-
     # suppression length lives on the narrative span as
