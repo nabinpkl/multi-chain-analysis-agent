@@ -69,25 +69,19 @@ from agent_service.boundary import (
     build_context_block,
     reject_if_unsafe_user_question,
 )
-from agent_service.core.run import (
-    _build_claim,
-    _claims_to_judgement_payload,
-    _normalize_verdict,
-    _set_retracted,
-    emit_unsafe_input_rejection_observability,
-    resolve_narrative_text,
+from agent_service.core.envelope import TurnEnvelope
+from agent_service.core.post_tools import (
+    provenance_refs_from_json,
+    run_post_tools_phase,
 )
+from agent_service.core.run import emit_unsafe_input_rejection_observability
+from agent_service.core.sink import SseSink
 from agent_service.diff_replay import run_repeat_path
 from agent_service.repeat_detector import detect_repeat
 from agent_service.thread_state import TurnToolCallRecord
 from agent_service.llm_retry import begin_role_timing_capture
-from agent_service.policy import constitution as constitution_module
-from agent_service.policy import structural as structural_module
 from agent_service.policy.binding_store import build_binding
-from agent_service.policy.constitution import judge_narrative
-from agent_service.policy.placeholder import validate_refs
 from agent_service.policy.resource_bounds import NO_MORE_LOOKUPS_ERROR_KIND
-from agent_service.policy.structural import verify_chip_values
 from agent_service.prompts.composer import (
     compose_system_prompt,
     drops_from_switches,
@@ -104,11 +98,6 @@ from google.protobuf import json_format
 
 log = structlog.get_logger(__name__)
 _tracer = trace.get_tracer(__name__)
-
-# Placeholder-gate version stamped on per-claim spans. Same string
-# the pydantic-ai path uses; one value across runtimes so probes
-# can group on `gate.placeholder.version` without runtime branching.
-_PLACEHOLDER_VERSION = "v1"
 
 # Codex-specific tool-surface delta vs `system_v4.txt`. The system
 # prompt is authored for the pydantic-ai surface which exposes
@@ -145,6 +134,7 @@ def _adapt_system_prompt_for_codex(text: str) -> str:
         f"`{_PYDANTIC_EMIT_TOOL_NAME}`",
         f"`{_CODEX_EMIT_TOOL_NAME}`",
     )
+
 
 # Tool-name to primitive-span-name mapping. The pydantic-ai path
 # emits these spans via `primitive_client.py` (one per `await`
@@ -277,71 +267,6 @@ async def _drain_claims(
         )
 
 
-def _provenance_refs_from_json(
-    refs_json: list[dict[str, Any]],
-) -> list[provenance_pb2.ProvenanceRef]:
-    """Convert the kebab-case-tagged JSON shape that Rust serde
-    emits for `Vec<ProvenanceRef>` (see
-    `backend/src/primitives/types.rs:54`) into the proto
-    `ProvenanceRef` messages the structural gate consumes.
-
-    Rust's discriminator field is `kind`; values are kebab-case
-    variant names (`wallet`, `community`, `edge`, `time-range`,
-    `number`). Field names inside each variant are already
-    snake_case, which matches the proto. Refs whose shape doesn't
-    parse cleanly are skipped so a slight schema drift doesn't
-    crash the whole binding population.
-    """
-    out: list[provenance_pb2.ProvenanceRef] = []
-    for r in refs_json:
-        if not isinstance(r, dict):
-            continue
-        kind = r.get("kind", "")
-        try:
-            if kind == "wallet" and "addr" in r:
-                wallet = provenance_pb2.WalletRef(addr=r["addr"])
-                if r.get("idx") is not None:
-                    wallet.idx = int(r["idx"])
-                out.append(provenance_pb2.ProvenanceRef(wallet=wallet))
-            elif kind == "community" and "id" in r:
-                out.append(
-                    provenance_pb2.ProvenanceRef(
-                        community=provenance_pb2.CommunityRef(id=int(r["id"]))
-                    )
-                )
-            elif kind == "edge" and {"id", "src", "dst"} <= r.keys():
-                out.append(
-                    provenance_pb2.ProvenanceRef(
-                        edge=provenance_pb2.EdgeRef(
-                            id=r["id"], src=int(r["src"]), dst=int(r["dst"])
-                        )
-                    )
-                )
-            elif kind == "time-range" and {"from_s", "to_s"} <= r.keys():
-                out.append(
-                    provenance_pb2.ProvenanceRef(
-                        time_range=provenance_pb2.TimeRangeRef(
-                            from_s=int(r["from_s"]),
-                            to_s=int(r["to_s"]),
-                        )
-                    )
-                )
-            elif kind == "number" and {"metric", "value"} <= r.keys():
-                out.append(
-                    provenance_pb2.ProvenanceRef(
-                        number=provenance_pb2.NumberRef(
-                            metric=r["metric"],
-                            value=float(r["value"]),
-                            support=list(r.get("support") or []),
-                        )
-                    )
-                )
-        except (TypeError, ValueError) as e:
-            log.warning("provenance_ref_parse_failed", kind=kind, error=str(e))
-            continue
-    return out
-
-
 def _extract_tool_call_signature(
     raw_event: dict[str, Any] | None,
 ) -> tuple[str, dict[str, Any]] | None:
@@ -438,7 +363,7 @@ def _record_tool_output_binding(
         # pydantic-ai path when a primitive errors.
         return
     value, provenance_json = envelope
-    provenance = _provenance_refs_from_json(provenance_json)
+    provenance = provenance_refs_from_json(provenance_json)
     binding = build_binding(
         primitive=tool_name,
         call_id=f"{tool_name}:codex:{time.time_ns():x}",
@@ -530,166 +455,6 @@ def _pump_codex_events(
     finally:
         loop.call_soon_threadsafe(queue.put_nowait, ("codex_done", None))
 
-
-def _emit_claims_from_drain(
-    *,
-    drained: list[dict[str, Any]],
-    thread: AgentThread,
-    thread_id: str,
-    turn_started_at_ms: int,
-    dont_fabricate: bool,
-) -> list[tuple[Any, bool]]:
-    """Convert each drained claim dict into a `claim_pb2.Claim`,
-    run the placeholder gate, and return the list paired with
-    "approved?" flags.
-
-    The frontier-vs-drained boundary uses the existing pydantic
-    shape (`EmitClaimInput`) for validation so any divergence
-    between the Rust schema and the Python gate side surfaces here
-    as a single clear error instead of N silent field drops. The
-    Rust `ClaimInput` was authored to be a field-for-field mirror;
-    practically every drain payload should validate cleanly.
-
-    Claims that fail Pydantic validation OR the placeholder gate
-    arrive at the caller with `approved=False`; the caller emits
-    the SSE frame either way (the UI renders retracted claims with
-    the reason inline).
-    """
-    out: list[tuple[Any, bool]] = []
-    for raw in drained:
-        try:
-            parsed = EmitClaimInput.model_validate(raw)
-        except ValidationError as e:
-            log.warning(
-                "drained_claim_validation_failed",
-                thread_id=thread_id,
-                error=str(e),
-                raw_keys=list(raw.keys()),
-            )
-            continue
-        claim = _build_claim(
-            input_=parsed,
-            thread_id=thread_id,
-            turn_started_at_ms=turn_started_at_ms,
-        )
-
-        # Phase-2 eval observability. Wrap each claim in
-        # `mcae.claim.emitted` so the gate spans nest underneath
-        # (matching the pydantic-ai trace shape in
-        # `core/run.py:311`). Stamping `mcae.claim.source_kind`
-        # makes `claim_grounded_in(source_kind=primitive)` work
-        # on codex; without this attribute the probe vacuously
-        # passed because no spans matched. Final
-        # `mcae.claim.verdict` is set right before each `out.append`
-        # so a single span query gives the per-claim outcome
-        # history regardless of which gate (or pydantic
-        # validation) retracted it.
-        with _tracer.start_as_current_span(spans.CLAIM_EMITTED) as claim_span:
-            claim_span.set_attribute(spans.Attrs.CLAIM_ID, claim.id)
-            claim_span.set_attribute(
-                spans.Attrs.CLAIM_KIND, claim_pb2.ClaimKind.Name(claim.kind)
-            )
-            claim_span.set_attribute(
-                spans.Attrs.CLAIM_HEADLINE, claim.headline
-            )
-            claim_span.set_attribute(
-                spans.Attrs.CLAIM_PROVENANCE_COUNT, len(claim.provenance)
-            )
-            claim_span.set_attribute(
-                spans.Attrs.CLAIM_BODY_CHARS, len(claim.body_markdown)
-            )
-            # `primitive` because the codex MCP surface today is
-                # `wallet_profile` + `community_summary` +
-                # `get_token_info`  all typed primitives whose
-                # output envelopes feed the binding store. When
-                # codex eventually gets `sql_explore`-style tools
-                # the source_kind for those claims becomes
-                # `exploratory`; this stays the only call-site
-                # that needs the conditional.
-            claim_span.set_attribute(
-                spans.Attrs.CLAIM_SOURCE_KIND,
-                spans.SOURCE_KIND_PRIMITIVE,
-            )
-
-            if not claim.provenance:
-                _set_retracted(
-                    claim,
-                    "claim has empty provenance; cite at least one entity",
-                )
-                claim_span.set_attribute(
-                    spans.Attrs.CLAIM_VERDICT, spans.VERDICT_RETRACTED
-                )
-                out.append((claim, False))
-                continue
-            with _tracer.start_as_current_span(spans.GATE_PLACEHOLDER) as g:
-                g.set_attribute(
-                    spans.Attrs.GATE_VERSION, _PLACEHOLDER_VERSION
-                )
-                ref_err = validate_refs(
-                    claim.body_markdown, len(claim.provenance)
-                )
-                if ref_err is not None:
-                    g.set_attribute(
-                        spans.Attrs.GATE_VERDICT, spans.VERDICT_RETRACTED
-                    )
-                    g.set_attribute(
-                        spans.Attrs.GATE_REASON, ref_err.to_human_string()
-                    )
-                    _set_retracted(claim, ref_err.to_human_string())
-                    claim_span.set_attribute(
-                        spans.Attrs.CLAIM_VERDICT, spans.VERDICT_RETRACTED
-                    )
-                    out.append((claim, False))
-                    continue
-                g.set_attribute(
-                    spans.Attrs.GATE_VERDICT, spans.VERDICT_APPROVED
-                )
-
-            # Chunk 3.5 item 6: structural value-compare gate.
-            # Runs on codex claims now that
-            # `_record_tool_output_binding` populates
-            # `thread.bindings` from the {value, provenance}
-            # envelope. Only retracts when `dont_fabricate` is on;
-            # when off the gate observes-without-acting so the
-            # ablation suite can compare gated vs ungated codex
-            # behavior.
-            with _tracer.start_as_current_span(spans.GATE_STRUCTURAL) as g:
-                g.set_attribute(
-                    spans.Attrs.GATE_VERSION, structural_module.VERSION
-                )
-                g.set_attribute(
-                    spans.Attrs.GATE_BINDING_SIZE,
-                    len(thread.bindings.all_numbers()),
-                )
-                struct_err = verify_chip_values(
-                    list(claim.provenance), thread.bindings
-                )
-                if struct_err is not None and dont_fabricate:
-                    g.set_attribute(
-                        spans.Attrs.GATE_VERDICT, spans.VERDICT_RETRACTED
-                    )
-                    g.set_attribute(
-                        spans.Attrs.GATE_REASON,
-                        struct_err.to_human_string(),
-                    )
-                    g.set_attribute(
-                        spans.Attrs.GATE_FAILED_CHIP,
-                        str(getattr(struct_err, "kind", "unknown")),
-                    )
-                    _set_retracted(claim, struct_err.to_human_string())
-                    claim_span.set_attribute(
-                        spans.Attrs.CLAIM_VERDICT, spans.VERDICT_RETRACTED
-                    )
-                    out.append((claim, False))
-                    continue
-                g.set_attribute(
-                    spans.Attrs.GATE_VERDICT, spans.VERDICT_APPROVED
-                )
-            claim_span.set_attribute(
-                spans.Attrs.CLAIM_VERDICT, spans.VERDICT_APPROVED
-            )
-            out.append((claim, True))
-    return out
 
 
 def _terminal_done(
@@ -1692,320 +1457,79 @@ async def run_turn_codex(
                     )
                 drain_task = None  # avoid double-await in finally
 
-                # Run the placeholder gate over each drained claim
-                # and emit Claim frames. The structural value-compare
-                # gate is a no-op on codex turns (binding store stays
-                # empty) by design; chunk 3.5 widens the MCP tool
-                # surface to populate it.
-                results = _emit_claims_from_drain(
-                    drained=drained,
-                    thread=thread,
-                    thread_id=thread_id,
-                    turn_started_at_ms=turn_started_at_ms,
-                    dont_fabricate=request.switches.dont_fabricate,
-                )
-                turn_span.set_attribute(
-                    spans.Attrs.TURN_CLAIMS_EMITTED, len(results)
-                )
-                approved_count = 0
-                for claim, approved in results:
-                    yield _frame("Claim", claim)
-                    if approved:
-                        thread.record_claim(claim)
-                        thread.record_turn_claim(turn, claim)
-                        approved_count += 1
-                turn_span.set_attribute(
-                    spans.Attrs.TURN_CLAIMS_APPROVED, approved_count
-                )
+                # ------ Post-tools phase ------
+                # Shared with `core.run.run_one_turn`. The function
+                # owns the per-claim gate stack (placeholder +
+                # structural + constitution), the narrative leg
+                # (placeholder + constitution), SSE frame emission
+                # for Claim / Narrative / NarrativeRetracted, and
+                # the per-turn aggregate stamping. Before this
+                # extraction, codex inlined a near-duplicate of the
+                # pydantic-ai gate stack that silently skipped
+                # `judge_claim`; the shared function closes that
+                # drift implicitly.
+                parsed_claims: list[EmitClaimInput] = []
+                for raw in drained:
+                    try:
+                        parsed_claims.append(EmitClaimInput.model_validate(raw))
+                    except ValidationError as e:
+                        log.warning(
+                            "drained_claim_validation_failed",
+                            thread_id=thread_id,
+                            error=str(e),
+                            raw_keys=list(raw.keys()),
+                        )
 
-                # Chunk 3.5 item 5: run the constitution gate over
-                # the codex final prose, same path the pydantic-ai
-                # core uses (`core/run.py:483-523`). Gated by the
-                # `defend_constitution_judge` switch so the
-                # ablation suite can still pull raw codex output.
-                # `same_turn_claims` carries this turn's approved
-                # claims plus prior-turn approved claims for
-                # narrative-coherence context. Approved or skipped
-                # → `Narrative` SSE frame. Retracted / rejected →
-                # `NarrativeRetracted` SSE frame; the frontend
-                # renders it in the same struck-amber bubble as
-                # the pydantic-ai retraction.
-                approved_claim_list = [c for c, ok in results if ok]
-                # Assemble narrative-side provenance from approved
-                # claims in emission order, matching pydantic-ai's
-                # contract (`core/run.py:421-423`). `${ref:N}` in the
-                # narrative indexes ACROSS all claims' provenance, so
-                # the index space is the concatenation, not per-claim.
-                assembled_provenance: list[provenance_pb2.ProvenanceRef] = []
-                for _c in approved_claim_list:
-                    assembled_provenance.extend(_c.provenance)
-                narrative_retracted = False
-                # Narrative-level placeholder gate. Runs BEFORE the
-                # constitution gate (mirroring `core/run.py:474`) so
-                # an out-of-bounds `${ref:N}` retracts deterministically
-                # and we don't pay the constitution LLM cost on prose
-                # that's already going to be retracted. The span emits
-                # even on vacuous passes (text has no `${ref:N}`) so
-                # eval probes querying `mcae.gate.placeholder` see
-                # parity with the pydantic-ai path.
-                placeholder_narrative_reason: str | None = None
-                if final_text:
-                    with _tracer.start_as_current_span(
-                        spans.GATE_PLACEHOLDER
-                    ) as pg:
-                        pg.set_attribute(
-                            spans.Attrs.GATE_VERSION, _PLACEHOLDER_VERSION
+                post_envelope = TurnEnvelope(
+                    turn_id=f"{thread_id}:{turn}",
+                    correlation_id=thread_id,
+                    switches=request.switches,
+                    run_type=request.run_type,
+                    intent=request.user_question,
+                    view_context=request.context,
+                    history=[],
+                    primary_llm_override=None,
+                    policy_llm_override=None,
+                    live_window_secs=effective_window_secs,
+                )
+                post_sink = SseSink()
+
+                async def _run_post_tools_phase():
+                    try:
+                        return await run_post_tools_phase(
+                            emitted_claims=parsed_claims,
+                            narrative_text=final_text,
+                            bindings=thread.bindings,
+                            envelope=post_envelope,
+                            thread_id=thread_id,
+                            turn_started_at_ms=turn_started_at_ms,
+                            prior_claims=list(thread.claims),
+                            sink=post_sink,
+                            debug_public=handles.debug_public,
+                            turn_span=turn_span,
+                            tool_calls_count=tool_completed_count,
+                            budget_exhausted=budget_exhausted_fired,
                         )
-                        ref_err = validate_refs(
-                            final_text, len(assembled_provenance)
-                        )
-                        if ref_err is not None:
-                            pg.set_attribute(
-                                spans.Attrs.GATE_VERDICT,
-                                spans.VERDICT_RETRACTED,
-                            )
-                            placeholder_narrative_reason = (
-                                ref_err.to_human_string()
-                            )
-                            pg.set_attribute(
-                                spans.Attrs.GATE_REASON,
-                                placeholder_narrative_reason,
-                            )
-                        else:
-                            pg.set_attribute(
-                                spans.Attrs.GATE_VERDICT,
-                                spans.VERDICT_APPROVED,
-                            )
-                if placeholder_narrative_reason is not None:
-                    # Placeholder retract: route through the retracted
-                    # emit branch with the placeholder reason so the
-                    # constitution gate is skipped (same short-circuit
-                    # pydantic-ai's `narrative_snapshot` path uses).
-                    ret = narrative_pb2.NarrativeRetracted(
-                        text=final_text,
-                        reason=placeholder_narrative_reason,
+                    finally:
+                        await post_sink.close()
+
+                post_tools_task = asyncio.create_task(_run_post_tools_phase())
+                async for frame in post_sink.frames():
+                    yield frame
+                outcome = await post_tools_task
+
+                # Codex-specific persistence: the shared phase
+                # already emitted SSE frames and stamped span attrs;
+                # this block records the approved claims and the
+                # narrative snapshot onto the thread so reopen /
+                # history replay see them.
+                for claim_obj in outcome.approved_claims:
+                    thread.record_claim(claim_obj)
+                    thread.record_turn_claim(turn, claim_obj)
+                if outcome.narrative_snapshot is not None:
+                    thread.record_turn_narrative(
+                        turn, outcome.narrative_snapshot
                     )
-                    if handles.debug_public:
-                        ret.debug_reason = (
-                            f"placeholder_validate: {placeholder_narrative_reason}"
-                        )
-                    with _tracer.start_as_current_span(
-                        spans.NARRATIVE_EMITTED
-                    ) as nar_span:
-                        nar_span.set_attribute(
-                            spans.Attrs.NARRATIVE_VERDICT,
-                            spans.VERDICT_RETRACTED,
-                        )
-                        sse_text = resolve_narrative_text(
-                            final_text,
-                            narrative_output_enabled=(
-                                request.switches.channels.narrative_output_enabled
-                            ),
-                            nar_span=nar_span,
-                        )
-                        if sse_text:
-                            nar_span.set_attribute(
-                                spans.Attrs.NARRATIVE_TEXT, sse_text
-                            )
-                        nar_span.set_attribute(
-                            spans.Attrs.NARRATIVE_ASSEMBLED_PROVENANCE_COUNT,
-                            len(assembled_provenance),
-                        )
-                        ret.text = sse_text
-                        thread.record_turn_narrative(
-                            turn,
-                            NarrativeSnapshot(
-                                text=sse_text,
-                                retracted_reason=placeholder_narrative_reason,
-                            ),
-                        )
-                        yield _frame("NarrativeRetracted", ret)
-                    narrative_retracted = True
-                if (
-                    not narrative_retracted
-                    and request.switches.stay_in_role.defend_constitution_judge
-                    and final_text
-                ):
-                    role_t_const = time.monotonic()
-                    # Constitution gate is stateless: `judge_narrative`
-                    # reads `live_window_secs` on every call so the
-                    # `${LIVE_WINDOW_HUMAN}` placeholder matches what
-                    # the primary agent saw. Routes through
-                    # `runtime_call`, which dispatches between codex
-                    # (subscription auth) and pydantic-ai based on
-                    # `AGENT_DEFAULT_RUNTIME`; the pydantic-ai branch
-                    # has its own retry, codex relies on its internals.
-                    with _tracer.start_as_current_span(
-                        spans.GATE_NARRATIVE_CONSTITUTION
-                    ) as g:
-                        g.set_attribute(
-                            spans.Attrs.GATE_VERSION,
-                            constitution_module.VERSION,
-                        )
-                        verdict = await judge_narrative(
-                            text=final_text,
-                            same_turn_claims=(
-                                _claims_to_judgement_payload(
-                                    approved_claim_list
-                                )
-                                + _claims_to_judgement_payload(
-                                    list(thread.claims)
-                                )
-                            ),
-                            live_window_secs=effective_window_secs,
-                        )
-                        normalized = _normalize_verdict(verdict.verdict)
-                        g.set_attribute(spans.Attrs.GATE_VERDICT, normalized)
-                        if verdict.reason:
-                            g.set_attribute(
-                                spans.Attrs.GATE_REASON, verdict.reason
-                            )
-                        if verdict.verdict in ("retract", "reject"):
-                            retraction_reason = (
-                                verdict.reason
-                                or f"constitution {verdict.verdict}"
-                            )
-                            ret = narrative_pb2.NarrativeRetracted(
-                                text=final_text,
-                                reason=retraction_reason,
-                            )
-                            if handles.debug_public:
-                                ret.debug_reason = (
-                                    f"constitution: {verdict.reason}"
-                                )
-                            # Wrap retract emit in `mcae.narrative.emitted`
-                            # span so eval probes querying narrative-leg
-                            # outcomes see the same trace shape as the
-                            # pydantic-ai path. Verdict is `retracted`;
-                            # provenance count is 0 because retracted
-                            # prose can't safely carry chips.
-                            with _tracer.start_as_current_span(
-                                spans.NARRATIVE_EMITTED
-                            ) as nar_span:
-                                nar_span.set_attribute(
-                                    spans.Attrs.NARRATIVE_VERDICT,
-                                    spans.VERDICT_RETRACTED,
-                                )
-                                # Apply the narrative-output channel
-                                # switch to the retracted text. Channel
-                                # off => empty text, suppressed=true.
-                                # The retraction `reason` stays
-                                # unmodified (it's structured metadata,
-                                # not the model's prose); the user
-                                # still sees WHY the bubble was
-                                # retracted, just with no prose body.
-                                sse_text = resolve_narrative_text(
-                                    final_text,
-                                    narrative_output_enabled=(
-                                        request.switches.channels.narrative_output_enabled
-                                    ),
-                                    nar_span=nar_span,
-                                )
-                                if sse_text:
-                                    nar_span.set_attribute(
-                                        spans.Attrs.NARRATIVE_TEXT, sse_text
-                                    )
-                                nar_span.set_attribute(
-                                    spans.Attrs.NARRATIVE_ASSEMBLED_PROVENANCE_COUNT,
-                                    len(assembled_provenance),
-                                )
-                                # The retract frame carries the
-                                # suppressed text; reason flows
-                                # unchanged so the UI can still render
-                                # the retraction badge.
-                                ret.text = sse_text
-                                # Chunk 4 history record: retracted snapshot
-                                # carries the retraction reason so the
-                                # replay path can render the same muted /
-                                # amber bubble the live UI renders.
-                                thread.record_turn_narrative(
-                                    turn,
-                                    NarrativeSnapshot(
-                                        text=sse_text,
-                                        retracted_reason=retraction_reason,
-                                    ),
-                                )
-                                yield _frame("NarrativeRetracted", ret)
-                            narrative_retracted = True
-                    role_timings["policy"] = role_timings.get(
-                        "policy", 0.0
-                    ) + (time.monotonic() - role_t_const)
-
-                if not narrative_retracted:
-                    # Wrap approved narrative emit in
-                    # `mcae.narrative.emitted` span so eval probes
-                    # (`narrative-emitted-approved` etc) see the same
-                    # trace shape as pydantic-ai. Verdict is
-                    # `approved`; provenance count is the assembled
-                    # provenance length (empty in this MVP until
-                    # codex-side assembled-provenance ships).
-                    with _tracer.start_as_current_span(
-                        spans.NARRATIVE_EMITTED
-                    ) as nar_span:
-                        nar_span.set_attribute(
-                            spans.Attrs.NARRATIVE_VERDICT,
-                            spans.VERDICT_APPROVED,
-                        )
-                        # Apply the narrative-output channel switch
-                        # to the approved prose. Channel off => empty
-                        # text, suppressed=true on the span. Channel
-                        # on => unchanged text, length stamped.
-                        sse_text = resolve_narrative_text(
-                            final_text,
-                            narrative_output_enabled=(
-                                request.switches.channels.narrative_output_enabled
-                            ),
-                            nar_span=nar_span,
-                        )
-                        if sse_text:
-                            nar_span.set_attribute(
-                                spans.Attrs.NARRATIVE_TEXT, sse_text
-                            )
-                        nar_span.set_attribute(
-                            spans.Attrs.NARRATIVE_ASSEMBLED_PROVENANCE_COUNT,
-                            len(assembled_provenance),
-                        )
-                        # Chunk 4 history record: approved snapshot.
-                        # Snapshot stores the SSE-shaped (post-
-                        # suppression) text so history reopens render
-                        # what the live user actually saw; provenance
-                        # is the assembled list from this turn's
-                        # approved claims so chip-ref resolution in
-                        # history matches the live frame.
-                        thread.record_turn_narrative(
-                            turn,
-                            NarrativeSnapshot(
-                                text=sse_text,
-                                provenance=list(assembled_provenance),
-                            ),
-                        )
-                        yield _frame(
-                            "Narrative",
-                            narrative_pb2.NarrativeWithRefs(
-                                text=sse_text,
-                                provenance=assembled_provenance,
-                            ),
-                        )
-                turn_span.set_attribute(
-                    spans.Attrs.TURN_NARRATIVE_CHARS, len(final_text)
-                )
-                # Mirror pydantic-ai's end-of-turn count stamp
-                # (`core/run.py:572`) so the refusal-suite's
-                # `turn_attribute_equals(mcae.turn.tool_calls, "0")`
-                # probes resolve to zero on a refusal turn that
-                # didn't dispatch any tools (and to the actual
-                # count otherwise).
-                turn_span.set_attribute(
-                    spans.Attrs.TURN_TOOL_CALLS, tool_completed_count
-                )
-                # Mirror pydantic-ai's `core/run.py` stamp. True iff
-                # the Rust MCP server short-circuited at least one
-                # dispatch with the no_more_lookups sentinel during
-                # this turn. Pairs with TURN_TOOL_CALLS clamped at
-                # the cap value for the runaway-tool-loop probe.
-                turn_span.set_attribute(
-                    spans.Attrs.TURN_BUDGET_EXHAUSTED, budget_exhausted_fired
-                )
 
                 yield _terminal_done(turn_started_at_ms, role_timings)
 
