@@ -671,15 +671,73 @@ class EvalGetTokenInfoFixture(BaseModel):
         return v
 
 
+class EvalWalletProfileFixture(BaseModel):
+    """One canned `wallet_profile(addr=...)` response. The mock's
+    `STORE.wallet_profile[addr]` returns `payload` verbatim as the
+    primitive's `value` field; provenance is filled in by the mock
+    matching production conventions. `payload` shape mirrors the
+    proto `WalletProfileValue` (addr, role, community_id, stats,
+    top_counterparties, age_in_window_secs) so the agent sees a
+    parseable response.
+
+    Used by runtime-parity cases to force a deterministic claim
+    emission: a wallet with concrete numbers gives the agent
+    enough substance to emit a profile claim, which is what makes
+    the constitution gate fire downstream.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    addr: str = Field(
+        description="Base58 wallet pubkey the case will reference.",
+    )
+    payload: dict[str, Any] = Field(
+        description=(
+            "Full `WalletProfileValue`-shaped dict. The mock returns "
+            "this as the primitive's `value` field without further "
+            "interpretation."
+        ),
+    )
+
+    @field_validator("addr")
+    @classmethod
+    def _addr_non_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("addr must be non-empty")
+        return v
+
+
+class EvalCommunitySummaryFixture(BaseModel):
+    """One canned `community_summary(community_id=...)` response.
+    Symmetric to `EvalWalletProfileFixture` but keyed on the u32
+    community_id. The mock returns `payload` as the primitive's
+    `value` field."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    community_id: int = Field(
+        ge=0,
+        description="Stable community label (u32).",
+    )
+    payload: dict[str, Any] = Field(
+        description="Full `CommunitySummaryValue`-shaped dict.",
+    )
+
+
 class EvalFixtures(BaseModel):
-    """Per-case canned-response store, keyed by primitive name. Only
-    `get_token_info` is supported today; the shape is extensible to
-    future primitives (e.g. a `wallet_profile` fixture for fully
-    synthetic wallets) without breaking existing cases."""
+    """Per-case canned-response store, keyed by primitive name. The
+    runner POSTs this to the hermetic mock's `/eval/setup` before
+    each case and DELETEs after. Mock-side mirror is
+    `evals/cases-hermetic/mock-service/src/eval_mock/setup_routes.py::_SetupBody`;
+    field names and types must match in lockstep."""
 
     model_config = ConfigDict(extra="forbid")
 
     get_token_info: list[EvalGetTokenInfoFixture] = Field(default_factory=list)
+    wallet_profile: list[EvalWalletProfileFixture] = Field(default_factory=list)
+    community_summary: list[EvalCommunitySummaryFixture] = Field(
+        default_factory=list
+    )
 
     @field_validator("get_token_info")
     @classmethod
@@ -691,6 +749,32 @@ class EvalFixtures(BaseModel):
             raise ValueError(
                 "get_token_info fixtures must have unique mint pubkeys; "
                 "duplicate mints would race on lookup order"
+            )
+        return v
+
+    @field_validator("wallet_profile")
+    @classmethod
+    def _wallet_addrs_unique(
+        cls, v: list[EvalWalletProfileFixture]
+    ) -> list[EvalWalletProfileFixture]:
+        addrs = [f.addr for f in v]
+        if len(addrs) != len(set(addrs)):
+            raise ValueError(
+                "wallet_profile fixtures must have unique addrs; "
+                "duplicate addrs would race on lookup order"
+            )
+        return v
+
+    @field_validator("community_summary")
+    @classmethod
+    def _community_ids_unique(
+        cls, v: list[EvalCommunitySummaryFixture]
+    ) -> list[EvalCommunitySummaryFixture]:
+        ids = [f.community_id for f in v]
+        if len(ids) != len(set(ids)):
+            raise ValueError(
+                "community_summary fixtures must have unique "
+                "community_ids; duplicates would race on lookup order"
             )
         return v
 
