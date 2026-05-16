@@ -99,43 +99,6 @@ from google.protobuf import json_format
 log = structlog.get_logger(__name__)
 _tracer = trace.get_tracer(__name__)
 
-# Codex-specific tool-surface delta vs `system_v4.txt`. The system
-# prompt is authored for the pydantic-ai surface which exposes
-# `emit_claim` (singular, called once per claim); codex's MCP surface
-# exposes `emit_claims` (batched plural, one call per turn). We
-# substitute the tool name in the composed prompt below so codex sees
-# a single, correct name everywhere, then add this footer to encode
-# the batching rule the MCP schema can't express on its own ("one
-# call per turn, all claims"). Anything else policy-shaped MUST live
-# in `system_v4.txt` so both runtimes inherit it.
-_CODEX_EMIT_TOOL_NAME = "emit_claims"
-_PYDANTIC_EMIT_TOOL_NAME = "emit_claim"
-_CODEX_TOOL_SURFACE_FOOTER = (
-    "<codex_tool_surface>\n"
-    "`emit_claims` is batched plural: pass ALL claims for this turn "
-    "in ONE call. Do not split chips across multiple invocations. "
-    "Every read-side tool that accepts `snapshot_id` MUST receive "
-    "the value provided in the snapshot pin below.\n"
-    "</codex_tool_surface>"
-)
-
-
-def _adapt_system_prompt_for_codex(text: str) -> str:
-    """Rewrite the pydantic-ai-shaped tool name in the composed system
-    prompt to the codex tool surface name. Three backtick-quoted
-    mentions live in `prompts/system_v4.txt`; substituting them keeps
-    the codex prompt consistent (the model never sees the wrong tool
-    name) while preserving a single authored source for policy. If
-    `system_v4.txt` gains new tool-name mentions, this substitution
-    catches them automatically because the match is on the backtick-
-    quoted form.
-    """
-    return text.replace(
-        f"`{_PYDANTIC_EMIT_TOOL_NAME}`",
-        f"`{_CODEX_EMIT_TOOL_NAME}`",
-    )
-
-
 # Tool-name to primitive-span-name mapping. The pydantic-ai path
 # emits these spans via `primitive_client.py` (one per `await`
 # against the data plane). The codex path doesn't go through
@@ -765,15 +728,12 @@ async def run_turn_codex(
                 # while switch-driven rule drops flow per-turn the
                 # same way the pydantic-ai path handles them.
                 turn_drops = drops_from_switches(request.switches)
-                composed_system = _adapt_system_prompt_for_codex(
-                    compose_system_prompt(
-                        drop_rule_ids=turn_drops,
-                        live_window_secs=effective_window_secs,
-                    )
+                composed_system = compose_system_prompt(
+                    drop_rule_ids=turn_drops,
+                    live_window_secs=effective_window_secs,
                 )
                 turn_dev_instructions = (
                     f"{composed_system}\n\n"
-                    f"{_CODEX_TOOL_SURFACE_FOOTER}\n\n"
                     f"Per-turn snapshot id: snapshot_id='{snapshot_id}'. "
                     "Pass this exact value to every tool call that "
                     "accepts a snapshot_id."

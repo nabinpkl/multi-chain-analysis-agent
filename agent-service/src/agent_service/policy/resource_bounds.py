@@ -1,32 +1,32 @@
-"""Per-turn resource-bound policy. One source of truth for the
-tool-call budget both runtimes obey.
+"""Per-turn tool-call budget constants.
 
-When the per-turn tool-call budget is exhausted, the next data-lookup
-primitive dispatch must NOT execute and must NOT raise. It returns a
-structured `no_more_lookups_this_turn` tool result wrapped in the
-existing `<external_data>` envelope so the model sees it as a normal
-tool result, pivots to finalizing its narrative over the data it
-already gathered this turn, and lets the existing gate stack
-(constitution + binding) judge whatever it produces.
+Post-Phase-2 of the runtime-alignment work, the tool-call budget is
+enforced entirely Rust-side at `backend/src/mcp.rs::try_consume_budget`.
+Both runtimes consume the Rust MCP server now, so the in-process Python
+counter that used to live here is dead. What remains is the sentinel
+strings both runtimes pattern-match on the wire:
 
-The cap value comes from the env var `AGENT_TURN_TOOL_CALL_BUDGET`
-(default 8). Both pydantic-ai and the Rust MCP server read the same
-env var so the two runtimes stay in lockstep.
+* `NO_MORE_LOOKUPS_ERROR_KIND` is the `error` field value Rust sets on
+  the `<external_data>`-wrapped envelope when a primitive dispatch
+  trips the cap. `mcp_hook.process_tool_call` checks for it on the
+  pydantic-ai path; `codex_driver._pump_codex_events` checks for it
+  on the codex path. Used to flip `AgentDeps.budget_exhausted_fired`
+  / equivalent so `mcae.turn.budget_exhausted` gets stamped.
 
-Only the three read-side primitives count against the budget:
-`wallet_profile`, `community_summary`, `get_token_info`. The reporting
-tool `emit_claim` is exempt because it doesn't dispatch a lookup.
+* `NO_MORE_LOOKUPS_GUIDANCE` is the model-visible guidance text Rust
+  pairs with the error. Kept here so a future log query that wants to
+  match the exact wording (e.g. "did we ever return the budget
+  envelope this hour") has a single Python-side constant to import.
+
+The cap value itself lives at `backend/src/mcp.rs:140` (read from the
+`AGENT_TURN_TOOL_CALL_BUDGET` env on Rust startup); the Python side
+no longer reads that env.
 """
 
 from __future__ import annotations
 
-import os
 from typing import Final
 
-
-TURN_TOOL_CALL_BUDGET: Final[int] = int(
-    os.environ.get("AGENT_TURN_TOOL_CALL_BUDGET", "8")
-)
 
 NO_MORE_LOOKUPS_ERROR_KIND: Final[str] = "no_more_lookups_this_turn"
 
@@ -36,19 +36,3 @@ NO_MORE_LOOKUPS_GUIDANCE: Final[str] = (
     "data already returned this turn. If the data so far is "
     "not enough, say so honestly in the narrative."
 )
-
-NO_MORE_LOOKUPS_PAYLOAD: Final[dict[str, str]] = {
-    "error": NO_MORE_LOOKUPS_ERROR_KIND,
-    "guidance": NO_MORE_LOOKUPS_GUIDANCE,
-}
-
-BUDGETED_PRIMITIVES: Final[frozenset[str]] = frozenset(
-    {"wallet_profile", "community_summary", "get_token_info"}
-)
-
-
-def is_budget_exhausted(used: int) -> bool:
-    """True when the caller must short-circuit instead of dispatching
-    the next lookup. `used` is the count of dispatches already made
-    this turn; the cap is reached when used >= budget."""
-    return used >= TURN_TOOL_CALL_BUDGET

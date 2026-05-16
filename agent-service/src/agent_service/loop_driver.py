@@ -431,6 +431,15 @@ async def run_turn(
                 # Surface any core exception to the outer try/except.
                 outcome = await core_task
 
+                # If the core already closed the snapshot (success path
+                # always does so the emit_claims SSE drain sees end-
+                # of-stream), drop our handle so the finally below
+                # doesn't issue a duplicate `end_turn` RPC. The RPC is
+                # idempotent on the Rust side; this just keeps the
+                # trace clean.
+                if outcome.snapshot_released:
+                    snapshot_id = None
+
                 # ------ Write outcome back into thread state ------
                 if outcome.new_message_history:
                     thread.message_history = outcome.new_message_history

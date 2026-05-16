@@ -38,18 +38,21 @@ What the core does:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
 from opentelemetry import trace
+from pydantic import ValidationError
 from pydantic_ai import Agent
 from pydantic_ai.usage import UsageLimits
 
 from agent_service import spans
 from agent_service.agent import (
     AgentDeps,
+    EmitClaimInput,
     ToolCallRecord,
     build_agent,
 )
@@ -78,20 +81,50 @@ from multichain.wire.agent.v1 import (
 log = structlog.get_logger(__name__)
 _tracer = trace.get_tracer(__name__)
 
-# Per-turn pydantic-ai usage cap. We deliberately do NOT set
-# tool_calls_limit here: tool-call budgeting is enforced at the
-# per-tool-body interceptor (see agent.py's wallet_profile /
-# community_summary / get_token_info bodies plus
-# policy/resource_bounds.py). That path returns a structured
-# no_more_lookups tool result so the model can finalize its
-# narrative gracefully, instead of pydantic-ai raising
-# UsageLimitExceeded which would die as a generic SSE Error.
+# Per-turn pydantic-ai usage cap. Tool-call budgeting is enforced
+# Rust-side at backend/src/mcp.rs::try_consume_budget; that path
+# returns a structured no_more_lookups envelope on overflow, the MCP
+# hook flips AgentDeps.budget_exhausted_fired, and the gate stack
+# stamps mcae.turn.budget_exhausted via run_post_tools_phase. We
+# deliberately leave pydantic-ai's tool_calls_limit unset so the
+# model sees the structured envelope rather than a UsageLimitExceeded
+# raise that would die as a generic SSE Error.
 #
 # request_limit stays because it defends against a stuck-without-
 # tools model-request loop (model burns model requests without
 # making progress). For that pathological case there is no
 # graceful pivot, so exception-on-hit is the correct behavior.
 _USAGE_LIMITS = UsageLimits(request_limit=10)
+
+
+# Max seconds we wait for the emit_claims SSE drain to flush after
+# end_turn closes the channel. Matches codex_driver._DRAIN_TAIL_TIMEOUT_S
+# so the two runtimes have the same upper bound on how long a stuck
+# drain can delay the post-tools phase.
+_DRAIN_TAIL_TIMEOUT_S = 5.0
+
+
+async def _collect_drained_claims(
+    primitive_client: PrimitiveClient,
+    snapshot_id: str,
+    out: list[dict[str, Any]],
+) -> None:
+    """Drain task: subscribe to the per-snapshot claim SSE channel and
+    append each yielded dict to `out`. The stream terminates cleanly
+    when Rust drops the channel sender at `end_turn`, so the caller
+    only needs to `await` this task to know the drain has flushed.
+    Matches the codex pattern at codex_driver.py:230 (`_drain_claims`)
+    so a future de-dup is straightforward.
+    """
+    try:
+        async for claim in primitive_client.stream_claims(snapshot_id):
+            out.append(claim)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        log.warning(
+            "claim_drain_failed", snapshot_id=snapshot_id, error=str(e)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +153,13 @@ class TurnOutcome:
     # `thread.record_turn_narrative` so the reopen path can replay
     # the prose.
     narrative_snapshot: "NarrativeSnapshot | None" = None
+    # True iff `run_one_turn` already called `primitive_client.end_turn`
+    # on the lease (success path closes the snapshot itself so the
+    # emit_claims SSE drain sees end-of-stream). The loop driver's
+    # `finally` consults this to skip a duplicate `end_turn` call; the
+    # underlying RPC is idempotent so a duplicate would only emit a
+    # log warning, but skipping keeps the trace clean.
+    snapshot_released: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +258,6 @@ async def run_one_turn(
 
     # ------ Run primary agent ------
     deps = AgentDeps(
-        primitive_client=primitive_client,
         snapshot_id=snapshot_id,
         turn_started_at_ms=started_at_ms,
         binding_store=bindings,
@@ -253,17 +292,76 @@ async def run_one_turn(
         else primary_agent
     )
 
-    # 75s per attempt covers a normal multi-tool turn (~25s today)
-    # with headroom for slow free-tier hops, while still failing
-    # fast enough that one stuck call gets a retry within the 180s
-    # SSE stream cap. Total worst-case budget: 75 + 1s backoff + 75
-    # = 151s.
-    result = await with_provider_retry(
-        lambda: turn_agent.run(user_msg, **run_kwargs),
-        label="primary_agent",
-        per_attempt_timeout_s=75.0,
+    # Start the emit_claims drain in the background so claims the model
+    # writes to the per-snapshot mpsc channel via MCP are collected
+    # while `agent.run()` is still in flight. The drain task terminates
+    # when Rust drops the channel sender, which happens at `end_turn`.
+    # We trigger that explicitly after `agent.run()` returns so the
+    # await below sees a clean end-of-stream. Pattern mirrored from
+    # codex_driver._drain_claims at codex_driver.py:230.
+    drained_claims: list[dict[str, Any]] = []
+    drain_task = asyncio.create_task(
+        _collect_drained_claims(primitive_client, snapshot_id, drained_claims)
     )
-    narrative_text: str = result.output
+
+    snapshot_released = False
+    try:
+        # 75s per attempt covers a normal multi-tool turn (~25s today)
+        # with headroom for slow free-tier hops, while still failing
+        # fast enough that one stuck call gets a retry within the 180s
+        # SSE stream cap. Total worst-case budget: 75 + 1s backoff + 75
+        # = 151s.
+        result = await with_provider_retry(
+            lambda: turn_agent.run(user_msg, **run_kwargs),
+            label="primary_agent",
+            per_attempt_timeout_s=75.0,
+        )
+        narrative_text: str = result.output
+
+        # Close the snapshot to drop the mpsc sender on the Rust side
+        # so the drain task sees end-of-stream. The loop driver also
+        # calls end_turn in its finally, idempotent per
+        # primitive_client.end_turn at primitive_client.py:295.
+        await primitive_client.end_turn(snapshot_id)
+        snapshot_released = True
+    except Exception:
+        # If the agent failed mid-flight, cancel the drain so we don't
+        # leak the task. The loop driver's finally will release the
+        # snapshot.
+        drain_task.cancel()
+        try:
+            await drain_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        raise
+
+    try:
+        await asyncio.wait_for(drain_task, timeout=_DRAIN_TAIL_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        drain_task.cancel()
+        log.warning(
+            "claim_drain_timeout",
+            thread_id=envelope.correlation_id,
+            drained=len(drained_claims),
+        )
+
+    # Validate each drained claim against EmitClaimInput before handing
+    # to the gate stack. Same pattern codex_driver uses at the post-
+    # tools entry; a malformed payload gets logged and dropped rather
+    # than crashing the gate. Pydantic-ai's MCP schema enforcement at
+    # the call site already rejects most bad shapes; this is a defensive
+    # second pass that mirrors codex's behavior for parity.
+    parsed_claims: list[EmitClaimInput] = []
+    for raw in drained_claims:
+        try:
+            parsed_claims.append(EmitClaimInput.model_validate(raw))
+        except ValidationError as e:
+            log.warning(
+                "drained_claim_validation_failed",
+                thread_id=envelope.correlation_id,
+                error=str(e),
+                raw_keys=list(raw.keys()) if isinstance(raw, dict) else [],
+            )
 
     # ------ Gate stack + narrative leg + per-turn aggregates ------
     # Shared with codex_driver.run_turn_codex; the function owns
@@ -272,7 +370,7 @@ async def run_one_turn(
     # emission for Claim / Narrative / NarrativeRetracted, and the
     # per-turn aggregate stamping on `turn_span`.
     outcome = await run_post_tools_phase(
-        emitted_claims=deps.emitted_claims,
+        emitted_claims=parsed_claims,
         narrative_text=narrative_text,
         bindings=bindings,
         envelope=envelope,
@@ -291,6 +389,7 @@ async def run_one_turn(
         tool_call_records=list(deps.tool_call_records),
         approved_claims=outcome.approved_claims,
         narrative_snapshot=outcome.narrative_snapshot,
+        snapshot_released=snapshot_released,
     )
 
 

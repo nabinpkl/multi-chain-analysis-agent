@@ -7,7 +7,11 @@ dependencies = [
     # Pydantic AI native OpenRouter provider lives in this slim install.
     # Per the migration plan we use OpenRouter free-tier for both
     # primary (nemotron) and policy (gpt-oss) models.
-    "pydantic-ai-slim[openai]>=1.0",
+    # Phase 2 of the runtime-alignment work adds the `mcp` extra so
+    # pydantic-ai can consume the Rust MCP server at `http://api:8004/mcp`
+    # via `MCPServerStreamableHTTP`. This replaces the four `@agent.tool`
+    # bodies in `agent.py` with a single MCP toolset.
+    "pydantic-ai-slim[openai,mcp]>=1.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "sse-starlette>=2.1",
