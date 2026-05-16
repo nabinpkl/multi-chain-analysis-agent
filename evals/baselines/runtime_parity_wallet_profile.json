@@ -1,0 +1,26 @@
+{
+  "suite": "runtime_parity_wallet_profile",
+  "captured_at": "2026-05-16T10:06:58.318901Z",
+  "git_sha": "b2938fe9da3c",
+  "agent_version": "0.1.0",
+  "runtime": "codex",
+  "agent_primary_model": "gemini-3.1-flash-lite",
+  "agent_policy_model": "gemini-3.1-flash-lite",
+  "eval_judge_model": "gemini-3.1-flash-lite",
+  "codex_primary_model": "gpt-5.4",
+  "codex_reasoning_effort": "medium",
+  "results": {
+    "runtime_parity.codex": {
+      "claim-emitted": "pass",
+      "gate-constitution-fired": "pass",
+      "gate-narrative-constitution-fired": "pass",
+      "gate-placeholder-fired": "pass",
+      "gate-structural-fired": "pass",
+      "narrative-emitted": "pass",
+      "no-error-on-turn-root": "pass",
+      "turn-root-span-present": "pass",
+      "turn-tagged-as-eval": "pass",
+      "wallet-profile-primitive-called": "pass"
+    }
+  }
+}
