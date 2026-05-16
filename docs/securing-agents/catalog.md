@@ -1,6 +1,6 @@
-# 96 Agent Vulnerabilities, Ranked From Fundamentals to Frontier
+# 95 Agent Vulnerabilities, Ranked From Fundamentals to Frontier
 
-> 96 Agent vulnerabilities discussed with examples so you and your personal agent can review against your production agent. I compiled the list so you and your agent don't have to.
+> 95 Agent vulnerabilities discussed with examples so you and your personal agent can review against your production agent. I compiled the list so you and your agent don't have to.
 
 Most security writing about agents is either too theoretical (long taxonomies you read once and forget) or too tactical (a checklist of mitigations for the agent the author happened to ship). This is an attempt at the middle: a flat list of attack classes you can walk top to bottom, where each entry tells you when to worry about it, when to ignore it, and what the class of fix looks like.
 
