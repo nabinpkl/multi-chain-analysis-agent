@@ -1,26 +1,10 @@
-# A field catalog of LLM-agent vulnerabilities, fundamentals to frontier
+# 96 Agent Vulnerabilities, Ranked From Fundamentals to Frontier
+
+> 96 Agent vulnerabilities discussed with examples so you and your personal agent can review against your production agent. I compiled the list so you and your agent don't have to.
 
 Most security writing about agents is either too theoretical (long taxonomies you read once and forget) or too tactical (a checklist of mitigations for the agent the author happened to ship). This is an attempt at the middle: a flat list of attack classes you can walk top to bottom, where each entry tells you when to worry about it, when to ignore it, and what the class of fix looks like.
 
-The example throughout is a read-only wallet-and-transaction-graph analyst over public blockchain data. Concrete enough to anchor the entries, narrow enough that "does not apply" claims are honest. Where your system shape differs, the "applies when" field is the bridge.
-
-Two upfront notes.
-
-First, the catalog is opinionated about what "does not apply" means. A class is broken-by-construction only if a structural property of the system excludes the surface, not if "we just haven't seen that bug." A read-only agent has no write surface. A single-user agent has no multi-tenancy. Both are real exclusions. "Our defenses caught it last quarter" is not.
-
-Second, the seven invariants in the footer are doing most of the work. Almost every "does not apply when" claim cashes out as one of them. The day you break an invariant, the catalog needs a re-read at that boundary.
-
-## How to read an entry
-
-Each entry has five fields, each on its own line. Some fields use bullets when there are multiple distinct conditions; some are prose when one situation covers it.
-
-- **What.** The class, defined without codebase context.
-- **Applies when.** System properties that make the class live.
-- **Does not apply when.** Properties that exclude it.
-- **Defense pattern.** Class of mitigation, named at the level of pattern.
-- **Example.** How it shows up (or fails to show up) in the wallet analyst.
-
-The "applies when" and "does not apply when" fields are the load-bearing parts. Treat the "does not apply when" entries as system invariants you have to keep proving.
+The example throughout is a read-only wallet-and-transaction-graph analyst agent over public blockchain data.
 
 ## Tier index
 
