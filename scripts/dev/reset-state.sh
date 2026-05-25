@@ -1,5 +1,4 @@
 #!/bin/sh
-# Free-tier workaround: wipe derived state before boot.
 #
 # The Solana RPC rate limit (~5 req/sec) makes catch-up after downtime
 # impractical, so on every restart we start fresh from chain tip. The

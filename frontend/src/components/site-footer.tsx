@@ -1,6 +1,6 @@
 import { ExternalLink } from "lucide-react";
 
-const REPO_URL = "https://github.com/nabinpkl/multi-chain-analysis-engine";
+const REPO_URL = "https://github.com/nabinpkl/multi-chain-analysis-agent";
 const ISSUES_URL = `${REPO_URL}/issues`;
 const LINKEDIN_URL = "https://linkedin.com/in/nabin-pokhrel";
 
@@ -26,12 +26,12 @@ export function SiteFooter() {
             About this site
           </p>
           <p>
-            MultiChain Analysis Engine is a{" "}
-            <span className="text-mca-text">portfolio / proof-of-concept</span>{" "}
-            project. It ingests transactions from multiple public blockchains,
-            normalizes them into a common shape, links each transaction to the
-            entities and contracts it touches, and serves the result as an
-            explorable graph.
+            MultiChain Analysis Agent is an{" "}
+            <span className="text-mca-text">open-source agent-design exercise</span>.{" "}
+            An LLM analyst answers questions about live wallet behavior on Solana
+            mainnet, grounded in a real-time on-chain graph. The chain is the
+            pressure environment: real public high-volume data forces clean
+            ingest, idempotent writes, and grounded narrative.
           </p>
           <p>
             Provided <span className="text-mca-text">as-is</span>, with no
@@ -100,7 +100,7 @@ export function SiteFooter() {
 
       <div className="border-t border-mca-border">
         <div className="max-w-[1200px] mx-auto px-6 py-4 flex flex-wrap items-center justify-between gap-3 text-[0.78rem] uppercase tracking-[2px]">
-          <span>© MultiChain Analysis Engine, portfolio piece, not financial advice.</span>
+          <span>© MultiChain Analysis Agent. Open source. Not financial advice.</span>
           <div className="flex items-center gap-5">
             <a
               href={LINKEDIN_URL}

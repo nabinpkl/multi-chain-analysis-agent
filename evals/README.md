@@ -131,7 +131,7 @@ Industry guidance (DeepEval 2026, Hamel 2026-01-15, multiple LLMOps observabilit
 
 ## Probe-shape limitations
 
-Two known gaps surfaced in [#25](https://github.com/nabinpkl/multi-chain-analysis-engine/issues/25). They are not bugs in the probes; they are choices about scope.
+Two known gaps surfaced in [#25](https://github.com/nabinpkl/multi-chain-analysis-agent/issues/25). They are not bugs in the probes; they are choices about scope.
 
 - **`tool_called_with_args` only matches top-level JSON keys.** Wallet addr lives at `input.addr` (nested) in the proto canonical JSON; we cannot pin "this specific wallet was passed" today. Asserting "primitive was called" is the weaker but still useful contract. A future probe kind that walks JSON paths would close this.
 - **`gate_passed` does not distinguish "gate did not run" from "gate retracted".** Both read as fail. Useful when the case requires the gate to run; misleading when the case's correct path skips the gate (e.g. an unknown wallet that emits zero claims, where the structural gate runs per-claim and produces zero spans). A `gate_did_not_retract` probe kind would close this.

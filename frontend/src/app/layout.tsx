@@ -20,17 +20,17 @@ const instrumentSerif = Instrument_Serif({
 });
 
 export const metadata: Metadata = {
-  title: "MultiChain Analysis Engine: Cross-Chain Transaction Graph",
+  title: "MultiChain Analysis Agent: LLM Analyst Over a Live Solana Graph",
   description:
-    "MultiChain Analysis Engine ingests transactions from multiple public blockchains, normalizes them into a common shape, links each tx to entities and contracts, and serves the result as an explorable graph.",
+    "An LLM agent that answers questions about wallet behavior on Solana mainnet, grounded in a real-time on-chain graph. Layered output verification, ablation switches, two-runtime parity, open and inspectable.",
   robots: "index, follow",
   alternates: {
     canonical: "https://chain.nabin.org/",
   },
   openGraph: {
-    title: "MultiChain Analysis Engine: Cross-Chain Transaction Graph",
+    title: "MultiChain Analysis Agent: LLM Analyst Over a Live Solana Graph",
     description:
-      "Cross-chain transactions, normalized and linked. Explore a live graph of on-chain activity across multiple networks.",
+      "Ask questions about live on-chain wallet behavior. The agent uses a fixed set of typed primitives, every claim is structurally verified before it reaches the wire.",
     type: "website",
     url: "https://chain.nabin.org/",
   },

@@ -38,19 +38,19 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends bubblewrap \
     && rm -rf /var/lib/apt/lists/*
 
-# In-image directory layout mirrors the host source tree so the
-# relative `[tool.uv.sources] codex-agent-driver = { path =
-# "../../second-brain/packages/codex-agent-driver" }` in
-# `agent-service/pyproject.toml` resolves identically in local
-# `uv sync` (from the host) and in this docker build.
+# In-image directory layout preserves the same depth as the host
+# source tree so the relative `[tool.uv.sources] codex-agent-driver =
+# { path = "../../second-brain/packages/codex-agent-driver" }` in
+# `agent-service/pyproject.toml` resolves cleanly. Depth matters; the
+# literal segment name does not.
 #
-#   /repo/multi-chain-analysis-engine/agent-service/   <- WORKDIR
+#   /repo/multi-chain-analysis-agent/agent-service/    <- WORKDIR
 #   /repo/second-brain/packages/codex-agent-driver/    <- path-dep target
 #
-# Without this mirroring, uv refuses to normalize a relative path
-# that escapes the project root (`/app/../../...` fails with
+# Without preserving the depth, uv refuses to normalize a relative
+# path that escapes the project root (`/app/../../...` fails with
 # "cannot normalize a relative path beyond the base directory").
-WORKDIR /repo/multi-chain-analysis-engine/agent-service
+WORKDIR /repo/multi-chain-analysis-agent/agent-service
 
 # Chunk 3 path dep. The named build context comes from
 # `docker-compose.yml`'s `additional_contexts.codex-agent-driver`,

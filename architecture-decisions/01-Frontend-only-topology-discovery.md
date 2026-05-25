@@ -3,7 +3,7 @@
 **Status:** Approved / Historical  
 **Date:** April 25, 2026  
 **Architect:** [User Name/Title]  
-**Project:** Multi-Chain Analysis Engine (Solana Live Graph)
+**Project:** MultiChain Analysis Agent (Solana Live Graph)
 
 ---
 

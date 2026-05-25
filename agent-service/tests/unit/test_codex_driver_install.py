@@ -77,7 +77,7 @@ def test_codex_profile_and_driver_construct() -> None:
     profile = CodexAgentProfile(
         id="mcae",
         cwd=Path("/tmp"),
-        developer_instructions="multi-chain-analysis-engine codex bridge",
+        developer_instructions="multi-chain-analysis-agent codex bridge",
         sandbox="read-only",
         approval_policy="never",
         mcp_servers=(

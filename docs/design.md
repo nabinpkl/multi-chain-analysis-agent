@@ -1,4 +1,4 @@
-# MultiChain Analysis Engine — Design System
+# MultiChain Analysis Agent. Design System
 
 This is the source of truth for visual decisions. All tokens live in `frontend/src/app/globals.css`. This document explains the reasoning so future changes stay coherent.
 

@@ -10,22 +10,23 @@ RUN pip install --no-cache-dir uv
 # Preserve the repo-relative source-tree layout in-container so
 # every path dep in the editable chain resolves cleanly:
 #
-#   /repo/multi-chain-analysis-engine/evals/cases-hermetic/mock-service/   <- WORKDIR
-#   /repo/multi-chain-analysis-engine/agent-service/                       <- mock-service's path dep
+#   /repo/multi-chain-analysis-agent/evals/cases-hermetic/mock-service/   <- WORKDIR
+#   /repo/multi-chain-analysis-agent/agent-service/                       <- mock-service's path dep
 #   /repo/second-brain/packages/codex-agent-driver/                        <- agent-service's path dep
 #
 # uv's path normalization refuses to climb above the project root,
-# so the in-container layout has to mirror the host tree exactly.
-WORKDIR /repo/multi-chain-analysis-engine/evals/cases-hermetic/mock-service
+# so the in-container layout has to preserve the same depth as the
+# host tree. The literal segment name doesn't matter; the depth does.
+WORKDIR /repo/multi-chain-analysis-agent/evals/cases-hermetic/mock-service
 
-COPY agent-service /repo/multi-chain-analysis-engine/agent-service
+COPY agent-service /repo/multi-chain-analysis-agent/agent-service
 
 # codex-agent-driver comes via the named build context (declared in
 # `docker-compose.yml::eval-mock::additional_contexts`); identical
 # shape to how `agent-service`'s Dockerfile pulls the same sibling.
 COPY --from=codex-agent-driver . /repo/second-brain/packages/codex-agent-driver
 
-COPY evals/cases-hermetic/mock-service /repo/multi-chain-analysis-engine/evals/cases-hermetic/mock-service
+COPY evals/cases-hermetic/mock-service /repo/multi-chain-analysis-agent/evals/cases-hermetic/mock-service
 
 # Drop any host-side `.venv` that slipped in via COPY (it links to
 # a non-existent in-container interpreter, and uv refuses to sync
