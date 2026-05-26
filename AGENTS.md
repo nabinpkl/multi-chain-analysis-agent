@@ -117,13 +117,6 @@ Concrete anti-patterns:
 
 Single source of truth for every type that crosses a service boundary lives in `proto/multichain/wire/{shared,agent}/v1/*.proto` (Protocol Buffers). Four approved tools (all maintenance-bar pass):
 
-| Tool | Role | Last release at adoption |
-|---|---|---|
-| `buf` CLI (Buf Inc) | proto lint + breaking-change detection + codegen orchestration | 2026-04-29 |
-| `buffa` (Anthropic) + `protoc-gen-buffa` | Rust types: pure Rust, JSON serialization, zero-copy views, editions support | 2026-04-27 |
-| `protobuf` (Google official) + `protoc --python_out` | Python types | 2026-03-20 |
-| `@bufbuild/protobuf` + `@bufbuild/protoc-gen-es` (Buf Inc) | TypeScript types: ESM-native, full type safety | 2026-04-23 |
-
 Generated artifacts are checked in (consumers never need codegen to build). `just regen-wire-types` re-runs all three flows; CI fails if regenerated output differs from checked-in.
 
 Anything authored as a Rust struct, Python pydantic model, or TS interface that crosses a service boundary is a bug. Add the message to `proto/`, run `just regen-wire-types`, import from `*_/wire/generated/` (or `frontend/src/lib/wire/`).
@@ -150,8 +143,6 @@ Stack picks and per-service conventions live in each service's own `AGENTS.md`. 
 - **`frontend/`** (Next.js renderer): [frontend/AGENTS.md](frontend/AGENTS.md). Next.js 16+ App Router, Tailwind v4, shadcn/ui, oklch colors, generated wire types from `src/lib/wire/`.
 
 Cross-service stack table with versions and notes: [SPEC.md  System topology](SPEC.md#system-topology) and [README.md  Stack](README.md#stack).
-
-
 
 ### Ingestion invariants
 
