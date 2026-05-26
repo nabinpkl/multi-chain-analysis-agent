@@ -85,9 +85,9 @@ services:
       - KAFKA_BROKERS=redpanda:9092
       - KAFKA_TOPIC_RAW_EDGES=solana.raw-edges
       # Internal HTTP listener carrying /turn/* and /primitive/*. Bound
-      # inside the container only (NOT in `ports:` above) so the
-      # cloudflared tunnel and host-bound curl cannot reach it; the
-      # agent-service container talks to it via the docker compose
+      # inside the container only (NOT in `ports:` above) so host-bound
+      # curl and any externally-facing reverse proxy cannot reach it;
+      # the agent-service container talks to it via the docker compose
       # network as http://api:8004. See backend/src/api/mod.rs.
       - INTERNAL_PORT=8004
     depends_on:
@@ -304,8 +304,9 @@ services:
   #   - langfuse-clickhouse (CH-B) keeps its ports internal-only since
   #     only langfuse-web/worker need to reach it; CH-A on :8123/:9000
   #     stays the user-facing one
-  #   - all bound to 127.0.0.1 by default (the cloudflared tunnel,
-  #     when active, picks specific services to expose)
+  #   - all bound to 127.0.0.1 by default; expose individual services
+  #     via your own ingress (reverse proxy, ingress controller, etc.)
+  #     only if you actually want them browser-reachable.
   #
   # Bootstrap: on first boot, langfuse-web reads LANGFUSE_INIT_*
   # envvars and creates org + project + admin user + project API
@@ -475,11 +476,3 @@ services:
       LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL}
       LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME}
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
-
-  tunnel:
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    profiles: ["prod"]
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
-    command: tunnel --no-autoupdate run

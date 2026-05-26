@@ -410,5 +410,4 @@ End-to-end smoke (`just observability-smoke`):
   ClickStack (https://clickhouse.com/clickstack) for the unified
   pattern; Langfuse adoption signals (21k+ GitHub stars, named
   customers) for the specialized-platform pattern.
-- Implementation plan (kept for reference, not authoritative):
-  `/Users/nabin/.claude/plans/agent-observability.md`.
+

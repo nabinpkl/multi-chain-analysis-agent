@@ -13,11 +13,11 @@ use rmcp::transport::streamable_http_server::{
 use crate::mcp::McaeMcp;
 use crate::state::AppState;
 
-/// Public HTTP surface. Browser-reachable via the cloudflared tunnel.
-/// Only routes safe for unauthenticated external callers live here:
-/// liveness checks and the read-only graph stream + stats. Bound to
-/// the `PORT` env var (default 8002) and host-published in
-/// docker-compose.
+/// Public HTTP surface. Browser-reachable from whatever ingress sits
+/// in front of this listener. Only routes safe for unauthenticated
+/// external callers live here: liveness checks and the read-only
+/// graph stream + stats. Bound to the `PORT` env var (default 8002)
+/// and host-published in docker-compose.
 pub fn public_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health::health))

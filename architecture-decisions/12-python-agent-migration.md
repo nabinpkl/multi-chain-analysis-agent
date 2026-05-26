@@ -283,10 +283,6 @@ Per-phase verification ran during the migration:
   green. Manual probe through frontend confirms wire shape
   unchanged.
 
-The full plan and verification matrix lives in
-`/Users/nabin/.claude/plans/noble-orbiting-key.md` (kept for
-reference; not authoritative going forward).
-
 ## References
 
 - `docs/agent-design/01-agent-overview.md` (the document this ADR overrides D-1, D-2,

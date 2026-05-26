@@ -19,20 +19,24 @@ const instrumentSerif = Instrument_Serif({
   style: ["normal", "italic"],
 });
 
+// NEXT_PUBLIC_CANONICAL_URL is the public hostname this deploy is reached
+// at. When set, it becomes the <link rel="canonical"> target and the
+// og:url meta. When unset (the OSS default), both are omitted so the
+// repo does not ship a hard-coded personal domain. Set it per deploy.
+const CANONICAL_URL = process.env.NEXT_PUBLIC_CANONICAL_URL;
+
 export const metadata: Metadata = {
   title: "MultiChain Analysis Agent: LLM Analyst Over a Live Solana Graph",
   description:
     "An LLM agent that answers questions about wallet behavior on Solana mainnet, grounded in a real-time on-chain graph. Layered output verification, ablation switches, two-runtime parity, open and inspectable.",
   robots: "index, follow",
-  alternates: {
-    canonical: "https://chain.nabin.org/",
-  },
+  ...(CANONICAL_URL ? { alternates: { canonical: CANONICAL_URL } } : {}),
   openGraph: {
     title: "MultiChain Analysis Agent: LLM Analyst Over a Live Solana Graph",
     description:
       "Ask questions about live on-chain wallet behavior. The agent uses a fixed set of typed primitives, every claim is structurally verified before it reaches the wire.",
     type: "website",
-    url: "https://chain.nabin.org/",
+    ...(CANONICAL_URL ? { url: CANONICAL_URL } : {}),
   },
   icons: {
     icon: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='80' fill='%23050505'/%3E%3Ctext x='105' y='340' font-family='sans-serif' font-weight='700' font-size='280' fill='%2300ff41' letter-spacing='-15'%3E%26gt;_%3C/text%3E%3Ccircle cx='385' cy='375' r='20' fill='%2300ff41'/%3E%3C/svg%3E",

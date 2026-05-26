@@ -50,7 +50,7 @@ Will not be built. These are not "later" items; they are out of project scope by
 - **A replacement for Helius, Solscan, or Solana Beach.** This is a graph-and-agent demo, not an explorer or an indexer-as-a-service.
 - **A trading tool or signal generator.** No buy/sell recommendations, no MEV analysis, no on-chain writes.
 - **A financial-advice surface.** Narrative claims describe observed graph state. They are not opinions about value or risk.
-- **A multi-tenant SaaS.** No auth, no accounts, no tenancy isolation. The deployment is one VM, one process, anonymous visitors.
+- **A multi-tenant SaaS.** No auth, no accounts, no tenancy isolation. The deployment unit is one host running `docker compose`; whoever can reach the agent endpoint can use it.
 - **A production-grade ops target.** No horizontal scaling, no disaster recovery, no on-call rotation. The single-VM constraint is the point.
 
 ## Users

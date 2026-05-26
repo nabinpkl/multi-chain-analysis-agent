@@ -1,7 +1,6 @@
 # Runtime-parity hermetic eval. Two cases share one fixture and one
 # switch envelope; the only variable is the runtime enum. Phase 0 of
-# the codex / pydantic-ai alignment work (see plan in
-# `/Users/nabin/.claude/plans/make-full-plan-rustling-bonbon.md`).
+# the codex / pydantic-ai alignment work
 #
 # Pre-alignment state (HEAD as of this case landing):
 #

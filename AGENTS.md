@@ -130,30 +130,15 @@ This is an agent-design exercise. The blockchain is chosen as the substrate beca
 
 Listen txs from multiple chain, normalize, link each tx to data, build graph, serve graph.
 
-## `frontend/` stack
+## Per-service stack rules
 
-- **Framework:** Next.js 16+, App Router, TypeScript, `src/` directory, `@/*` alias
-- **Package manager:** pnpm
-- **Styling:** Tailwind CSS v4 (CSS-first via `@tailwindcss/postcss`)
-- **UI components:** shadcn/ui  all components installed in `src/components/ui/`
-- **State:** Zustand v5 (client), TanStack Query v5 (server)
-- **Animation:** motion v12 (`motion/react`)
-- Color: All colors oklch, no # based (convert if needed).
+Stack picks and per-service conventions live in each service's own `AGENTS.md`. When working in one of these subtrees, that file is what to read first:
 
+- **`backend/`** (Rust data plane): [backend/AGENTS.md](backend/AGENTS.md). Axum + Tokio, ingestion invariants, the `INTERNAL_PORT=8004` trust boundary, MCP host allowlist.
+- **`agent-service/`** (Python agent plane, the load-bearing part): [agent-service/AGENTS.md](agent-service/AGENTS.md). Python 3.14 + uv, the two-runtime parity contract, the output-gate discipline, eval-judge family-leakage guard, ClickHouse parameterization, codex subprocess hygiene.
+- **`frontend/`** (Next.js renderer): [frontend/AGENTS.md](frontend/AGENTS.md). Next.js 16+ App Router, Tailwind v4, shadcn/ui, oklch colors, generated wire types from `src/lib/wire/`.
 
-## Backend Rust Service Architecture
-
-### Decision: Axum
-Axum 0.8.x = 2026 default. Built on Tokio, via Tower middleware for connection hygiene. Same runtime for batch (tokio::io file streaming) + serving. Single binary, single process.
-
-### Core Crate Stack
-#### All latest
-tokio
-axum
-tower
-serde
-serde_json
-rustc-hash         # FxHashSet  faster than std HashMap
+Cross-service stack table with versions and notes: [SPEC.md  System topology](SPEC.md#system-topology) and [README.md  Stack](README.md#stack).
 
 
 

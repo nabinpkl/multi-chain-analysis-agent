@@ -31,10 +31,10 @@ For the long version, see [SPEC.md](SPEC.md) and the per-subsystem docs in [docs
 | Layer | Choice | Notes |
 |---|---|---|
 | Ingest + graph + HTTP | Rust + axum 0.8 + tokio | Single binary, single process. Tower middleware for connection hygiene. |
-| Stream bus | Redpanda | Kafka wire-compatible, lighter to run on a 24GB VM. |
+| Stream bus | Redpanda | Kafka wire-compatible, single binary, no JVM, no ZooKeeper. |
 | Warehouse | ClickHouse | `ReplacingMergeTree(version)` on edges so re-fetching a slot is idempotent. |
 | Agent plane | Python 3.14 + pydantic-ai + FastAPI | Two runtimes (pydantic-ai over HTTP, codex over MCP), parity-checked. |
-| Frontend | Next.js 16 + Tailwind v4 + shadcn/ui + Zustand | Pages on Vercel, talks to the VM over a Cloudflare tunnel. |
+| Frontend | Next.js 16 + Tailwind v4 + shadcn/ui + Zustand | Talks to the agent-service over HTTP/SSE. Deployable anywhere static-Next.js + a public agent-service URL can coexist. |
 | Wire types | Protobuf via `buf` | Single source of truth; codegen to Rust + Python + TypeScript. |
 | Observability | OpenTelemetry + Langfuse v3 | OTel collector sidecar; Langfuse self-hosted for trace UX. |
 
@@ -115,7 +115,7 @@ Not a product. There is no auth, no multi-tenancy, no SLA. The agent's runtime s
 
 Not a complete defense story. Each `securing-agents/` chapter ends with a residuals section naming what is not covered. The "Known Limitations" section of [AGENTS.md](AGENTS.md) lists the data-layer gaps that have not been closed.
 
-Not production-grade ops. Single VM, no horizontal scaling, no real disaster recovery. The free-tier deploy is intentional: the constraint forces a clean small system instead of an over-engineered small system.
+Not production-grade ops. The stack is `docker compose up` on one host; there is no horizontal scaling, no leader election, no real disaster recovery story. The single-host constraint is intentional: it keeps the system small and clean instead of forcing premature distributed-systems complexity.
 
 See [PRD.md](PRD.md) for the full in-scope / out-of-scope / non-goals breakdown.
 

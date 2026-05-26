@@ -8,15 +8,8 @@ so the choice of harness is one knob with all-or-nothing semantics.
 
 ## Status
 
-Accepted, 2026-05-13. Shipped across commits `8499a1a` (lock agent
-to MCP tools, codex-agent-driver 0.2.0 with builtin disable map),
-`d9d1f8b` (built-in tool lockdown span synthesis), `ff97932` (driver
-0.3.0 with `outputSchema` forwarding + smoke), `6bb1e4a`
-(`to_strict_json_schema` strict-mode walker), `a4be095`
-(`runtime_call` helper, `mcae-helper` codex profile, eval judge
-migration), `7b07998` (constitution gate migration), `026cada`
-(repeat detector migration). Sister-repo commit `8eee7e6a` on
-`/Users/nabin/projects/second-brain/packages/codex-agent-driver`.
+Accepted, 2026-05-13.
+
 
 ## Problem
 
@@ -68,7 +61,6 @@ Three coordinated commitments.
 ### 1. Codex is a parallel runtime, not a provider behind Pydantic AI
 
 Codex runs as a subprocess via the `codex-agent-driver` package
-(`/Users/nabin/projects/second-brain/packages/codex-agent-driver`,
 pinned to 0.3.0 in `agent-service/uv.lock`). The driver speaks
 codex's app-server JSON-RPC over stdio and maintains a session pool
 that reuses subprocesses across thread resumes. Per-thread state

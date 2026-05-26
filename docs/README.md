@@ -1,6 +1,12 @@
 # docs
 
-The repo's documentation. Two top-level files, five folders.
+Long-form documentation. The root-level docs are the higher-priority entry points; this folder is the per-subsystem deep dives behind them.
+
+Before this folder, read at the repo root:
+
+- [../PRD.md](../PRD.md). What this project is, what it is not, and what is in scope right now.
+- [../SPEC.md](../SPEC.md). How it is built: contracts, invariants, source-of-truth pointers.
+- [../AGENTS.md](../AGENTS.md). Repo rules; read before opening a PR.
 
 This folder grew by accretion. The boundaries between learnings, research, and engineering posts were blurry, and the "Why X" decision docs ended up sitting with the engineering posts instead of with the architecture they were actually deciding. The current layout is the cleanup pass: pattern notes and external reading merged into one `references/` folder, blog-style posts in `engineering-blogs/`, and the "Why X" decision docs moved to `architecture/` where they belong.
 
@@ -35,9 +41,11 @@ LinkedIn-style engineering posts written from the build. How I use the Governor 
 
 If you are reading the codebase for the first time, the order that makes sense:
 
-1. [../AGENTS.md](../AGENTS.md) for repo-wide rules and project intent.
-2. [agent-design/00-build-order.md](agent-design/00-build-order.md) for the ship-by-ship narrative.
-3. [agent-design/01-agent-overview.md](agent-design/01-agent-overview.md) for the agent's place in the system.
-4. Whichever folder matches what you are touching.
+1. [../PRD.md](../PRD.md) for what this project is and is not.
+2. [../SPEC.md](../SPEC.md) for the technical contracts and invariants.
+3. [../AGENTS.md](../AGENTS.md) for repo-wide rules.
+4. [agent-design/00-build-order.md](agent-design/00-build-order.md) for the ship-by-ship narrative with retros.
+5. [agent-design/01-agent-overview.md](agent-design/01-agent-overview.md) for the agent's place in the system.
+6. Whichever folder matches what you are touching.
 
 If you are reading to understand a specific security concern, jump straight to [securing-agents/00-overview.md](securing-agents/00-overview.md).

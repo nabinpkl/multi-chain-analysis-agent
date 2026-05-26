@@ -62,7 +62,7 @@ For "what it is and is not", see [PRD.md](PRD.md). For repo rules, see [AGENTS.m
            otel-collector :4318 -> ClickHouse (otel DB) + Langfuse (host :3001)
 ```
 
-Two services, two processes, one VM. The Rust process owns ingest, the graph, the wire surface to the browser, and the typed primitives the agent calls. The Python service owns the agent loop (pydantic-ai or codex), the output gate, and the SSE stream to the browser.
+Two services, two processes, one host. The Rust process owns ingest, the graph, the wire surface to the browser, and the typed primitives the agent calls. The Python service owns the agent loop (pydantic-ai or codex), the output gate, and the SSE stream to the browser. The stack runs end-to-end via `docker compose up`; nothing in the application code is tied to a specific cloud or ingress.
 
 Service split rationale: ADR [12-python-agent-migration](architecture-decisions/12-python-agent-migration.md).
 
@@ -81,7 +81,7 @@ Service split rationale: ADR [12-python-agent-migration](architecture-decisions/
 | 8123 / 9000 | clickhouse | host | CH-A: HTTP / native; CH-B (langfuse) is intra-network only |
 | 9092 | redpanda | host | Kafka wire-compatible broker |
 
-The `INTERNAL_PORT=8004` listener is the trust boundary. It carries the agent's data-plane calls and is reachable only from the docker compose network (and an `MCP_ALLOWED_HOSTS` allowlist for the `/mcp` route). It is never published to the cloudflared tunnel. See `.env.example` and `backend/src/api/mod.rs::internal_router`.
+The `INTERNAL_PORT=8004` listener is the trust boundary. It carries the agent's data-plane calls and is reachable only from the docker compose network (and an `MCP_ALLOWED_HOSTS` allowlist for the `/mcp` route). It is never bound to the host and must not be put behind an externally-facing reverse proxy or ingress. See `.env.example` and `backend/src/api/mod.rs::internal_router`.
 
 ## Wire contracts
 
@@ -181,7 +181,7 @@ These 14 invariants are the contract the ingester must satisfy. AGENTS.md previo
 
 **8. Frontend-to-backend type contract.** No hand-typed wire types between Rust and TS. Single proto source, codegen via `just regen-wire-types`. See [Wire contracts](#wire-contracts). Anything hand-typed is a bug.
 
-**9. Config via env vars, not files.** All secrets (RPC key, ClickHouse password, OTel basic auth) from env. `.env` is gitignored; `.env.example` is committed. Oracle VM + Vercel = config in two places; env vars are the lingua franca.
+**9. Config via env vars, not files.** All secrets (RPC key, ClickHouse password, OTel basic auth) from env. `.env` is gitignored; `.env.example` is committed. Container orchestrators, secret managers, and local `.env` files all speak env vars; using anything else for configuration would tie the deploy to one specific host topology.
 
 **10. Backpressure boundary between fetch and write.** Bounded `tokio::sync::mpsc::channel(100)` between RPC fetcher and DB writer. If the writer slows, the fetcher blocks on send, ingestion slows, the rate-limit envelope is respected. Unbounded channels under DB stall = OOM.
 
@@ -193,7 +193,7 @@ These 14 invariants are the contract the ingester must satisfy. AGENTS.md previo
 
 **14. Backpressure on the SSE delta stream.** The graph-engine SSE stream uses bounded broadcast channels per client; a slow consumer is dropped rather than allowed to back up the broadcaster. See ADR [04-differential-rendering](architecture-decisions/04-differential-rendering.md).
 
-What is explicitly NOT a v0 concern: auth, multi-tenancy, horizontal scaling, distributed tracing, real-time WebSocket push to the frontend (SSE is fine), a caching layer (ClickHouse is fast enough), microservices, Kubernetes. Each is a real tool; adding any of them now signals over-engineered small project, not executed cleanly on focused one.
+For the full list of what is explicitly not a v0 concern (auth, multi-tenancy, horizontal scaling, etc.), see [PRD.md  Out of scope today](PRD.md#out-of-scope-today) and [PRD.md  Non-goals](PRD.md#non-goals-permanent). The PRD is the canonical scope document; SPEC notes the invariants the in-scope work has to satisfy.
 
 ## Graph engine
 
@@ -296,7 +296,6 @@ Copy `.env.example` to `.env` and fill in. The keys break into groups:
 - **ClickHouse:** `CLICKHOUSE_URL`, `CLICKHOUSE_DB`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`.
 - **Solana RPC:** `SOLANA_RPC_URL`, `RPC_INGESTER_MIN_INTERVAL_MS`, `RPC_PRIMITIVE_MIN_INTERVAL_MS`, `INGEST_BATCH_SIZE`, `INGEST_FLUSH_SECS`, `METADATA_CACHE_TTL_SLOTS`.
 - **MCP:** `MCP_ALLOWED_HOSTS` (Host-header allowlist for the internal `/mcp` route, default `localhost,127.0.0.1,::1,api`).
-- **Cloudflare tunnel:** `CLOUDFLARE_TUNNEL_TOKEN` (production only, profile `prod`).
 - **Agent:** `AGENT_DEFAULT_PROVIDER`, `AGENT_DEFAULT_RUNTIME`, `AGENT_PRIMARY_MODEL`, `AGENT_POLICY_MODEL`, `EVAL_JUDGE_MODEL`, `EVAL_ALLOW_SHARED_FAMILY`, `AGENT_TURN_TOOL_CALL_BUDGET`, `CODEX_PRIMARY_MODEL`, `CODEX_REASONING_EFFORT`, `AGENT_API_KEY` (OpenRouter), `GEMINI_API_KEY`, `LOCAL_LLM_BASE_URL`.
 - **Langfuse:** `LANGFUSE_VERSION`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, `SALT`, `ENCRYPTION_KEY`, `LANGFUSE_CLICKHOUSE_PASSWORD`, `LANGFUSE_POSTGRES_PASSWORD`, `LANGFUSE_REDIS_AUTH`, `LANGFUSE_MINIO_ROOT_USER`, `LANGFUSE_MINIO_ROOT_PASSWORD`, `LANGFUSE_INIT_*`, `LANGFUSE_OTEL_AUTH_BASIC`.
 
@@ -304,9 +303,8 @@ Copy `.env.example` to `.env` and fill in. The keys break into groups:
 
 ### Compose profiles
 
-- **Default:** `redpanda`, `clickhouse`, `state-reset`, `api`, `agent-service`, `otel-collector`, `langfuse-*`.
+- **Default:** `redpanda`, `clickhouse`, `state-reset`, `api`, `agent-service`, `otel-collector`, `langfuse-*`. This is the full stack; bring your own ingress in front of it if you want browser-reachable from outside the host.
 - **`eval` profile:** adds `eval-mock` (host :8005) and `agent-service-eval` (host :8013, same image as `agent-service` but pointed at the mock data plane).
-- **`prod` profile:** adds `cloudflared` tunnel.
 
 ### Startup order
 

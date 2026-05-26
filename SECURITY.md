@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Email **nabin6246@gmail.com** with the subject line `SECURITY: multi-chain-analysis-agent`. Please do not open a public GitHub issue for vulnerability reports.
+Email **contact@nabin.org** with the subject line `SECURITY: multi-chain-analysis-agent`. Please do not open a public GitHub issue for vulnerability reports.
 
 Best-effort response within 7 days. This is a solo-maintained open-source project, not a funded program, so expect best-effort timelines rather than SLAs.
 
@@ -33,7 +33,7 @@ A working proof-of-concept eval case (hermetic, under `evals/cases-hermetic/`) i
 
 These are explicitly out of scope. Reports about them will be closed without action.
 
-- **The public demo VM at chain.nabin.org.** It is a single Oracle Free Tier VM behind Cloudflare, with no SLA. DDoS, surface enumeration, and port scanning against it are not interesting; please do not test there.
+- **Any public demo instance.** Hosted demos of this codebase are best-effort with no SLA. Please test against your own deploy, not someone else's. DDoS, surface enumeration, and port scanning against a public instance are not interesting and not authorized.
 - **Authentication, multi-tenancy, RBAC.** None of these exist by design (see [PRD.md](PRD.md)). "There is no auth" is not a vulnerability.
 - **Anonymous-visitor switch toggling.** Switches are reachable from any client on purpose so a visitor can flip a defense off and watch what regresses. This is the intended demo behavior.
 - **Generic dependency-CVE noise** (Dependabot-style "version X.Y.Z has CVE-NNNN"). Open a regular PR or issue with a clear exploitation path against this project specifically.

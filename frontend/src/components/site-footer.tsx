@@ -2,7 +2,14 @@ import { ExternalLink } from "lucide-react";
 
 const REPO_URL = "https://github.com/nabinpkl/multi-chain-analysis-agent";
 const ISSUES_URL = `${REPO_URL}/issues`;
-const LINKEDIN_URL = "https://linkedin.com/in/nabin-pokhrel";
+
+// Author attribution. Both unset by default so a fork does not ship
+// the upstream author's name. Set both to render a "Built by <name>"
+// link in the footer. URL detection: linkedin.com gets the LinkedIn
+// icon, anything else gets the generic external-link icon.
+const BUILT_BY_NAME = process.env.NEXT_PUBLIC_BUILT_BY_NAME;
+const BUILT_BY_URL = process.env.NEXT_PUBLIC_BUILT_BY_URL;
+const builtByIsLinkedIn = BUILT_BY_URL?.includes("linkedin.com") ?? false;
 
 function LinkedInIcon({ className }: { className?: string }) {
   return (
@@ -50,7 +57,8 @@ export function SiteFooter() {
             edges into the graph store.
           </p>
           <p>
-            Runs on one Oracle free-tier VM behind Cloudflare.
+            The full stack runs end-to-end via{" "}
+            <code className="text-mca-text">docker compose up</code>.
             <em className="not-italic text-mca-text"> Best effort, not a block explorer.</em>
           </p>
         </div>
@@ -102,15 +110,21 @@ export function SiteFooter() {
         <div className="max-w-[1200px] mx-auto px-6 py-4 flex flex-wrap items-center justify-between gap-3 text-[0.78rem] uppercase tracking-[2px]">
           <span>© MultiChain Analysis Agent. Open source. Not financial advice.</span>
           <div className="flex items-center gap-5">
-            <a
-              href={LINKEDIN_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1.5 hover:text-mca-accent transition-colors"
-            >
-              <LinkedInIcon className="w-3 h-3" />
-              Built by Nabin Pokhrel
-            </a>
+            {BUILT_BY_NAME && BUILT_BY_URL && (
+              <a
+                href={BUILT_BY_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 hover:text-mca-accent transition-colors"
+              >
+                {builtByIsLinkedIn ? (
+                  <LinkedInIcon className="w-3 h-3" />
+                ) : (
+                  <ExternalLink size={11} />
+                )}
+                Built by {BUILT_BY_NAME}
+              </a>
+            )}
             <a
               href={REPO_URL}
               target="_blank"

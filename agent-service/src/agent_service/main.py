@@ -640,11 +640,12 @@ async def agent_turn(request: Request) -> EventSourceResponse:
             if handles.active_turns.get(thread_id) is task:
                 handles.active_turns.pop(thread_id, None)
 
-    # Critical SSE headers: nginx / cloudflared / browsers won't buffer
-    # if these are set. `X-Mca-Thread-Id` lets the frontend learn the
-    # server-minted thread_id when the client posted with no id, so
-    # it can persist to localStorage without parsing a synthetic
-    # bootstrap event off the stream.
+    # Critical SSE headers: most reverse proxies (nginx, etc.) and
+    # browsers won't buffer the response when these are set, which is
+    # what we want for an event stream. `X-Mca-Thread-Id` lets the
+    # frontend learn the server-minted thread_id when the client
+    # posted with no id, so it can persist to localStorage without
+    # parsing a synthetic bootstrap event off the stream.
     headers = {
         "Cache-Control": "no-cache",
         "X-Accel-Buffering": "no",

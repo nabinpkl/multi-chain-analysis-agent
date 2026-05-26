@@ -5,10 +5,10 @@ use std::time::Duration;
 pub struct Config {
     pub port: u16,
     /// Internal HTTP listener port. Carries `/turn/*` and
-    /// `/primitive/*` routes. NOT exposed to the host or the
-    /// cloudflared tunnel; only reachable from sibling containers on
-    /// the docker compose network. The agent-service container is
-    /// the sole intended caller.
+    /// `/primitive/*` routes. NOT exposed to the host and must not be
+    /// put behind any externally-facing reverse proxy or ingress; only
+    /// reachable from sibling containers on the docker compose
+    /// network. The agent-service container is the sole intended caller.
     pub internal_port: u16,
     pub cors_origin: String,
     pub clickhouse_url: String,

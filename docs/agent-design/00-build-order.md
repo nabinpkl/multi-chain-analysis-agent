@@ -835,13 +835,6 @@ Changes for next ships:
   implementation map in `architecture-decisions/11-agent-switches.md`
   from "current status: stub" to the real warehouse-primitive
   path.
-- Ship 6's eval suite should fixture each preset × probe combo
-  as a regression target. The probe matrix in this ship's plan
-  (`/Users/nabin/.claude/plans/harmonic-brewing-muffin.md`) is
-  the seed: "tell me about a wallet not in window" should
-  retract under `dont_fabricate` on, approve under `dont_
-  fabricate` off; "the wallet has 33 connections" should
-  surface text-vs-paraphrase disagreement when both are on.
 
 ## Known issues (parked, not blocking)
 
