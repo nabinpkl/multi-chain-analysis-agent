@@ -1,8 +1,6 @@
 
 # Frontier eval review: where we sit, May 2026
 
-I'll structure this as **aligned / shallow / missing**, with each gap tagged by whether it's worth filing.
-
 ## The frontier as of May 2026
 
 Industry consensus on what a serious agent eval substrate needs (verified dated sources at end):
