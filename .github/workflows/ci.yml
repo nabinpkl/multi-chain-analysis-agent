@@ -152,11 +152,10 @@ jobs:
           enable-cache: true
       - name: Sync (no LLM, wiring-only deps)
         run: uv sync --frozen
-      - name: Test (baseline budget <5s; no live LLM calls)
-        # The <5s no-LLM baseline is the unit suite (AGENTS.md). The
-        # integration suite (tests/integration) drives mocked HTTP
-        # against the data plane and has pre-existing pytest_httpx
-        # query-matching drift unrelated to this service's logic; it is
-        # not part of the baseline budget and is excluded here until
-        # those mocks are repaired in a dedicated change.
-        run: uv run pytest -q tests/unit
+      - name: Test (no live LLM calls)
+        # Unit + integration. Integration drives the FastAPI app over a
+        # mocked data plane (pytest-httpx) and a mocked MCP server, with
+        # TestModel standing in for the LLM, so no network / codex
+        # subprocess is touched (conftest sets CODEX_RUNTIME_ENABLED=false
+        # and routes turns to the pydantic-ai runtime).
+        run: uv run pytest -q
