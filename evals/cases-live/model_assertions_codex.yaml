@@ -11,11 +11,16 @@
 #   - codex CLI ignored the requested model and routed against its
 #     own default.
 #
-# The constitution agent runs server-side via pydantic-ai regardless
-# of primary runtime, so the policy-model assertion (env-driven via
-# `AGENT_POLICY_MODEL`) still applies on a codex turn the same way
-# it does on a pydantic turn  the constitution agent fires inside
-# the codex turn, just routed through pydantic-ai.
+# Under `AGENT_DEFAULT_RUNTIME=codex` the two-mode substrate (ADR 15)
+# routes EVERY helper LLM call  constitution gate, eval judge, repeat
+# detector  through codex, not pydantic-ai/Gemini. So a codex turn
+# makes no `AGENT_POLICY_MODEL` (Gemini) call, and there is no
+# `gen_ai.request.model` span for the policy gate to assert against
+# (the codex helper app-server emits the `mcae.gate.*` domain spans
+# but no `chat <model>` generation span). The policy gate is therefore
+# asserted functionally here  that it fired on the codex turn  not
+# by model id. Primary-model rotation is still caught by
+# `codex-primary-model-used` above.
 #
 # Lives outside the day-to-day smoke suites for the same reason as
 # `model_assertions_pydantic.yaml`: runtime-pinned cases pollute
@@ -43,16 +48,17 @@
       kind: llm_call_used_model
       model_env: CODEX_PRIMARY_MODEL
 
-    # Reads `AGENT_POLICY_MODEL` env at validator time. The constitution
-    # agent runs server-side via pydantic-ai regardless of primary
-    # runtime, so its model is governed by the same env var as the
-    # pydantic-ai suite. Hardcoding the model name here re-introduces
-    # the rotation trap this file was written to surface; resolve via
-    # env so a configured swap is what trips the probe, not the
-    # probe itself.
-    - probe_id: policy-model-used
-      kind: llm_call_used_model
-      model_env: AGENT_POLICY_MODEL
+    # Policy gate participates in the codex turn. Under codex runtime
+    # the constitution judge runs via the codex helper app-server
+    # (CODEX_HELPER_MODEL), which emits this domain span but no
+    # `gen_ai.request.model` generation span  so we assert the gate
+    # fired, not the model it used. `defendConstitutionJudge` is on in
+    # the switches above, so the narrative-constitution span must be
+    # present; its absence means the policy gate was skipped on a codex
+    # turn, which is the regression this probe guards.
+    - probe_id: constitution-gate-fired
+      kind: has_matching_span
+      span_name: mcae.gate.narrative_constitution
 
     - probe_id: no-error-on-turn-root
       kind: no_span_with_status

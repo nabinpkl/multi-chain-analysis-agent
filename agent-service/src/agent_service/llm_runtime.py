@@ -5,11 +5,17 @@ When the agent runs under the codex runtime, helper LLM calls
 same codex auth path so we don't mix subscription auth with
 OpenRouter / Gemini API keys in one run. `runtime_call` is the single
 entry point those helpers go through: it dispatches between codex
-(via `codex-agent-driver` against a dedicated `mcae-helper` profile)
-and pydantic-ai (the existing free-tier provider plumbing in
+(via the `openai-codex` SDK on a dedicated helper app-server) and
+pydantic-ai (the existing free-tier provider plumbing in
 `agent_service.llm`) based on the `AGENT_DEFAULT_RUNTIME` env var.
 
-The codex path uses codex's `outputSchema` so the final assistant
+The helper app-server is separate from the analyst app-server in
+`main.py` (its own `AsyncCodex` + `CODEX_HOME`), mirroring the old
+`mcae-helper` profile separation: helper threads mount no MCP server
+and are ephemeral, so analyst MCP traffic never bleeds into a helper
+call.
+
+The codex path uses codex's `output_schema` so the final assistant
 message is server-enforced JSON. The pydantic-ai path keeps today's
 text-completion + manual-parse shape (we deliberately stay off
 pydantic-ai's tool-calling output mode because many free-tier
@@ -31,16 +37,12 @@ from pathlib import Path
 from typing import Any, Literal, TypeVar
 
 import structlog
-from codex_agent_driver import (
-    CodexAppServerDriver,
-    CodexRunEventType,
-    CodexRunRequest,
-)
+from openai_codex import AsyncCodex, Sandbox
 from pydantic import BaseModel, ValidationError
 from pydantic_ai import Agent
 
 from agent_service import llm
-from agent_service.codex_profile import build_codex_helper_profile
+from agent_service.codex_config import build_codex_config, helper_thread_config
 from agent_service.llm_retry import with_provider_retry
 
 log = structlog.get_logger(__name__)
@@ -106,37 +108,39 @@ def resolve_helper_runtime() -> Runtime:
     return "codex"
 
 
-# Module-level driver cache. The helper profile is identical across
-# every helper call so one driver instance serves them all; codex's
-# session pool reuses the underlying subprocess across requests with
-# matching actor_id + cwd + codex_home. First call pays the spawn
-# cost; subsequent calls within the process amortize it.
-_helper_driver: CodexAppServerDriver | None = None
+# Module-level helper app-server cache. One `AsyncCodex` serves every
+# helper call in the process; native ephemeral threads keep codex's
+# sqlite session store empty. First call pays the app-server spawn
+# cost; subsequent calls reuse the same process. The helper CODEX_HOME
+# is distinct from the analyst app-server's so the two codex processes
+# never contend on one sqlite.
+_helper_codex: AsyncCodex | None = None
+_helper_codex_lock = asyncio.Lock()
 
 
-def _get_helper_driver() -> CodexAppServerDriver:
-    global _helper_driver
-    if _helper_driver is None:
-        cwd = Path.cwd()
-        codex_home_root = Path(
-            os.environ.get("CODEX_HOME_ROOT", "./codex_homes")
-        )
-        codex_home_root.mkdir(parents=True, exist_ok=True)
-        profile = build_codex_helper_profile(cwd=cwd)
-        _helper_driver = CodexAppServerDriver(
-            profile=profile,
-            codex_home_root=codex_home_root,
-        )
-    return _helper_driver
+async def _get_helper_codex() -> AsyncCodex:
+    global _helper_codex
+    if _helper_codex is None:
+        async with _helper_codex_lock:
+            if _helper_codex is None:
+                codex_home = Path(
+                    os.environ.get(
+                        "CODEX_HELPER_HOME", "./.cache/codex_helper_home"
+                    )
+                )
+                codex = AsyncCodex(build_codex_config(codex_home=codex_home))
+                await codex.__aenter__()
+                _helper_codex = codex
+    return _helper_codex
 
 
 def reset_helper_driver_for_testing() -> None:
-    """Drop the cached driver. Tests that monkeypatch env between
-    cases call this to force a fresh driver on the next runtime_call."""
-    global _helper_driver
-    if _helper_driver is not None:
-        _helper_driver.close()
-    _helper_driver = None
+    """Drop the cached helper app-server. Tests that monkeypatch env
+    between cases call this to force a fresh one on the next
+    runtime_call. Tests stub `_codex_runtime_call`, so no real
+    subprocess exists to close here; the reference is simply cleared."""
+    global _helper_codex
+    _helper_codex = None
 
 
 _DECODER = json.JSONDecoder()
@@ -248,32 +252,23 @@ async def _codex_runtime_call(
     output_model: type[T],
     model_id: str | None,
 ) -> tuple[T, str]:
-    driver = _get_helper_driver()
+    codex = await _get_helper_codex()
     schema = to_strict_json_schema(output_model.model_json_schema())
     model = (
         model_id
         or (os.environ.get("CODEX_HELPER_MODEL", "").strip() or None)
     )
-    request = CodexRunRequest(
-        prompt=user_prompt,
-        actor_id="helper",
+    thread = await codex.thread_start(
+        sandbox=Sandbox.read_only,
         developer_instructions=system_prompt,
+        config=helper_thread_config(),
         ephemeral=True,
-        output_schema=schema,
         model=model,
     )
-
-    def _drain() -> str:
-        final_text: str | None = None
-        for event in driver.stream(request):
-            if event.type is CodexRunEventType.MESSAGE_COMPLETED:
-                final_text = event.final_text or ""
-                break
-        if final_text is None:
-            raise RuntimeError("codex stream ended without MESSAGE_COMPLETED")
-        return final_text
-
-    raw_text = await asyncio.to_thread(_drain)
+    result = await thread.run(user_prompt, output_schema=schema)
+    raw_text = result.final_response or ""
+    if not raw_text:
+        raise RuntimeError("codex turn returned no final message")
     instance = _parse_strict(raw_text, output_model)
     return instance, raw_text
 

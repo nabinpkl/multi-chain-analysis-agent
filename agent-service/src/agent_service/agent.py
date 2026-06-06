@@ -172,9 +172,9 @@ class AgentDeps:
 
 def _mcp_server_url() -> str:
     """Resolve the MCP endpoint URL from env. Matches the codex
-    profile convention at `codex_profile.py:79`; default works for
-    the docker compose internal network where the Rust container is
-    addressable as `api`."""
+    analyst overlay in `codex_config.analyst_thread_config`; default
+    works for the docker compose internal network where the Rust
+    container is addressable as `api`."""
     base = os.environ.get("DATA_PLANE_URL", "http://api:8004").rstrip("/")
     return f"{base}/mcp"
 

@@ -7,12 +7,14 @@ Architecture:
 * Background async task draining `GET /turn/{snapshot_id}/claims`.
   Each `data: {<claim>}` line is buffered for replay through the
   existing gate stack after the codex stream finishes.
-* Codex runs in a worker thread via `asyncio.to_thread`; the
-  `CodexAppServerDriver` exposes a SYNC iterator that would block
-  the event loop otherwise. We collect TEXT_DELTA / TOOL_STARTED /
-  MESSAGE_COMPLETED events synchronously inside the thread and
-  return the aggregated result. Per-tool Progress frames in real
-  time are chunk 3.5; this MVP emits one Progress at the start.
+* Codex runs through the shared `AsyncCodex` app-server
+  (`handles.codex`). Each chat thread is one native codex thread:
+  we `thread_resume` the stored id or `thread_start` a fresh one,
+  then drive a turn via `thread.turn(...)` and consume
+  `turn_handle.stream()` with `async for`. Notifications are parsed
+  by `agent_service.codex_events` into the `CodexRunEvent` shape the
+  loop below dispatches on. No worker thread / queue bridge: the SDK
+  stream is natively async.
 * When codex returns, we close the snapshot lease so the drain
   socket sees EOF and exits cleanly. Each drained claim is parsed
   to `EmitClaimInput`, built into a `claim_pb2.Claim`, run through
@@ -45,22 +47,25 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import sqlite3
 import time
 from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import Any
 
 import httpx
 import structlog
-from codex_agent_driver import (
-    CodexAppServerDriver,
-    CodexRunContextItem,
-    CodexRunEventType,
-    CodexRunRequest,
-)
+from openai_codex import Sandbox, TextInput
+from openai_codex.types import ReasoningEffort
 from opentelemetry import trace
 from pydantic import ValidationError
+
+from agent_service.codex_config import analyst_thread_config
+from agent_service.codex_events import (
+    CodexRunEventType,
+    event_from_notification,
+    notification_to_raw,
+    turn_error,
+    turn_status,
+)
 
 from agent_service import spans
 from agent_service.agent import EmitClaimInput
@@ -86,10 +91,8 @@ from agent_service.prompts.composer import (
     compose_system_prompt,
     drops_from_switches,
 )
-from multichain.wire.shared.v1 import provenance_pb2
 from agent_service.thread_state import AgentThread, NarrativeSnapshot
 from multichain.wire.agent.v1 import (
-    claim_pb2,
     narrative_pb2,
     session_pb2,
     sse_pb2,
@@ -337,87 +340,17 @@ def _record_tool_output_binding(
     thread.bindings.record(binding)
 
 
-def _read_codex_model(
-    *,
-    codex_home_root: Path | None,
-    thread_id: str,
-    provider_thread_id: str,
-) -> str | None:
-    """Read the model name codex actually used for this thread from
-    its sqlite. Codex persists `(id, model, model_provider, ...)`
-    rows in `state_5.sqlite::threads` keyed by the codex-side
-    provider_thread_id; we recover that id from the
-    `MESSAGE_COMPLETED` event chain and look it up here so the
-    `gen_ai.request.model` attribute we stamp on the turn span
-    matches the actual model codex routed against (e.g. `gpt-5.5`
-    vs the developer-instruction text claiming `gpt-5-codex`).
-
-    All errors collapse to `None`. The caller stamps tokens
-    without a model when this returns None; Langfuse then shows
-    usage but no auto-cost. This is the soft-fail path  one
-    sqlite read out of band shouldn't be able to break a turn.
-
-    Codex runs its sqlite in WAL mode, so this read does not
-    block while codex holds the same db open from its subprocess
-    side. Read-only `mode=ro` is belt-and-suspenders to make that
-    contract explicit.
-    """
-    if codex_home_root is None or not provider_thread_id:
-        return None
-    db_path = (
-        Path(codex_home_root)
-        / "local"
-        / thread_id
-        / "sqlite"
-        / "state_5.sqlite"
-    )
-    if not db_path.exists():
+def _coerce_effort(value: str | None) -> ReasoningEffort | None:
+    """Map the env / UI reasoning-effort string onto the SDK enum.
+    Unknown values fall through to codex's own default (None) with a
+    warning rather than failing the turn."""
+    if not value:
         return None
     try:
-        uri = f"file:{db_path}?mode=ro"
-        with sqlite3.connect(uri, uri=True, timeout=0.5) as conn:
-            row = conn.execute(
-                "SELECT model FROM threads WHERE id = ?",
-                (provider_thread_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        model = row[0]
-        return str(model) if model else None
-    except sqlite3.Error as e:
-        log.warning(
-            "codex_model_sqlite_read_failed",
-            thread_id=thread_id,
-            error=str(e),
-        )
+        return ReasoningEffort(value)
+    except ValueError:
+        log.warning("codex_unknown_reasoning_effort", value=value)
         return None
-
-
-def _pump_codex_events(
-    *,
-    driver: CodexAppServerDriver,
-    request: CodexRunRequest,
-    loop: asyncio.AbstractEventLoop,
-    queue: asyncio.Queue,
-) -> None:
-    """Run `CodexAppServerDriver.stream` on a worker thread and push
-    each event back into the main asyncio loop's queue. Used by the
-    async driver to interleave TEXT_DELTA / TOOL_STARTED frames with
-    the claim drain in real time.
-
-    Termination: a `None` sentinel is enqueued once the codex
-    iterator returns (or raises). The async consumer reads until
-    it sees the sentinel; any exception is re-raised on the
-    consumer side by surfacing a `("error", exc)` tuple.
-    """
-    try:
-        for evt in driver.stream(request):
-            loop.call_soon_threadsafe(queue.put_nowait, ("codex", evt))
-    except Exception as exc:  # noqa: BLE001
-        loop.call_soon_threadsafe(queue.put_nowait, ("error", exc))
-    finally:
-        loop.call_soon_threadsafe(queue.put_nowait, ("codex_done", None))
-
 
 
 def _terminal_done(
@@ -704,19 +637,18 @@ async def run_turn_codex(
                 # drain may miss the trailing CRLF and reorder events.
                 await asyncio.sleep(0.05)
 
-                # Build the codex run request. Snapshot id threads via
+                # Build the turn input. Snapshot id threads via
                 # developer instructions per the chunk 3 plan; view
-                # context is appended as a context item so codex sees
-                # focused-entity hints.
-                context_items: list[CodexRunContextItem] = []
+                # context is prepended as a text input item so codex
+                # sees focused-entity hints before the user question.
+                input_items: list[TextInput] = []
                 if request.HasField("context"):
                     ctx_block = build_context_block(
                         request.context, ""
                     ).strip()
                     if ctx_block:
-                        context_items.append(
-                            CodexRunContextItem(text=ctx_block)
-                        )
+                        input_items.append(TextInput(text=ctx_block))
+                input_items.append(TextInput(text=request.user_question))
 
                 # Per-turn developer instructions = the composed
                 # system prompt (single source of truth in
@@ -739,16 +671,9 @@ async def run_turn_codex(
                     "accepts a snapshot_id."
                 )
 
-                # `actor_id=thread_id` is the chunk 3.6 isolation
-                # key. `CodexAppServerSessionPool` indexes its
-                # session entries on `(profile_id, actor_id, ...)`,
-                # and `prepare_actor_codex_home` materializes the
-                # codex_home subtree at
-                # `<CODEX_HOME_ROOT>/local/<thread_id>/`. Each chat
-                # thread now gets its own subprocess + sqlite +
-                # config + prompt cache, so a "new chat" click
-                # really starts cold and threads don't bleed
-                # prompt-cache state into one another.
+                # Isolation is per native codex thread now: each chat
+                # thread maps to one codex thread id, resumed across
+                # turns through the shared `handles.codex` app-server.
                 # Resolve codex primary model + reasoning effort with
                 # the three-tier fallback the frontend's builder view
                 # expects:
@@ -800,58 +725,60 @@ async def run_turn_codex(
                         "override" if override_effort else "env",
                     )
 
-                codex_request = CodexRunRequest(
-                    prompt=request.user_question,
-                    actor_id=thread_id,
-                    provider_thread_id=(
-                        thread.codex_provider_thread_id or None
-                    ),
-                    developer_instructions=turn_dev_instructions,
-                    context_items=context_items,
-                    model=effective_model,
-                    reasoning_effort=effective_effort,
+                # Resolve the codex thread: resume the stored native
+                # thread id (warm prompt cache), else start a fresh
+                # one. Per-turn developer instructions (composed system
+                # prompt + snapshot pin + switch-driven rule drops) and
+                # the analyst MCP + built-in-lockdown config overlay
+                # flow in on every turn. Sandbox is read-only; the
+                # overlay sets approval_policy=never.
+                stored_thread_id = thread.codex_provider_thread_id or None
+                thread_config = analyst_thread_config(
+                    data_plane_url=data_plane_url
                 )
+                if stored_thread_id:
+                    codex_thread = await handles.codex.thread_resume(
+                        stored_thread_id,
+                        sandbox=Sandbox.read_only,
+                        developer_instructions=turn_dev_instructions,
+                        config=thread_config,
+                        model=effective_model or None,
+                    )
+                else:
+                    codex_thread = await handles.codex.thread_start(
+                        sandbox=Sandbox.read_only,
+                        developer_instructions=turn_dev_instructions,
+                        config=thread_config,
+                        ephemeral=False,
+                        model=effective_model or None,
+                    )
 
-                # Stamp the provider_thread_id we're handing codex
-                # BEFORE the stream runs. Pairs with
-                # `CODEX_PROVIDER_THREAD_ID_RECEIVED` below; mismatch
-                # = silent cache split. Empty string on turn 0 (no
-                # prior thread to resume), which is the expected
-                # "this is a fresh codex thread" signal.
+                # Stamp the thread id we resumed BEFORE the turn runs.
+                # Pairs with `CODEX_PROVIDER_THREAD_ID_RECEIVED` below;
+                # they match unless codex re-minted the thread (cache
+                # split). Empty string on turn 0 (fresh thread).
                 turn_span.set_attribute(
                     spans.Attrs.CODEX_PROVIDER_THREAD_ID_SENT,
-                    codex_request.provider_thread_id or "",
+                    stored_thread_id or "",
                 )
 
                 yield _frame(
                     "Progress",
                     sse_pb2.Progress(
-                        phase="drafting", detail="codex (gpt-5-codex)"
+                        phase="drafting", detail="codex"
                     ),
                 )
 
-                # Drive codex on a worker thread; pump events back
-                # into the event loop via an asyncio.Queue so we
-                # can yield NarrativeDelta frames as the underlying
-                # model emits tokens, not in one blob at turn end.
-                # The thread-bridge also gives us a single per-event
-                # consumer point where TOOL_STARTED/TOOL_COMPLETED
-                # handlers can populate the binding store + tool
-                # call record (chunks 3.5 items 6 + 7).
+                # Drive the turn through the SDK and consume its async
+                # notification stream directly  no worker-thread
+                # bridge. NarrativeDelta frames yield as the model
+                # emits tokens; TOOL_STARTED/COMPLETED handlers below
+                # populate the binding store + tool call record (chunks
+                # 3.5 items 6 + 7).
                 role_t0 = time.monotonic()
-                codex_queue: asyncio.Queue = asyncio.Queue()
-                codex_worker = asyncio.create_task(
-                    asyncio.to_thread(
-                        _pump_codex_events,
-                        driver=handles.codex_driver,
-                        request=codex_request,
-                        loop=asyncio.get_running_loop(),
-                        queue=codex_queue,
-                    )
-                )
 
                 final_text: str = ""
-                provider_thread_id_local: str = ""
+                provider_thread_id_local: str = codex_thread.id
                 tool_events: list[str] = []
                 streamed_chars = 0
                 # Counts every TOOL_COMPLETED event. Stamped as
@@ -877,7 +804,6 @@ async def run_turn_codex(
                 # `agent_service/policy/resource_bounds.py` for the
                 # sentinel constant.
                 budget_exhausted_fired = False
-                codex_error: Exception | None = None
                 # Chunk 3.5 item 7: track per-tool args between
                 # TOOL_STARTED and TOOL_COMPLETED so we can record a
                 # full `TurnToolCallRecord` once the output lands.
@@ -907,10 +833,9 @@ async def run_turn_codex(
                 # root into a generation observation in Langfuse
                 # and conflate "turn" with "LLM inference").
                 # Opened with the bare name `chat codex`; renamed
-                # to `chat codex.<model>` after the model name
-                # comes back from the sqlite read post-loop. Also
-                # hoisted to function scope so the bottom finally
-                # can close it on exception.
+                # to `chat codex.<model>` post-loop once we know the
+                # effective model. Also hoisted to function scope so
+                # the bottom finally can close it on exception.
                 chat_span = _tracer.start_span("chat codex")
                 # Chunk 3.7 cost observability. Codex emits
                 # TOKEN_USAGE_UPDATED multiple times during a turn
@@ -921,18 +846,29 @@ async def run_turn_codex(
                 # codex doesn't bother emitting (e.g. an immediate
                 # cancel).
                 latest_token_usage: Any = None
-                while True:
-                    source, payload = await codex_queue.get()
-                    if source == "codex_done":
-                        break
-                    if source == "error":
-                        codex_error = payload  # type: ignore[assignment]
+                turn_handle = await codex_thread.turn(
+                    input=input_items,
+                    model=effective_model or None,
+                    effort=_coerce_effort(effective_effort),
+                    output_schema=None,
+                )
+                async for notification in turn_handle.stream():
+                    # `turn/completed` ends the stream; raise on a
+                    # non-completed terminal status so the outer
+                    # handler emits an Error frame.
+                    if notification.method == "turn/completed":
+                        raw = notification_to_raw(notification)
+                        status = turn_status(raw)
+                        if status not in (None, "completed"):
+                            raise RuntimeError(
+                                turn_error(raw) or f"turn {status}"
+                            )
                         continue
-                    if source != "codex":
+                    evt = event_from_notification(
+                        notification_to_raw(notification)
+                    )
+                    if evt is None:
                         continue
-                    evt = payload
-                    if evt.provider_thread_id:
-                        provider_thread_id_local = evt.provider_thread_id
                     if evt.type == CodexRunEventType.TEXT_DELTA:
                         if evt.text:
                             # Track the pre-suppression char count
@@ -1200,18 +1136,6 @@ async def run_turn_codex(
                         if evt.token_usage is not None:
                             latest_token_usage = evt.token_usage
 
-                # Ensure the worker task is fully done (the sentinel
-                # was already delivered, but the future may still
-                # hold a residual exception we want to observe).
-                try:
-                    await codex_worker
-                except Exception as worker_exc:  # noqa: BLE001
-                    if codex_error is None:
-                        codex_error = worker_exc
-
-                if codex_error is not None:
-                    raise codex_error
-
                 role_timings["primary"] = (
                     role_timings.get("primary", 0.0)
                     + (time.monotonic() - role_t0)
@@ -1320,13 +1244,12 @@ async def run_turn_codex(
                 # the `codex.tokens.total.*` keys on the turn span
                 # for SQL aggregation.
                 #
-                # The model name comes from a tiny sqlite read on
-                # codex's per-thread state_5.sqlite (WAL-mode, so
-                # we don't block codex's own writes). Soft-fail:
-                # on any sqlite error we still stamp usage but
-                # without a model, the chat span keeps its bare
-                # `chat codex` name, and Langfuse shows tokens
-                # with no auto-cost.
+                # The model name is the effective model we routed
+                # this turn against (UI override or `CODEX_PRIMARY_MODEL`
+                # env). Soft-fail when neither is pinned: codex uses
+                # its own default, we leave the model unstamped, the
+                # chat span keeps its bare `chat codex` name, and
+                # Langfuse shows tokens with no auto-cost.
                 if latest_token_usage is not None:
                     chat_span.set_attribute(
                         spans.Attrs.GEN_AI_SYSTEM, "openai"
@@ -1348,11 +1271,7 @@ async def run_turn_codex(
                             spans.Attrs.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
                             latest_token_usage.last.cached_input_tokens,
                         )
-                    codex_model = _read_codex_model(
-                        codex_home_root=handles.codex_home_root,
-                        thread_id=thread_id,
-                        provider_thread_id=provider_thread_id_local,
-                    )
+                    codex_model = effective_model
                     if codex_model:
                         chat_span.set_attribute(
                             spans.Attrs.GEN_AI_REQUEST_MODEL, codex_model
@@ -1384,8 +1303,7 @@ async def run_turn_codex(
                 log.info(
                     "codex_turn_complete",
                     thread_id=thread_id,
-                    provider_thread_id_sent=codex_request.provider_thread_id
-                    or "",
+                    provider_thread_id_sent=stored_thread_id or "",
                     provider_thread_id_received=provider_thread_id_local,
                     cache_hit_rate=cache_hit_rate,
                     tokens_last_total=(

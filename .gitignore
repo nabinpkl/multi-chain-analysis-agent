@@ -5,12 +5,12 @@
 
 data/
 
-# Chunk 3.5: per-thread codex sqlite + config trees materialized by
-# `codex-agent-driver.prepare_actor_codex_home`. Default host-side
-# root sits at the repo root for visibility (`ls codex_homes/`
-# shows one subtree per thread, named by thread_id). Production
-# sets `CODEX_HOMES_HOST_PATH` in compose to point off-repo.
-codex_homes/
+# Writable CODEX_HOME for the codex app-server (sqlite, cache, logs,
+# seeded auth.json), bind-mounted to the repo root by default for
+# visibility. Production sets `CODEX_HOME_HOST_PATH` in compose to
+# point off-repo. The local helper app-server home also lands here.
+codex_home/
+.cache/codex_helper_home/
 
 tmp/
 

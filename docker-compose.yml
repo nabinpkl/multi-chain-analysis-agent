@@ -104,18 +104,6 @@ services:
     build:
       context: ./agent-service
       dockerfile: Dockerfile
-      # Chunk 3 dep `codex-agent-driver` lives outside this repo at
-      # `../second-brain/packages/codex-agent-driver`. Docker's plain
-      # build context can't reach siblings, so we expose it as a
-      # named additional context the Dockerfile copies in via
-      # `COPY --from=codex-agent-driver`. The path inside the image
-      # (`/second-brain/packages/codex-agent-driver`) is chosen so the
-      # relative `../../second-brain/packages/codex-agent-driver`
-      # `[tool.uv.sources]` entry in `agent-service/pyproject.toml`
-      # resolves identically in local dev (`uv sync` from the repo)
-      # and in the docker build.
-      additional_contexts:
-        codex-agent-driver: ../second-brain/packages/codex-agent-driver
     ports:
       - "8003:8003"
     # `host.docker.internal` is the hostname the LM Studio proxy
@@ -153,39 +141,32 @@ services:
       # on the host so state survives `docker compose down` and is
       # inspectable from the host with `ls`.
       - THREAD_ROOT=/var/threads
-      # Per-thread codex_home root. The codex driver passes this to
-      # `prepare_actor_codex_home(actor_id=thread_id, ...)` so each
-      # chat thread gets its own subtree at
-      # `<CODEX_HOME_ROOT>/local/<thread_id>/` carrying that thread's
-      # codex sqlite, generated config, and a symlinked auth.json.
-      # Distinct from THREAD_ROOT so production can keep small JSON
-      # thread state on a different volume than the much larger
-      # per-thread codex sqlite.
-      - CODEX_HOME_ROOT=/var/codex_homes
+      # Writable CODEX_HOME for the shared codex app-server: its
+      # sqlite / cache / logs and the seeded `auth.json` live here.
+      # `build_codex_config` symlinks `auth.json` from the read-only
+      # base mount (CODEX_BASE_HOME, default `~/.codex` -> /root/.codex
+      # below) into this dir. Bind-mounted so codex state survives
+      # `docker compose down` and is inspectable from the host.
+      - CODEX_HOME=/var/codex_home
     volumes:
       - ./data/agent-service/threads:/var/threads
       # Host codex auth + base config, mounted read-only so the
-      # container can spawn `codex` without re-logging in.
-      # `prepare_actor_codex_home` symlinks `auth.json` from this
-      # base path into each per-thread codex_home, and seeds
-      # `config.toml` from the base's `model`/`personality`/etc.
-      # Read-only by design: writes (sqlite, logs, per-thread
-      # state) land in the per-thread codex_home below, never on
-      # the host base.
+      # container reuses the host's `codex login` without re-auth.
+      # `build_codex_config` reads `auth.json` from here (via
+      # CODEX_BASE_HOME, default `~/.codex` = /root/.codex) and
+      # symlinks it into the writable CODEX_HOME. Read-only by design:
+      # all codex writes land in CODEX_HOME below.
       #
-      # ${HOME} expands from the user's docker compose invocation,
-      # so this works across machines as long as the user has run
+      # ${HOME} expands from the user's docker compose invocation, so
+      # this works across machines as long as the user has run
       # `codex login` once on the host.
       - ${HOME}/.codex:/root/.codex:ro
-      # Per-thread codex_homes tree. Default host path is
-      # `./codex_homes` at the repo root for visibility (`ls
-      # codex_homes/local/` shows one dir per thread). Override
-      # `CODEX_HOMES_HOST_PATH` in `.env` / shell to point at an
-      # off-repo path for production. The host dir is gitignored
-      # (see `.gitignore`); the in-container path stays fixed at
-      # `/var/codex_homes` so the Python config doesn't change
-      # across environments.
-      - ${CODEX_HOMES_HOST_PATH:-./codex_homes}:/var/codex_homes
+      # Writable CODEX_HOME tree. Default host path is `./codex_home`
+      # at the repo root for visibility. Override `CODEX_HOME_HOST_PATH`
+      # in `.env` / shell to point at an off-repo path for production.
+      # The host dir is gitignored; the in-container path stays fixed
+      # at `/var/codex_home`.
+      - ${CODEX_HOME_HOST_PATH:-./codex_home}:/var/codex_home
     depends_on:
       api:
         condition: service_started
@@ -210,11 +191,6 @@ services:
     build:
       context: .
       dockerfile: ./evals/cases-hermetic/mock-service/Dockerfile
-      # agent-service's path dep on codex-agent-driver lives in the
-      # sibling `second-brain/` repo, outside the compose build
-      # context. Same named-context shape `agent-service` uses.
-      additional_contexts:
-        codex-agent-driver: ../second-brain/packages/codex-agent-driver
     profiles: ["eval"]
     ports:
       - "8005:8005"
@@ -232,8 +208,6 @@ services:
     build:
       context: ./agent-service
       dockerfile: Dockerfile
-      additional_contexts:
-        codex-agent-driver: ../second-brain/packages/codex-agent-driver
     profiles: ["eval"]
     ports:
       - "8013:8003"
@@ -246,11 +220,11 @@ services:
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3008}
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
       - THREAD_ROOT=/var/threads
-      - CODEX_HOME_ROOT=/var/codex_homes
+      - CODEX_HOME=/var/codex_home
     volumes:
       - ./data/agent-service-eval/threads:/var/threads
       - ${HOME}/.codex:/root/.codex:ro
-      - ${CODEX_HOMES_HOST_PATH:-./codex_homes}:/var/codex_homes
+      - ${CODEX_HOME_HOST_PATH:-./codex_home}:/var/codex_home
     depends_on:
       eval-mock:
         condition: service_started

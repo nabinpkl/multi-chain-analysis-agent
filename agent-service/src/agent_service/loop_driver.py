@@ -111,25 +111,14 @@ class LoopHandles:
     primitive_client: PrimitiveClient
     threads: ThreadRegistry
     debug_public: bool
-    # Chunk 3. Long-lived codex driver built in lifespan (one
-    # `CodexAppServerDriver` per service process, with an internal
-    # session pool that persists subprocess connections across
-    # turns). `None` when the codex CLI is unavailable in the
-    # environment (tests, local dev without `codex` on PATH); the
-    # `POST /agent/turn` handler 503s codex-runtime requests in
-    # that case rather than silently falling back to pydantic-ai.
-    codex_driver: Any = None
-    # Chunk 3.7 cost observability. Root of the per-thread codex_home
-    # tree (set to `CODEX_HOME_ROOT` env, default `./codex_homes`).
-    # After a codex turn completes we read
-    # `<root>/local/<thread_id>/sqlite/state_5.sqlite` to recover the
-    # model name codex actually used and stamp it as
-    # `gen_ai.request.model` on the trace so Langfuse can match it
-    # against its model-pricing table. None when the codex runtime
-    # isn't usable on this host; in that case tokens still ship to
-    # Langfuse but without a model name, so the generation
-    # observation has usage data but `totalCost: 0`.
-    codex_home_root: Any = None
+    # Shared codex app-server built in lifespan (one `AsyncCodex` per
+    # service process; each chat thread is one native codex thread,
+    # resumed across turns). `None` when the codex runtime is
+    # unavailable in the environment (tests, local dev where the SDK /
+    # auth can't start an app-server); the `POST /agent/turn` handler
+    # 503s codex-runtime requests in that case rather than silently
+    # falling back to pydantic-ai.
+    codex: Any = None
     # Codex primary model + reasoning effort, env-driven. Mirrors
     # `AGENT_PRIMARY_MODEL` / `AGENT_POLICY_MODEL` on the pydantic-ai
     # side: the operator sets `CODEX_PRIMARY_MODEL=gpt-5-mini` to swap

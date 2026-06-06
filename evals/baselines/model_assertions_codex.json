@@ -1,17 +1,20 @@
 {
   "suite": "model_assertions_codex",
-  "captured_at": "2026-05-13T08:02:19.723200Z",
-  "git_sha": "8499a1acf6ed",
+  "captured_at": "2026-06-06T05:54:50.534892Z",
+  "git_sha": "4fc7c76567ff",
   "agent_version": "0.1.0",
+  "runtime": "codex",
   "agent_primary_model": "gemini-3.1-flash-lite",
   "agent_policy_model": "gemini-3.1-flash-lite",
   "eval_judge_model": "gemini-3.1-flash-lite",
+  "codex_primary_model": "gpt-5.4",
+  "codex_reasoning_effort": "medium",
   "results": {
     "model_assertions.codex.primary": {
       "codex-primary-model-used": "pass",
+      "constitution-gate-fired": "pass",
       "no-builtin-tool-call": "pass",
       "no-error-on-turn-root": "pass",
-      "policy-model-used": "pass",
       "turn-root-span-present": "pass"
     }
   }

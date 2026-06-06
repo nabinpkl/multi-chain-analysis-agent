@@ -216,7 +216,7 @@ Snapshot vs delta protocol:
 Two runtimes, one set of defenses. Both call the same typed-primitive surface; both emit the same `Claim` wire format; both pass through the same output gate before any byte reaches the browser.
 
 - **pydantic-ai over HTTP `/primitive/*`** (binary protobuf). Per-role provider configurable; default `gemini-3.1-flash-lite` via the OpenAI-compat endpoint, free tier. See [docs/agent-design/01-agent-overview.md](docs/agent-design/01-agent-overview.md).
-- **codex over `/mcp`** (JSON-RPC). Subscription auth via `~/.codex/auth.json`. Default runtime today (`AGENT_DEFAULT_RUNTIME=codex`). Spawned as a per-thread subprocess pool. See ADR [15-codex-as-agent-harness](architecture-decisions/15-codex-as-agent-harness.md).
+- **codex over `/mcp`** (JSON-RPC). Subscription auth via `~/.codex/auth.json`. Default runtime today (`AGENT_DEFAULT_RUNTIME=codex`). Driven by the official `openai-codex` SDK as one shared app-server with native codex threads. See ADRs [15-codex-as-agent-harness](architecture-decisions/15-codex-as-agent-harness.md) and [17-codex-sdk-migration](architecture-decisions/17-codex-sdk-migration.md).
 
 The runtime selector reads `AgentRequest.runtime`; unspecified falls through to `AGENT_DEFAULT_RUNTIME`. Hermetic eval cases pin runtime per case.
 

@@ -1,62 +1,23 @@
-# Phase 0 walking-skeleton Dockerfile. uv-based Python 3.14 image.
-# Phase B optimises this with multistage caching once dep churn slows.
+# uv-based Python image for the agent plane.
 #
-# Python pinned to 3.14 because the chunk 3 `codex-agent-driver`
-# dep (sibling repo `second-brain/packages/codex-agent-driver`)
-# requires-python = ">=3.14". The local dev venv was already on
-# 3.14; this image bump brings docker into parity.
-
-# Stage 1: pull the codex CLI from a real Node image so we don't
-# carry npm in the final layer. @openai/codex is pinned to the
-# version the host dev box is running (kept in lockstep so what
-# works locally works in docker). Bump both when bumping codex.
-FROM node:22-bookworm-slim AS codex-cli
-ARG CODEX_VERSION=0.130.0
-RUN npm install -g --no-fund --no-audit @openai/codex@${CODEX_VERSION}
+# Python pinned to 3.14 to match the local dev venv. The `openai-codex`
+# SDK requires-python is only >=3.10, so this pin is now a parity
+# choice, not a hard floor; keep image and host on the same minor.
+#
+# The codex binary ships inside the `openai-codex` SDK via its
+# `openai-codex-cli-bin` dependency (installed into the project venv by
+# `uv sync`), so there is no separate codex CLI install / Node stage.
 
 FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim AS base
 
-# Carry the Node runtime + the codex CLI tree forward from the
-# build stage. `node` is the interpreter the `codex` shebang line
-# needs; `@openai/codex` is the JS package whose `bin/codex.js`
-# becomes our `/usr/local/bin/codex` shim. No npm, no
-# node_modules anywhere except the codex install tree, so the
-# final image is the slim uv base plus ~70 MB of Node + codex
-# rather than a full Node image.
-COPY --from=codex-cli /usr/local/bin/node /usr/local/bin/node
-COPY --from=codex-cli /usr/local/lib/node_modules/@openai/codex \
-    /usr/local/lib/node_modules/@openai/codex
-RUN ln -s /usr/local/lib/node_modules/@openai/codex/bin/codex.js \
-    /usr/local/bin/codex && codex --version
-
-# codex CLI's `--sandbox=read-only` (and `workspace-write`) wraps the
-# child process in bubblewrap on Linux. The CLI ships a bundled bwrap
-# binary but logs a noisy error and falls back to the system one when
-# present, so installing the OS package is cleaner. Required by codex
-# >= 0.120 on Linux for any non-`danger-full-access` sandbox mode.
+# codex's `--sandbox=read-only` wraps the child process in bubblewrap
+# on Linux. The bundled binary can fall back to a vendored bwrap but
+# logs noisily when the system package is absent, so install it.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bubblewrap \
     && rm -rf /var/lib/apt/lists/*
 
-# In-image directory layout preserves the same depth as the host
-# source tree so the relative `[tool.uv.sources] codex-agent-driver =
-# { path = "../../second-brain/packages/codex-agent-driver" }` in
-# `agent-service/pyproject.toml` resolves cleanly. Depth matters; the
-# literal segment name does not.
-#
-#   /repo/multi-chain-analysis-agent/agent-service/    <- WORKDIR
-#   /repo/second-brain/packages/codex-agent-driver/    <- path-dep target
-#
-# Without preserving the depth, uv refuses to normalize a relative
-# path that escapes the project root (`/app/../../...` fails with
-# "cannot normalize a relative path beyond the base directory").
-WORKDIR /repo/multi-chain-analysis-agent/agent-service
-
-# Chunk 3 path dep. The named build context comes from
-# `docker-compose.yml`'s `additional_contexts.codex-agent-driver`,
-# which points at `../second-brain/packages/codex-agent-driver`
-# on the host.
-COPY --from=codex-agent-driver . /repo/second-brain/packages/codex-agent-driver
+WORKDIR /app
 
 # Copy lockfile + manifest first for layer cache.
 COPY pyproject.toml ./

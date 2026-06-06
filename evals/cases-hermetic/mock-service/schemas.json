@@ -3,31 +3,26 @@
     "name": "community_summary",
     "description": "Summarize a community (cluster) in the live snapshot. Returns size, internal/external volume split, edge count, and top wallets. Requires snapshot_id and a stable community_id from a prior wallet_profile call.",
     "inputSchema": {
-      "$defs": {
-        "CommunitySummaryArgsSchema": {
-          "description": "Schema-source for `community_summary`. See\n`WalletProfileArgsSchema` for the split rationale.",
-          "properties": {
-            "community_id": {
-              "description": "Stable community label (`u32`). Source it from a prior\n`wallet_profile` response (the `community_id` field) or from\nthe user's selection on the live graph.",
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "snapshot_id": {
-              "description": "Snapshot id from the most recent `POST /turn/begin` call.",
-              "type": "string"
-            }
-          },
-          "required": [
-            "snapshot_id",
-            "community_id"
-          ],
-          "type": "object"
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Schema-source for `community_summary`. See\n`WalletProfileArgsSchema` for the split rationale.",
+      "properties": {
+        "community_id": {
+          "description": "Stable community label (`u32`). Source it from a prior\n`wallet_profile` response (the `community_id` field) or from\nthe user's selection on the live graph.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "snapshot_id": {
+          "description": "Snapshot id from the most recent `POST /turn/begin` call.",
+          "type": "string"
         }
       },
-      "$ref": "#/$defs/CommunitySummaryArgsSchema",
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "CommunitySummaryArgs"
+      "required": [
+        "snapshot_id",
+        "community_id"
+      ],
+      "title": "CommunitySummaryArgs",
+      "type": "object"
     }
   },
   {
@@ -210,59 +205,48 @@
     "name": "get_token_info",
     "description": "Resolve a SPL or Token-2022 mint pubkey to its name, symbol, and metadata URI. Reads the lazy ClickHouse-backed metadata cache; cache miss triggers a getAccountInfo RPC fetch + cache write. The lookup itself is snapshot-independent (RPC + cache), but pass the current turn's snapshot_id when calling so the per-turn tool-call budget counts this dispatch (matches the budget contract of wallet_profile / community_summary).",
     "inputSchema": {
-      "$defs": {
-        "GetTokenInfoArgsSchema": {
-          "description": "Schema-source for `get_token_info`. See `WalletProfileArgsSchema`\nfor the split rationale.",
-          "properties": {
-            "mint": {
-              "description": "SPL or Token-2022 mint pubkey (base58). Returns name + symbol\n+ URI from the lazy ClickHouse-backed metadata cache, falling\nback to a `getAccountInfo` RPC fetch + cache write on miss.",
-              "type": "string"
-            },
-            "snapshot_id": {
-              "description": "Snapshot id from a prior `POST /turn/begin` call. The dispatch\ncounts against the per-turn tool-call budget tracked server-\nside (see `AppState::tool_call_budgets`) so this tool\nparticipates in the cap symmetrically with `wallet_profile` /\n`community_summary`. Required so the codex model reliably\npasses it; the pydantic-ai runtime never reaches this MCP\npath (it calls `PrimitiveClient` directly and counts the\nbudget in-process).",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mint",
-            "snapshot_id"
-          ],
-          "type": "object"
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Schema-source for `get_token_info`. See `WalletProfileArgsSchema`\nfor the split rationale.",
+      "properties": {
+        "mint": {
+          "description": "SPL or Token-2022 mint pubkey (base58). Returns name + symbol\n+ URI from the lazy ClickHouse-backed metadata cache, falling\nback to a `getAccountInfo` RPC fetch + cache write on miss.",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "description": "Snapshot id from a prior `POST /turn/begin` call. The dispatch\ncounts against the per-turn tool-call budget tracked server-\nside (see `AppState::tool_call_budgets`) so this tool\nparticipates in the cap symmetrically with `wallet_profile` /\n`community_summary`. Required so the codex model reliably\npasses it; the pydantic-ai runtime never reaches this MCP\npath (it calls `PrimitiveClient` directly and counts the\nbudget in-process).",
+          "type": "string"
         }
       },
-      "$ref": "#/$defs/GetTokenInfoArgsSchema",
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "GetTokenInfoArgs"
+      "required": [
+        "mint",
+        "snapshot_id"
+      ],
+      "title": "GetTokenInfoArgs",
+      "type": "object"
     }
   },
   {
     "name": "wallet_profile",
     "description": "Profile a Solana wallet observed in the live snapshot. Returns role, community membership, transfer counts, and top counterparties. Requires snapshot_id from a prior /turn/begin call.",
     "inputSchema": {
-      "$defs": {
-        "WalletProfileArgsSchema": {
-          "description": "Schema-source for `wallet_profile`. The runtime-side\n`WalletProfileArgs` below wraps a permissive `Value` to keep the\nrmcp extractor from bailing on the first malformed field, but\nthe JSON Schema codex sees on `tools/list` still advertises this\nstrict typed shape. See `validate_wallet_profile_args` for the\nruntime aggregator.",
-          "properties": {
-            "addr": {
-              "description": "Solana wallet address (base58 pubkey).",
-              "type": "string"
-            },
-            "snapshot_id": {
-              "description": "Snapshot id from the most recent `POST /turn/begin` call.\nThe harness opens the turn, then passes this id through to\nevery MCP tool call within the turn so reads see a consistent\ngraph view. Snapshots expire ~5 minutes after `/turn/begin`.",
-              "type": "string"
-            }
-          },
-          "required": [
-            "snapshot_id",
-            "addr"
-          ],
-          "type": "object"
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Schema-source for `wallet_profile`. The runtime-side\n`WalletProfileArgs` below wraps a permissive `Value` to keep the\nrmcp extractor from bailing on the first malformed field, but\nthe JSON Schema codex sees on `tools/list` still advertises this\nstrict typed shape. See `validate_wallet_profile_args` for the\nruntime aggregator.",
+      "properties": {
+        "addr": {
+          "description": "Solana wallet address (base58 pubkey).",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "description": "Snapshot id from the most recent `POST /turn/begin` call.\nThe harness opens the turn, then passes this id through to\nevery MCP tool call within the turn so reads see a consistent\ngraph view. Snapshots expire ~5 minutes after `/turn/begin`.",
+          "type": "string"
         }
       },
-      "$ref": "#/$defs/WalletProfileArgsSchema",
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "description": "Runtime args wrapper for `wallet_profile`. Same split as\n`EmitClaimsArgs` (see its module doc): schemars sees the strict\n`WalletProfileArgsSchema`, runtime accepts any `Value` so the\nhandler can aggregate validation errors and unwrap a\nJSON-stringified payload before reporting.",
-      "title": "WalletProfileArgs"
+      "required": [
+        "snapshot_id",
+        "addr"
+      ],
+      "title": "WalletProfileArgs",
+      "type": "object"
     }
   }
 ]

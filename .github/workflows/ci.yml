@@ -1,0 +1,162 @@
+name: CI
+
+# Per-service checks for the three planes (Rust data plane, Python agent
+# plane, Next.js frontend) plus a proto wire-drift guard. Jobs run in
+# parallel and are independent; a change touching one service only pays
+# for that service's job via path-less triggering + internal cwd.
+#
+# NOT enforced here yet (the existing tree is not clean against them, so
+# gating would be red on day one): `cargo fmt --check`, `cargo clippy
+# -D warnings`. Land a formatting/lint sweep first, then promote them.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A newer push to the same PR/branch cancels the in-flight run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: backend (Rust data plane)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install librdkafka build deps
+        # rdkafka-sys builds librdkafka from source via CMake and needs
+        # these dev headers (curl.h, sasl, zlib). Mirrors the apt list in
+        # backend/Dockerfile so CI and the image build the same way.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake build-essential pkg-config libsasl2-dev zlib1g-dev libcurl4-openssl-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - name: Build
+        run: cargo build --locked
+      - name: Test
+        run: cargo test --locked
+
+  frontend:
+    name: frontend (Next.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          # pnpm 10 matches the local toolchain (lockfileVersion 9.0) and
+          # tolerates a `pnpm-workspace.yaml` that carries only settings
+          # (`allowBuilds:`) with no `packages:` field; pnpm 9 errors on
+          # the missing `packages:` field.
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+      - name: Lint
+        # Non-blocking until the lint baseline is clean; surfaces issues
+        # without gating the merge.
+        run: pnpm lint
+        continue-on-error: true
+
+  wire-drift:
+    name: wire-drift (proto codegen is committed)
+    # Enforces the AGENTS.md contract: every cross-service type lives in
+    # proto/, generated artifacts are checked in, and `just
+    # regen-wire-types` output must equal what's committed. Regenerates
+    # all three trees and fails if `git diff` is non-empty.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ github.token }}
+      # The buf.gen.yaml `protoc_builtin: python` plugin shells out to
+      # protoc. Pin it to 34.1 to match the protobuf 7.34.1 the committed
+      # Python types were generated with, so regeneration is byte-identical
+      # and the drift check below stays meaningful.
+      - uses: arduino/setup-protoc@v3
+        with:
+          version: "34.1"
+          repo-token: ${{ github.token }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          # pnpm 10 matches the local toolchain (lockfileVersion 9.0) and
+          # tolerates a `pnpm-workspace.yaml` that carries only settings
+          # (`allowBuilds:`) with no `packages:` field; pnpm 9 errors on
+          # the missing `packages:` field.
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install TS codegen plugin (protoc-gen-es)
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Install Rust codegen plugins (buffa)
+        # Versions must match the `buffa` crate pinned in
+        # backend/Cargo.toml. Bump together.
+        run: cargo install protoc-gen-buffa --version 0.4.0 && cargo install protoc-gen-buffa-packaging --version 0.4.0
+      - name: Lint protos
+        run: buf lint
+      - name: Regenerate wire types
+        # Mirror of the `regen-wire-types` just recipe (just isn't
+        # installed in CI).
+        run: |
+          rm -rf backend/src/wire/generated agent-service/src/multichain frontend/src/lib/wire
+          mkdir -p backend/src/wire/generated agent-service/src/multichain frontend/src/lib/wire
+          buf generate
+      - name: Fail on drift
+        run: |
+          if ! git diff --exit-code; then
+            echo "::error::Generated wire types are stale. Run 'just regen-wire-types' and commit the result."
+            exit 1
+          fi
+
+  agent-service:
+    name: agent-service (Python agent plane)
+    # The codex dependency is now the `openai-codex` PyPI package, so
+    # `uv sync` + the no-LLM pytest baseline resolve and run in CI with
+    # no sibling-repo checkout. (`uv sync` downloads the bundled codex
+    # binary via `openai-codex-cli-bin`; the baseline tests never spawn
+    # an app-server, so no codex auth is needed.)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent-service
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync (no LLM, wiring-only deps)
+        run: uv sync --frozen
+      - name: Test (baseline budget <5s; no live LLM calls)
+        # The <5s no-LLM baseline is the unit suite (AGENTS.md). The
+        # integration suite (tests/integration) drives mocked HTTP
+        # against the data plane and has pre-existing pytest_httpx
+        # query-matching drift unrelated to this service's logic; it is
+        # not part of the baseline budget and is excluded here until
+        # those mocks are repaired in a dedicated change.
+        run: uv run pytest -q tests/unit

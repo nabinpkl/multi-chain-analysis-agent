@@ -8,7 +8,14 @@ so the choice of harness is one knob with all-or-nothing semantics.
 
 ## Status
 
-Accepted, 2026-05-13.
+Accepted, 2026-05-13. **Mechanism superseded by ADR 17 (2026-06-06):**
+the `codex-agent-driver` path-dep is replaced by the official
+`openai-codex` SDK, and isolation moves from per-thread `codex_home`
+to native codex threads. The rationale in this ADR (codex as a harness
+not a model SDK, the built-in-tool lockdown, the two-mode `runtime_call`
+substrate, server-enforced structured output, family coherence) all
+still holds; only the driver mechanism and the isolation model changed.
+Read this ADR for the *why* and ADR 17 for the *how* as of today.
 
 
 ## Problem

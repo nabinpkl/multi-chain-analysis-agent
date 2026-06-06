@@ -15,7 +15,7 @@ from agent_service.policy import resource_bounds
 
 def test_sentinel_is_structural_not_natural_language():
     """The error-kind sentinel is what `mcp_hook.process_tool_call`
-    and `codex_driver._pump_codex_events` grep the structured
+    and the `codex_driver` TOOL_COMPLETED handler grep the structured
     response for. It must be a structured error-kind token
     (snake_case, distinct from anything a primitive would
     legitimately return), not a natural-language phrase that could
