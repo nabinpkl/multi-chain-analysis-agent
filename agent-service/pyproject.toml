@@ -43,18 +43,20 @@ dependencies = [
     # wrapper that enforces this contract. Pinned <1 because 1.0 is in
     # release-candidate stage as of 2026-04-22; bump after stable.
     "clickhouse-connect>=0.15,<1",
-    # Chunk 3 dep. Codex JSON-RPC stdio driver from the sister
-    # `second-brain` repo. Provides `CodexAppServerDriver` +
-    # `CodexAgentProfile` + `prepare_actor_codex_home`; we bridge it
-    # behind `POST /agent/turn` when `AgentRequest.runtime ==
-    # AGENT_RUNTIME_CODEX`. Path source below pins to the sibling
-    # checkout for local dev; docker bake mounts the same tree at
-    # `/opt/codex-agent-driver`.
-    "codex-agent-driver",
+    # Official OpenAI Codex Python SDK. Drives `codex app-server` over
+    # JSON-RPC stdio (native threads, MCP host, sandbox, server-enforced
+    # `output_schema`) and bundles the codex binary via its
+    # `openai-codex-cli-bin` dependency, so the image needs no separate
+    # codex install. Used behind `POST /agent/turn` when
+    # `AgentRequest.runtime == AGENT_RUNTIME_CODEX` and for the helper
+    # calls routed through `llm_runtime.runtime_call`.
+    #
+    # Pinned to an exact version because the SDK is Beta (0.1.0bN): the
+    # accepted API-churn risk and the revisit trigger are recorded in
+    # `docs/dependency-exceptions.md`. Bump deliberately, re-running the
+    # codex output-schema smoke after each bump.
+    "openai-codex==0.1.0b3",
 ]
-
-[tool.uv.sources]
-codex-agent-driver = { path = "../../second-brain/packages/codex-agent-driver", editable = true }
 
 [dependency-groups]
 dev = [
@@ -79,6 +81,11 @@ packages = ["src/agent_service", "src/multichain"]
 
 [tool.uv]
 package = true
+# The Beta codex SDK pulls a pre-release codex binary
+# (`openai-codex-cli-bin==0.137.0aN`); allow pre-releases so resolution
+# succeeds. Scoped intent is the codex SDK only; no other dep here is
+# pre-release.
+prerelease = "allow"
 
 # Force protobuf 7.x through the dependency graph. opentelemetry-proto
 # 1.41.x (latest as of Ship 1 of agent-observability, ADR 13) still

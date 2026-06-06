@@ -113,8 +113,8 @@ export type ChannelSwitches = Message<"multichain.wire.agent.v1.ChannelSwitches"
    * constrained-format allowlist (base58 address, enum role, mint
    * id) is replaced with a placeholder. Today no primitive emits
    * untrusted text so this switch is forward-looking, but it is
-   * wired now so future memo or tag primitives slot in without a
-   * schema change.
+   * wired now so future primitives that surface untrusted strings
+   * slot in without a schema change.
    *
    * @generated from field: bool external_text_input_enabled = 2;
    */

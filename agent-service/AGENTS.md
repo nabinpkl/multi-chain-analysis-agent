@@ -6,11 +6,11 @@ Root [../AGENTS.md](../AGENTS.md) carries the cross-service rules. This file is 
 
 ## Stack
 
-- **Python:** 3.14. Pinned because the `codex-agent-driver` path-dep requires `>=3.14`.
+- **Python:** 3.14. Kept in lockstep with the dev venv; the `openai-codex` SDK only needs `>=3.10`, so this is a parity pin, not a hard floor.
 - **Env + packaging:** `uv`. `pyproject.toml` + `uv.lock` are authoritative; no `requirements.txt`.
 - **Agent runtimes (two, parity-checked):**
   - `pydantic-ai-slim[openai,mcp]` for the pydantic-ai runtime. Consumes the Rust MCP server at `http://api:8004/mcp` via `MCPServerStreamableHTTP`.
-  - `codex-agent-driver` (sibling repo `second-brain/packages/codex-agent-driver`, editable path-dep). Primary runtime today; subprocess pool, MCP tools, subscription auth via `~/.codex/auth.json`.
+  - `openai-codex` (official OpenAI SDK, Beta-pinned, see [../docs/dependency-exceptions.md](../docs/dependency-exceptions.md)) for the codex runtime. Primary runtime today; drives one shared `AsyncCodex` app-server with native threads, MCP tools, subscription auth via `~/.codex/auth.json`. SDK config + lockdown overlay live in `codex_config.py`; notification parsing in `codex_events.py`; the turn driver in `codex_driver.py`.
 - **HTTP + SSE:** `fastapi` + `uvicorn[standard]` + `sse-starlette`.
 - **Logging:** `structlog`. Structured from the first log line; JSON in prod.
 - **Wire types:** `protobuf` runtime (pinned `>=7.34.1` via `override-dependencies`). Generated package lives at `src/multichain/` and ships in the wheel; never hand-author a wire type.
@@ -29,7 +29,7 @@ Root [../AGENTS.md](../AGENTS.md) carries the cross-service rules. This file is 
 - **DeprecationWarning is an error.** `pytest` `filterwarnings = ["error::DeprecationWarning:agent_service.*"]` so codegen / pydantic / pydantic-ai drift bubbles up as a test failure, not silent rot.
 - **Eval-judge family-leakage guard.** The judge model cannot share a family prefix with the agent's primary model unless `EVAL_ALLOW_SHARED_FAMILY=true`. Schema validation enforces this at YAML load time. ICLR 2026: same-family judge biases toward agreeing with itself.
 - **ClickHouse queries are parameterized.** Always pass values through `clickhouse_connect`'s `parameters=` keyword. Never f-string a value into the SQL. The wrapper in `agent_service/evals/ch.py` enforces this.
-- **Codex subprocess hygiene.** Each thread gets its own per-thread `codex_home` under `CODEX_HOME_ROOT`. Host `~/.codex` is mounted read-only; per-thread sqlite / logs / state are writable. Do not write to the host base from inside the container.
+- **Codex thread + home hygiene.** Isolation is per native codex thread (`thread_start` / `thread_resume`), not per-thread `codex_home`. One shared `AsyncCodex` app-server serves all analyst chats; a separate helper app-server (own `CODEX_HOME`) serves the gates / judge / repeat detector so analyst MCP traffic never bleeds in. The built-in-tool lockdown + MCP mount ride on the per-thread `config` overlay (`codex_config.py`). Host `~/.codex` is mounted read-only (auth source); the app-servers write only under their writable `CODEX_HOME`. Do not write to the host base from inside the container.
 
 ## Output-gate discipline
 

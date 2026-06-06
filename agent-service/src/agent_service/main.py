@@ -48,8 +48,9 @@ from multichain.wire.agent.v1 import session_pb2 as sess_pb
 from multichain.wire.agent.v1 import sse_pb2
 
 from agent_service.agent import build_agent
+from agent_service.codex_config import build_codex_config
 from agent_service.codex_driver import run_turn_codex
-from agent_service.codex_profile import build_codex_driver, build_codex_profile
+from openai_codex import AsyncCodex
 from agent_service.loop_driver import LoopHandles, run_turn
 from agent_service.otel import init_otel, instrument_fastapi
 from agent_service.primitive_client import PrimitiveClient
@@ -118,50 +119,38 @@ async def lifespan(app: FastAPI):
     thread_root = Path(os.environ.get("THREAD_ROOT", "./.cache/threads"))
     threads = ThreadRegistry(thread_root=thread_root)
 
-    # Chunk 3 codex runtime. Build the static profile + driver once
-    # so per-turn calls hit the cached session pool. The codex CLI
-    # has to be on PATH (the docker image bakes it; local-dev paths
-    # need a global `codex` install). When unavailable, we log and
-    # leave `codex_driver=None`; the POST handler 503s codex
-    # requests rather than silently falling back to pydantic-ai.
-    #
-    # `CODEX_HOME_ROOT` is intentionally decoupled from
-    # `THREAD_ROOT` (chunk 3.6): each chat thread materializes its
-    # OWN codex_home subtree (`actor_id=thread_id`) so prompt cache
-    # + codex sqlite stay isolated across threads. Production
-    # overrides this env to point at a host volume; local dev
-    # defaults to `./codex_homes` relative to the service (the
-    # docker bind mount, when present, replaces the path with
-    # `/var/codex_homes`).
-    codex_driver = None
-    codex_home_root = Path(os.environ.get("CODEX_HOME_ROOT", "./codex_homes"))
-    codex_home_root.mkdir(parents=True, exist_ok=True)
+    # Codex runtime. One shared `AsyncCodex` app-server for the whole
+    # process; each chat thread is a native codex thread resumed across
+    # turns. The SDK bundles the codex binary, so no global install is
+    # needed; it reads subscription auth from `auth.json` under the
+    # writable `CODEX_HOME` (seeded from the read-only `~/.codex` mount
+    # by `build_codex_config`). When the app-server can't start (no
+    # auth on this host, e.g. tests) we log and leave `codex=None`; the
+    # POST handler 503s codex requests rather than silently falling
+    # back to pydantic-ai.
+    codex = None
+    codex_home = Path(os.environ.get("CODEX_HOME", "./.cache/codex_home"))
     # Codex primary model + reasoning effort, env-driven. Mirrors
     # the `AGENT_PRIMARY_MODEL` / `AGENT_POLICY_MODEL` pattern on the
-    # pydantic-ai side. Empty / unset falls through to codex-cli's
-    # own default (today gpt-5.5, varies across cli versions). Set
-    # `CODEX_PRIMARY_MODEL=gpt-5-mini` to dial cost / quality
-    # without code change. `CODEX_REASONING_EFFORT` mirrors the same
-    # shape; codex CLI accepts `low | medium | high` today.
+    # pydantic-ai side. Empty / unset falls through to codex's own
+    # default. Set `CODEX_PRIMARY_MODEL=gpt-5-mini` to dial cost /
+    # quality without code change. `CODEX_REASONING_EFFORT` accepts
+    # `low | medium | high`.
     codex_primary_model = os.environ.get("CODEX_PRIMARY_MODEL", "").strip() or None
     codex_reasoning_effort = (
         os.environ.get("CODEX_REASONING_EFFORT", "").strip() or None
     )
     try:
-        codex_profile = build_codex_profile(
-            data_plane_url=base_url, cwd=Path.cwd()
-        )
-        codex_driver = build_codex_driver(
-            profile=codex_profile,
-            codex_home_root=codex_home_root,
-        )
+        codex = AsyncCodex(build_codex_config(codex_home=codex_home))
+        await codex.__aenter__()
         log.info(
             "codex_runtime_ready",
-            codex_home_root=str(codex_home_root),
+            codex_home=str(codex_home),
             codex_primary_model=codex_primary_model or "<cli_default>",
             codex_reasoning_effort=codex_reasoning_effort or "<cli_default>",
         )
     except Exception:  # noqa: BLE001
+        codex = None
         log.exception("codex_runtime_init_failed")
 
     handles = LoopHandles(
@@ -169,11 +158,10 @@ async def lifespan(app: FastAPI):
         primitive_client=primitive_client,
         threads=threads,
         debug_public=debug_public,
-        codex_driver=codex_driver,
-        codex_home_root=codex_home_root if codex_driver is not None else None,
-        codex_primary_model=codex_primary_model if codex_driver is not None else None,
+        codex=codex,
+        codex_primary_model=codex_primary_model if codex is not None else None,
         codex_reasoning_effort=(
-            codex_reasoning_effort if codex_driver is not None else None
+            codex_reasoning_effort if codex is not None else None
         ),
     )
     app.state.handles = handles
@@ -185,14 +173,13 @@ async def lifespan(app: FastAPI):
     finally:
         log.info("agent_service_stopping")
         await primitive_client.close()
-        # CodexAppServerDriver owns a session pool of long-lived
-        # codex subprocesses; close it on shutdown so the subprocess
-        # exits cleanly and any per-thread sqlite is flushed.
-        if codex_driver is not None:
+        # Shut the shared codex app-server down cleanly so its
+        # subprocess exits and sqlite is flushed.
+        if codex is not None:
             try:
-                codex_driver.close()
+                await codex.close()
             except Exception:  # noqa: BLE001
-                log.exception("codex_driver_close_failed")
+                log.exception("codex_close_failed")
 
 
 app = FastAPI(title="multichain agent-service", version="0.2.0", lifespan=lifespan)
@@ -330,17 +317,16 @@ async def role_defaults() -> dict[str, str]:
     }
 
 
-# Codex-CLI supported model ids. Pinned in code rather than fetched
-# at runtime because codex-cli doesn't expose a list-models endpoint;
-# the accepted set lives in the CLI binary itself. Curated to match
-# what the CLI version in `second-brain/packages/codex-agent-driver`
-# accepts as of the current pin (codex-cli 0.130, May 2026):
+# Codex supported model ids. Pinned in code rather than fetched at
+# runtime because the codex binary ships its accepted model set
+# internally. Curated to match the codex binary bundled by the
+# `openai-codex` SDK pin (see `docs/dependency-exceptions.md`):
 #   - gpt-5 family: gpt-5, gpt-5-mini, gpt-5-nano
 #   - o-series:     o3, o3-mini, o3-pro
-# Bumping the codex-cli pin AND the supported model set may diverge;
-# when that happens, refresh this list and the eval probe in
+# Bumping the SDK pin AND the supported model set may diverge; when
+# that happens, refresh this list and the eval probe in
 # `model_assertions_codex.yaml` together. The empty string is the
-# "fall through to env / cli default" pick the panel uses to clear
+# "fall through to env / codex default" pick the panel uses to clear
 # a per-turn override.
 _CODEX_MODEL_CATALOG: list[dict[str, str]] = [
     {"id": "gpt-5", "name": "gpt-5"},
@@ -361,11 +347,10 @@ async def codex_models() -> dict:
     """Return the codex-CLI model catalog + reasoning-effort tiers
     the panel renders in its codex section.
 
-    Codex CLI ships its supported model list inside the binary; there
-    is no list-models endpoint to proxy. We hand-curate the catalog
-    here to keep one source of truth on the agent-service side, and
-    bump it when the codex-cli pin in
-    `second-brain/packages/codex-agent-driver` changes.
+    Codex ships its supported model list inside the binary; there is no
+    list-models endpoint to proxy. We hand-curate the catalog here to
+    keep one source of truth on the agent-service side, and bump it when
+    the `openai-codex` SDK pin changes.
 
     Returns one canonical shape (mirroring the other `/agent/*/models`
     endpoints): `{"reachable": True, "models": [{id, name}],
@@ -568,12 +553,12 @@ async def agent_turn(request: Request) -> EventSourceResponse:
             ),
         )
 
-    if requested_runtime == sess_pb.AGENT_RUNTIME_CODEX and handles.codex_driver is None:
+    if requested_runtime == sess_pb.AGENT_RUNTIME_CODEX and handles.codex is None:
         raise HTTPException(
             status_code=503,
             detail=(
                 "codex runtime is not available on this server "
-                "(codex CLI missing or driver init failed)"
+                "(codex app-server failed to start)"
             ),
         )
 

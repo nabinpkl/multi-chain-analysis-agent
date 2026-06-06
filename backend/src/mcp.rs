@@ -234,11 +234,25 @@ pub struct WalletProfileArgsSchema {
 /// `WalletProfileArgsSchema`, runtime accepts any `Value` so the
 /// handler can aggregate validation errors and unwrap a
 /// JSON-stringified payload before reporting.
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, serde::Deserialize)]
 #[serde(transparent)]
-pub struct WalletProfileArgs(
-    #[schemars(with = "WalletProfileArgsSchema")] pub serde_json::Value,
-);
+pub struct WalletProfileArgs(pub serde_json::Value);
+
+impl schemars::JsonSchema for WalletProfileArgs {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "WalletProfileArgs".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // Inline the object schema at the root rather than emitting a
+        // `$ref` into `$defs`. OpenAI strict function-parameters mode
+        // (which codex forwards MCP tool schemas to) rejects a root
+        // `$ref` with `type: "None"`; nested `$ref`s are fine. The
+        // derive's `with` would call `subschema_for` (a `$ref`); calling
+        // the source type's `json_schema` directly inlines it.
+        <WalletProfileArgsSchema as schemars::JsonSchema>::json_schema(generator)
+    }
+}
 
 /// Schema-source for `community_summary`. See
 /// `WalletProfileArgsSchema` for the split rationale.
@@ -252,11 +266,21 @@ pub struct CommunitySummaryArgsSchema {
     pub community_id: u32,
 }
 
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, serde::Deserialize)]
 #[serde(transparent)]
-pub struct CommunitySummaryArgs(
-    #[schemars(with = "CommunitySummaryArgsSchema")] pub serde_json::Value,
-);
+pub struct CommunitySummaryArgs(pub serde_json::Value);
+
+impl schemars::JsonSchema for CommunitySummaryArgs {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "CommunitySummaryArgs".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // See `WalletProfileArgs`: inline keeps the root an object
+        // schema so OpenAI strict mode accepts the forwarded parameters.
+        <CommunitySummaryArgsSchema as schemars::JsonSchema>::json_schema(generator)
+    }
+}
 
 /// Schema-source for `get_token_info`. See `WalletProfileArgsSchema`
 /// for the split rationale.
@@ -277,11 +301,21 @@ pub struct GetTokenInfoArgsSchema {
     pub snapshot_id: String,
 }
 
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, serde::Deserialize)]
 #[serde(transparent)]
-pub struct GetTokenInfoArgs(
-    #[schemars(with = "GetTokenInfoArgsSchema")] pub serde_json::Value,
-);
+pub struct GetTokenInfoArgs(pub serde_json::Value);
+
+impl schemars::JsonSchema for GetTokenInfoArgs {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "GetTokenInfoArgs".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // See `WalletProfileArgs`: inline keeps the root an object
+        // schema so OpenAI strict mode accepts the forwarded parameters.
+        <GetTokenInfoArgsSchema as schemars::JsonSchema>::json_schema(generator)
+    }
+}
 
 /// Args for `emit_claims`. The `claims` array is the batched chip
 /// payload  codex emits all chips for a turn in one tool call,

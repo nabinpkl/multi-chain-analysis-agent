@@ -28,14 +28,11 @@ Python so each test exercises one parser branch.
 from __future__ import annotations
 
 import json
-import sqlite3
-from pathlib import Path
 
 from agent_service.codex_driver import (
     _capped_json,
     _digest12,
     _extract_mcp_envelope,
-    _read_codex_model,
     _record_tool_output_binding,
 )
 from agent_service.thread_state import AgentThread
@@ -301,117 +298,5 @@ def test_digest12_handles_none_and_empty():
     prefix. Both paths must not raise."""
     assert _digest12(None) == ""
     assert len(_digest12("")) == 12
-
-
-# ---------------------------------------------------------------------------
-# _read_codex_model
-# ---------------------------------------------------------------------------
-
-
-def _seed_codex_sqlite(
-    codex_home_root: Path,
-    thread_id: str,
-    provider_thread_id: str,
-    model: str,
-) -> Path:
-    """Create a `state_5.sqlite` at the canonical codex path with
-    one `threads` row. Matches the schema codex-cli writes on
-    thread start (only the columns the helper touches are
-    populated; the helper uses `SELECT model FROM threads WHERE
-    id = ?` which only needs `id` + `model`)."""
-    db_dir = codex_home_root / "local" / thread_id / "sqlite"
-    db_dir.mkdir(parents=True, exist_ok=True)
-    db_path = db_dir / "state_5.sqlite"
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "CREATE TABLE threads (id TEXT PRIMARY KEY, model TEXT)"
-        )
-        conn.execute(
-            "INSERT INTO threads (id, model) VALUES (?, ?)",
-            (provider_thread_id, model),
-        )
-        conn.commit()
-    return db_path
-
-
-def test_read_codex_model_happy_path(tmp_path: Path):
-    """A populated sqlite at the expected path returns the model
-    string we'd stamp as `gen_ai.request.model`."""
-    _seed_codex_sqlite(
-        tmp_path, "thread-1", "provider-thread-1", "gpt-5.5"
-    )
-    assert (
-        _read_codex_model(
-            codex_home_root=tmp_path,
-            thread_id="thread-1",
-            provider_thread_id="provider-thread-1",
-        )
-        == "gpt-5.5"
-    )
-
-
-def test_read_codex_model_none_when_codex_home_missing(tmp_path: Path):
-    """`codex_home_root=None` short-circuits before any I/O. Covers
-    the test/dev environments where the codex runtime isn't
-    available (LoopHandles.codex_home_root stays None)."""
-    assert (
-        _read_codex_model(
-            codex_home_root=None,
-            thread_id="thread-1",
-            provider_thread_id="provider-thread-1",
-        )
-        is None
-    )
-
-
-def test_read_codex_model_none_when_provider_thread_id_empty(tmp_path: Path):
-    """First turn on a thread emits `provider_thread_id_local=""`
-    until codex stamps one. We short-circuit so we don't run a
-    `WHERE id = ""` query that would never match."""
-    _seed_codex_sqlite(
-        tmp_path, "thread-1", "provider-thread-1", "gpt-5.5"
-    )
-    assert (
-        _read_codex_model(
-            codex_home_root=tmp_path,
-            thread_id="thread-1",
-            provider_thread_id="",
-        )
-        is None
-    )
-
-
-def test_read_codex_model_none_when_db_path_missing(tmp_path: Path):
-    """Thread directory exists but sqlite never landed (rare;
-    happens if a turn was cancelled before codex flushed). Helper
-    returns None rather than raising."""
-    # Create thread dir without state_5.sqlite
-    (tmp_path / "local" / "thread-1" / "sqlite").mkdir(parents=True)
-    assert (
-        _read_codex_model(
-            codex_home_root=tmp_path,
-            thread_id="thread-1",
-            provider_thread_id="provider-thread-1",
-        )
-        is None
-    )
-
-
-def test_read_codex_model_none_when_row_absent(tmp_path: Path):
-    """sqlite exists but the provider_thread_id we're looking up
-    isn't there (rare; would mean codex stamped a different id
-    than the one we recovered from the stream). Helper returns
-    None, caller skips the model stamp."""
-    _seed_codex_sqlite(
-        tmp_path, "thread-1", "provider-thread-1", "gpt-5.5"
-    )
-    assert (
-        _read_codex_model(
-            codex_home_root=tmp_path,
-            thread_id="thread-1",
-            provider_thread_id="some-other-id",
-        )
-        is None
-    )
 
 
