@@ -1,0 +1,65 @@
+name: Bug report
+description: Something behaves incorrectly, crashes, or produces wrong data.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The codebase is the source of truth, so the
+        more concretely you can point at a file, endpoint, or log line, the
+        faster this gets resolved.
+  - type: dropdown
+    id: service
+    attributes:
+      label: Service
+      description: Which plane does this affect?
+      options:
+        - backend (Rust data plane)
+        - agent-service (Python agent plane)
+        - frontend (Next.js)
+        - proto / wire types
+        - infra / docker-compose
+        - docs
+        - unsure / cross-cutting
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The actual behavior, with concrete detail.
+      placeholder: e.g. /graph/stream emits snake_case fields the frontend can't decode.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands / requests. Include the request and the response if it's a wire issue.
+      placeholder: |
+        1. just docker
+        2. curl 'http://localhost:8002/graph/stats?window=60'
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / output
+      description: Paste structured log lines or error output. They render as code; no backticks needed.
+      render: shell
+    validations:
+      required: false
+  - type: input
+    id: commit
+    attributes:
+      label: Commit / branch
+      description: Output of `git rev-parse --short HEAD`.
+    validations:
+      required: false

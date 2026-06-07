@@ -4,6 +4,9 @@ An LLM analyst over a real-time Solana wallet graph. The agent answers questions
 
 **This is an agent-design exercise.** The blockchain is the chosen substrate, not the subject. Solana mainnet was picked because it produces real public high-volume data, which forces clean ingest, idempotent writes, rate-limit discipline, and grounded narrative. A tutorial-shaped dataset lets bad agent shapes look fine. A live chain does not.
 
+> [!WARNING]
+> **Experimental. Not for production.** This is a research and learning project; don't deploy it as-is. Its reason for existing is to exercise per-defense ablation and agent evaluation against real, adversarial on-chain data, so the priority is honest measurement over polish. The defenses, evals, and runtime parity are real and tested, but the repo is iteration in progress, not a finished product: expect rough edges, partial coverage, and decisions still being revised (see [AGENTS.md](AGENTS.md), "AGENTS.md is iteration in progress"). Treat it as a worked example to read and probe, not a dependency to build on.
+
 ## Where to read first
 
 - [PRD.md](PRD.md). What this is, what it is not, in/out of scope, success metrics.

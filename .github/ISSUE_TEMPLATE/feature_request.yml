@@ -1,0 +1,52 @@
+name: Feature / change request
+description: Propose new behavior, a refactor, or a deferred large ride-along.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for work too large to land inline (multi-file refactor, new
+        abstraction, a design decision worth recording) per the AGENTS.md
+        "large ride-alongs get filed as a tracked issue" rule.
+  - type: dropdown
+    id: service
+    attributes:
+      label: Service
+      options:
+        - backend (Rust data plane)
+        - agent-service (Python agent plane)
+        - frontend (Next.js)
+        - proto / wire types
+        - infra / docker-compose
+        - docs
+        - cross-cutting
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What's painful or missing today? What breaks first if we don't do this?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: The shape of the solution. Name the files/surfaces it touches if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches, and why this one. Surface trade-offs rather than collapsing to one path.
+    validations:
+      required: false
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope / context for a future session
+      description: Enough context that someone (or an agent) can pick this up cold without re-deriving it.
+    validations:
+      required: false

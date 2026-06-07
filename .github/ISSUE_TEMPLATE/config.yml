@@ -1,0 +1,2 @@
+# Force a template choice; no freeform blank issues.
+blank_issues_enabled: false
