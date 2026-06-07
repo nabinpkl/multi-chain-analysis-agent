@@ -124,10 +124,16 @@ async def lifespan(app: FastAPI):
     # turns. The SDK bundles the codex binary, so no global install is
     # needed; it reads subscription auth from `auth.json` under the
     # writable `CODEX_HOME` (seeded from the read-only `~/.codex` mount
-    # by `build_codex_config`). When the app-server can't start (no
-    # auth on this host, e.g. tests) we log and leave `codex=None`; the
-    # POST handler 503s codex requests rather than silently falling
-    # back to pydantic-ai.
+    # by `build_codex_config`). When the app-server is disabled or can't
+    # start we leave `codex=None`; the POST handler 503s codex requests
+    # rather than silently falling back to pydantic-ai.
+    #
+    # `CODEX_RUNTIME_ENABLED=false` opts the whole codex app-server out:
+    # for a pydantic-ai-only deployment with no ChatGPT subscription
+    # auth, and for hermetic tests that must not spawn a codex
+    # subprocess. (Unlike the old codex-agent-driver, the bundled SDK
+    # binary starts even without auth, so absence of auth no longer
+    # disables codex on its own.)
     codex = None
     codex_home = Path(os.environ.get("CODEX_HOME", "./.cache/codex_home"))
     # Codex primary model + reasoning effort, env-driven. Mirrors
@@ -140,18 +146,24 @@ async def lifespan(app: FastAPI):
     codex_reasoning_effort = (
         os.environ.get("CODEX_REASONING_EFFORT", "").strip() or None
     )
-    try:
-        codex = AsyncCodex(build_codex_config(codex_home=codex_home))
-        await codex.__aenter__()
-        log.info(
-            "codex_runtime_ready",
-            codex_home=str(codex_home),
-            codex_primary_model=codex_primary_model or "<cli_default>",
-            codex_reasoning_effort=codex_reasoning_effort or "<cli_default>",
-        )
-    except Exception:  # noqa: BLE001
-        codex = None
-        log.exception("codex_runtime_init_failed")
+    codex_enabled = os.environ.get(
+        "CODEX_RUNTIME_ENABLED", "true"
+    ).strip().lower() not in ("false", "0", "no")
+    if not codex_enabled:
+        log.info("codex_runtime_disabled")
+    else:
+        try:
+            codex = AsyncCodex(build_codex_config(codex_home=codex_home))
+            await codex.__aenter__()
+            log.info(
+                "codex_runtime_ready",
+                codex_home=str(codex_home),
+                codex_primary_model=codex_primary_model or "<cli_default>",
+                codex_reasoning_effort=codex_reasoning_effort or "<cli_default>",
+            )
+        except Exception:  # noqa: BLE001
+            codex = None
+            log.exception("codex_runtime_init_failed")
 
     handles = LoopHandles(
         primary_agent=build_agent(),

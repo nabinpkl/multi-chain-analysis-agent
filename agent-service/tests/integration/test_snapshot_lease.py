@@ -16,7 +16,7 @@ import json
 
 from agent_service.main import app
 
-from tests.conftest import DATA_PLANE_BASE
+from tests.conftest import DATA_PLANE_BASE, TURN_BEGIN_URL
 from tests.fixtures import primitive_responses as canned
 
 
@@ -77,16 +77,16 @@ def test_turn_end_carries_lease_id(test_app, with_happy_path_primitives):
     assert decoded.snapshot_id == canned.VALID_SNAPSHOT_ID
 
 
-def test_primitive_calls_carry_lease_id(
-    test_app, with_happy_path_primitives, monkeypatch
+def test_tool_calls_carry_lease_id(
+    test_app, with_happy_path_primitives, mcp_mock, monkeypatch
 ):
-    """Every primitive call in the turn must carry the same leased
-    snapshot_id. If the agent dispatches a tool that drops it, every
-    real-Rust call would 410 Gone. Bodies are binary-protobuf encoded
-    `WalletProfileRequest` / `CommunitySummaryRequest`."""
+    """Every MCP tool call in the turn must carry the leased
+    snapshot_id. The pydantic-ai agent's tools are the Rust MCP server,
+    so dispatches go out as `tools/call` on `/mcp`;
+    `mcp_hook.process_tool_call` injects `ctx.deps.snapshot_id` into the
+    args before the call leaves, so the model never supplies it. If that
+    injection regressed, a real-Rust call would 410 Gone."""
     from pydantic_ai.models.test import TestModel
-
-    from multichain.wire.shared.v1 import primitive_envelope_pb2 as env_pb
 
     # The autouse `_no_live_llm` fixture hands every agent a
     # `TestModel(call_tools=[])`; this test needs the primary agent
@@ -102,17 +102,10 @@ def test_primitive_calls_carry_lease_id(
 
     _post_turn_and_consume(test_app, canned.make_ask_payload("q"))
 
-    requests = with_happy_path_primitives.get_requests()
-    primitive_calls = [r for r in requests if r.url.path.startswith("/primitive/")]
-    assert len(primitive_calls) >= 1
-    for call in primitive_calls:
-        assert call.headers.get("content-type") == "application/x-protobuf"
-        if call.url.path == "/primitive/wallet_profile":
-            decoded = env_pb.WalletProfileRequest()
-        else:
-            decoded = env_pb.CommunitySummaryRequest()
-        decoded.ParseFromString(call.read())
-        assert decoded.snapshot_id == canned.VALID_SNAPSHOT_ID
+    wallet_calls = mcp_mock.calls_for("wallet_profile")
+    assert len(wallet_calls) >= 1
+    for call in wallet_calls:
+        assert call.arguments.get("snapshot_id") == canned.VALID_SNAPSHOT_ID
 
 
 def test_turn_end_fires_even_when_agent_raises(test_app, mock_data_plane, monkeypatch):
@@ -122,7 +115,7 @@ def test_turn_end_fires_even_when_agent_raises(test_app, mock_data_plane, monkey
     crash storms."""
     mock_data_plane.add_response(
         method="POST",
-        url=f"{DATA_PLANE_BASE}/turn/begin",
+        url=TURN_BEGIN_URL,
         content=canned.encode_snapshot_begin_response(),
         headers={"Content-Type": "application/x-protobuf"},
     )

@@ -18,13 +18,13 @@ Two boundaries we mock:
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import AsyncIterator, Iterator
 
 import httpx
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
-from pydantic_ai import Agent
 from pydantic_ai.models.test import TestModel
 
 # Set a dummy AGENT_API_KEY + the model-id env vars that
@@ -42,6 +42,13 @@ os.environ.setdefault("EVAL_JUDGE_MODEL", "openrouter/owl-alpha")
 # set for case-load validation to pass. `setdefault` so a real .env
 # wins in integration runs.
 os.environ.setdefault("CODEX_PRIMARY_MODEL", "gpt-5")
+# The hermetic suite exercises the pydantic-ai path (mocked data plane +
+# TestModel). Route turns there by default, and keep the codex app-server
+# from spawning a subprocess per test_app lifespan (the bundled SDK binary
+# starts even without auth). A real .env wins via setdefault for live
+# integration scenarios.
+os.environ.setdefault("AGENT_DEFAULT_RUNTIME", "pydantic_ai")
+os.environ.setdefault("CODEX_RUNTIME_ENABLED", "false")
 
 # Disable OTel SDK before any agent_service module imports. The lifespan
 # handler calls init_otel(), which would otherwise spin up a real
@@ -63,6 +70,19 @@ from tests.fixtures import primitive_responses as canned  # noqa: E402
 
 DATA_PLANE_BASE = "http://api:8004"
 
+# `PrimitiveClient.begin_turn` appends `?window=N` to `/turn/begin` when
+# a live-window is requested (it omits the query otherwise). pytest-httpx
+# matches the full URL including query string, so a bare `/turn/begin`
+# mock would miss the windowed request. This pattern matches the route
+# with or without the query so begin mocks work either way.
+TURN_BEGIN_URL = re.compile(rf"^{re.escape(DATA_PLANE_BASE)}/turn/begin(\?.*)?$")
+
+# Every turn opens an SSE drain at `GET /turn/<snapshot_id>/claims`
+# (`core.run._collect_drained_claims` via `PrimitiveClient.stream_claims`)
+# to collect emit_claims output. The snapshot id is dynamic, so match by
+# pattern and return an empty stream so the drain sees EOF immediately.
+TURN_CLAIMS_URL = re.compile(rf"^{re.escape(DATA_PLANE_BASE)}/turn/[^/]+/claims$")
+
 
 # ---------------------------------------------------------------------------
 # pytest-httpx mock surface
@@ -82,11 +102,25 @@ def mock_data_plane(httpx_mock):
 
 
 @pytest.fixture
-def with_happy_path_primitives(mock_data_plane):
+def mcp_mock(mock_data_plane):
+    """Mock the pydantic-ai agent's MCP server (`/mcp`) handshake +
+    tool dispatch. The agent connects to the MCP server on every run
+    (its tools live there), so any test that runs a turn needs this.
+    Returns an `McpRecorder` capturing tools/call arguments."""
+    from tests.fixtures.mcp_mock import register_mcp_mock
+
+    return register_mcp_mock(mock_data_plane)
+
+
+@pytest.fixture
+def with_happy_path_primitives(mock_data_plane, mcp_mock):
     """Pre-register the full happy-path response set: a snapshot
     lease, one wallet_profile, one community_summary, and a turn end.
     Tests that only need the success flow grab this fixture and
     forget about HTTP plumbing.
+
+    Also wires the `/mcp` handshake (via `mcp_mock`) so the pydantic-ai
+    agent can connect its toolset.
 
     Mark each route as reusable so multiple identical calls in one
     turn don't blow up the mock.
@@ -97,7 +131,7 @@ def with_happy_path_primitives(mock_data_plane):
     proto_ct = {"Content-Type": "application/x-protobuf"}
     mock_data_plane.add_response(
         method="POST",
-        url=f"{DATA_PLANE_BASE}/turn/begin",
+        url=TURN_BEGIN_URL,
         content=canned.encode_snapshot_begin_response(),
         headers=proto_ct,
         is_reusable=True,
@@ -107,6 +141,13 @@ def with_happy_path_primitives(mock_data_plane):
         method="POST",
         url=f"{DATA_PLANE_BASE}/turn/end",
         status_code=204,
+        is_reusable=True,
+        is_optional=True,
+    )
+    mock_data_plane.add_response(
+        method="GET",
+        url=TURN_CLAIMS_URL,
+        content=b"",
         is_reusable=True,
         is_optional=True,
     )
